@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+.pytest_cache/
+.tmp_doc_parse/
+*.pyc
+data_test/
+.paddlex/
+outputs/
+.env
+*.log
