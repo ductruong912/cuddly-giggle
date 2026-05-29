@@ -133,7 +133,7 @@ def _extract_markdown(raw: dict) -> str | None:
     return None
 
 
-def _extract_raw_tables(raw: dict) -> list[Table]:
+def _extract_raw_tables(raw: dict, page_index: int = 0) -> list[Table]:
     tables: list[Table] = []
     candidates = raw.get("tables") or raw.get("table_res_list") or raw.get("table_results") or []
     if not isinstance(candidates, list):
@@ -171,7 +171,7 @@ def _extract_raw_tables(raw: dict) -> list[Table]:
         tables.append(
             Table(
                 table_id=str(item.get("table_id") or _new_block_id("tbl")),
-                page_index=int(item.get("page_index", 0)),
+                page_index=_safe_int(item.get("page_index"), page_index),
                 cells=cells,
                 confidence=_safe_float(item.get("score"), 0.0),
             )
@@ -181,6 +181,9 @@ def _extract_raw_tables(raw: dict) -> list[Table]:
 
 def _parse_table_cells_from_html(html_text: str) -> list[TableCell]:
     cells: list[TableCell] = []
+    # Track grid positions reserved by rowspans started in earlier rows so a cell
+    # in a later row is not assigned a column already occupied by a spanning cell.
+    occupied: set[tuple[int, int]] = set()
     row_matches = re.findall(r"<tr[^>]*>(.*?)</tr>", html_text, flags=re.IGNORECASE | re.DOTALL)
     for row_idx, row_html in enumerate(row_matches):
         col_idx = 0
@@ -193,11 +196,17 @@ def _parse_table_cells_from_html(html_text: str) -> list[TableCell]:
             m_row = re.search(r"rowspan\s*=\s*['\"]?(\d+)", attrs, flags=re.IGNORECASE)
             m_col = re.search(r"colspan\s*=\s*['\"]?(\d+)", attrs, flags=re.IGNORECASE)
             if m_row:
-                rowspan = _safe_int(m_row.group(1), 1)
+                rowspan = max(_safe_int(m_row.group(1), 1), 1)
             if m_col:
-                colspan = _safe_int(m_col.group(1), 1)
+                colspan = max(_safe_int(m_col.group(1), 1), 1)
+            # Advance past any column reserved by a rowspan from an earlier row.
+            while (row_idx, col_idx) in occupied:
+                col_idx += 1
             cells.append(TableCell(row=row_idx, col=col_idx, rowspan=rowspan, colspan=colspan, text=text))
-            col_idx += max(colspan, 1)
+            for dr in range(rowspan):
+                for dc in range(colspan):
+                    occupied.add((row_idx + dr, col_idx + dc))
+            col_idx += colspan
     return cells
 
 
@@ -449,12 +458,17 @@ def normalize_engine_output(raw: object, source_engine: str) -> tuple[list[PageP
         if not isinstance(page, dict):
             continue
 
+        # Prefer the engine's real page index when present; fall back to the
+        # positional index. Using the real index keeps page attribution correct
+        # even if an earlier page was dropped/compacted.
+        page_index = _safe_int(page.get("page_index"), idx)
+
         parsing_res_list = page.get("parsing_res_list")
         parsed_blocks: list[Block] = []
         parsed_tables: list[Table] = []
         if isinstance(parsing_res_list, list):
-            parsed_blocks = _build_blocks_from_parsing_res_list(parsing_res_list, idx, source_engine)
-            parsed_tables = _extract_tables_from_parsing_res_list(parsing_res_list, idx)
+            parsed_blocks = _build_blocks_from_parsing_res_list(parsing_res_list, page_index, source_engine)
+            parsed_tables = _extract_tables_from_parsing_res_list(parsing_res_list, page_index)
 
         boxes: list[dict] = []
         layout = page.get("layout_det_res")
@@ -465,8 +479,15 @@ def normalize_engine_output(raw: object, source_engine: str) -> tuple[list[PageP
         if isinstance(page.get("blocks"), list):
             boxes.extend([b for b in page["blocks"] if isinstance(b, dict)])
 
-        blocks = parsed_blocks or _build_blocks_from_layout_boxes(boxes, idx, source_engine)
-        tables = parsed_tables or _extract_raw_tables(page)
+        blocks = parsed_blocks or _build_blocks_from_layout_boxes(boxes, page_index, source_engine)
+        tables = parsed_tables or _extract_raw_tables(page, page_index)
+
+        # Tables exposed only as HTML inside this page's own markdown: parse them
+        # here so they are attributed to THIS page, not dumped onto page 0.
+        if not tables:
+            page_md = _extract_markdown(page)
+            if page_md:
+                tables = _extract_tables_from_markdown(page_md, page_index=page_index)
 
         # No explicit blocks from the engine: create one text block fallback.
         if not blocks and isinstance(page.get("text"), str):
@@ -477,7 +498,7 @@ def normalize_engine_output(raw: object, source_engine: str) -> tuple[list[PageP
                     content=page["text"],
                     bbox=[],
                     confidence=_safe_float(page.get("score"), 0.0),
-                    page_index=idx,
+                    page_index=page_index,
                     source_engine=source_engine,
                 )
             ]
@@ -494,7 +515,7 @@ def normalize_engine_output(raw: object, source_engine: str) -> tuple[list[PageP
 
         pages.append(
             PageParseResult(
-                page_index=idx,
+                page_index=page_index,
                 blocks=blocks,
                 tables=tables,
                 reading_order=_reading_order(blocks),
@@ -503,9 +524,12 @@ def normalize_engine_output(raw: object, source_engine: str) -> tuple[list[PageP
             )
         )
 
-    # Some PaddleOCR-VL variants expose table structure only in markdown html blocks.
-    if markdown and pages and not any(page.tables for page in pages):
-        md_tables = _extract_tables_from_markdown(markdown, page_index=0)
+    # Last resort for shapes that only expose markdown at the document root (no
+    # per-page markdown). Only safe for single-page documents, where attaching to
+    # the sole page is correct; multi-page docs rely on the per-page extraction
+    # above to keep correct page attribution.
+    if markdown and len(pages) == 1 and not pages[0].tables:
+        md_tables = _extract_tables_from_markdown(markdown, page_index=pages[0].page_index)
         if md_tables:
             pages[0] = pages[0].model_copy(update={"tables": md_tables})
 

@@ -14,12 +14,9 @@ def merge_results(
         return primary
 
     merged_pages: list[PageParseResult] = []
-    max_pages = max(len(primary.pages), len(fallback.pages))
+    page_pairs = _pair_pages(primary.pages, fallback.pages)
 
-    for idx in range(max_pages):
-        p_page = primary.pages[idx] if idx < len(primary.pages) else None
-        f_page = fallback.pages[idx] if idx < len(fallback.pages) else None
-
+    for p_page, f_page in page_pairs:
         if p_page is None and f_page is not None:
             merged_pages.append(f_page)
             continue
@@ -76,6 +73,32 @@ def merge_results(
         markdown=markdown,
         raw={"primary": primary.raw, "fallback": fallback.raw},
     )
+
+
+def _pair_pages(
+    primary_pages: list[PageParseResult],
+    fallback_pages: list[PageParseResult],
+) -> list[tuple[PageParseResult | None, PageParseResult | None]]:
+    # Align the two engines' pages by their physical page_index so a multi-page
+    # document whose engines disagree on page count/order does not compare
+    # unrelated pages. Fall back to positional pairing only if either engine has
+    # duplicate/ambiguous indices (so no page is silently dropped).
+    p_indices = [p.page_index for p in primary_pages]
+    f_indices = [p.page_index for p in fallback_pages]
+    if len(set(p_indices)) == len(primary_pages) and len(set(f_indices)) == len(fallback_pages):
+        primary_by_index = {p.page_index: p for p in primary_pages}
+        fallback_by_index = {p.page_index: p for p in fallback_pages}
+        keys = sorted(set(primary_by_index) | set(fallback_by_index))
+        return [(primary_by_index.get(k), fallback_by_index.get(k)) for k in keys]
+
+    max_pages = max(len(primary_pages), len(fallback_pages))
+    return [
+        (
+            primary_pages[idx] if idx < len(primary_pages) else None,
+            fallback_pages[idx] if idx < len(fallback_pages) else None,
+        )
+        for idx in range(max_pages)
+    ]
 
 
 def _table_avg_confidence(tables: list[Table]) -> float:
