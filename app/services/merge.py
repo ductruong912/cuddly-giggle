@@ -44,11 +44,14 @@ def merge_results(
         # Keep block content from the page that preserves more recognized text.
         winner_blocks = list(winner.blocks)
         winner_order = list(winner.reading_order)
+        winner_confidence = winner.confidence
         if _non_empty_blocks(loser.blocks) > _non_empty_blocks(winner.blocks):
             winner_blocks = list(loser.blocks)
             winner_order = list(loser.reading_order)
+            # We are returning the loser's content, so the reported confidence must
+            # reflect that content, not the (higher) winner's page score.
+            winner_confidence = loser.confidence
 
-        winner_confidence = winner.confidence
         block_conf = _block_avg_confidence(winner_blocks)
         if winner_confidence <= 0.0 and block_conf > 0.0:
             winner_confidence = block_conf

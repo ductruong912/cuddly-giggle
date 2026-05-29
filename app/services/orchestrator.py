@@ -161,6 +161,7 @@ class ParseOrchestrator:
             return page
         blocks = page.blocks
         by_id = {b.block_id: b for b in blocks}
+        changed = False
         for corr in corrections:
             if not isinstance(corr, dict):
                 continue
@@ -174,10 +175,18 @@ class ParseOrchestrator:
             if isinstance(conf, (float, int)):
                 new_conf = max(new_conf, float(conf))
             by_id[block_id] = old.model_copy(update={"content": content, "confidence": new_conf})
+            changed = True
+        # A no-op / non-matching verifier response must not touch the page. And a
+        # real correction can only raise confidence: never overwrite the page score
+        # with a raw block-average (zero-confidence blocks are legitimate, see the
+        # normalizer's confidence heuristics) or borderline pages collapse to fail.
+        if not changed:
+            return page
         new_blocks = [by_id[b.block_id] for b in blocks]
         new_conf = page.confidence
         if new_blocks:
-            new_conf = sum(b.confidence for b in new_blocks) / len(new_blocks)
+            block_avg = sum(b.confidence for b in new_blocks) / len(new_blocks)
+            new_conf = max(page.confidence, block_avg)
         return page.model_copy(update={"blocks": new_blocks, "confidence": new_conf})
 
     @staticmethod

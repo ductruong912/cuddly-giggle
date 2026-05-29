@@ -142,26 +142,31 @@ def _extract_raw_tables(raw: dict) -> list[Table]:
     for idx, item in enumerate(candidates):
         if not isinstance(item, dict):
             continue
-        cells_raw = item.get("cells", [])
+        cells_raw = item.get("cells")
         cells: list[TableCell] = []
-        if isinstance(cells_raw, list):
+        if isinstance(cells_raw, list) and cells_raw:
             for c in cells_raw:
                 if not isinstance(c, dict):
                     continue
                 cells.append(
                     TableCell(
-                        row=int(c.get("row", 0)),
-                        col=int(c.get("col", 0)),
-                        rowspan=int(c.get("rowspan", 1)),
-                        colspan=int(c.get("colspan", 1)),
+                        row=_safe_int(c.get("row"), 0),
+                        col=_safe_int(c.get("col"), 0),
+                        rowspan=_safe_int(c.get("rowspan"), 1),
+                        colspan=_safe_int(c.get("colspan"), 1),
                         text=str(c.get("text", "")),
                         confidence=_safe_float(c.get("score"), 0.0),
                     )
                 )
         elif isinstance(item.get("html"), str):
-            text = re.sub(r"<[^>]+>", " ", item["html"])
-            text = re.sub(r"\s+", " ", text).strip()
-            cells.append(TableCell(row=0, col=0, text=text, confidence=_safe_float(item.get("score"), 0.0)))
+            # PaddleOCR table_res_list often carries only an HTML string (no cell
+            # list). Parse real cells from it; fall back to a single flattened cell.
+            cells = _parse_table_cells_from_html(item["html"])
+            if not cells:
+                text = re.sub(r"<[^>]+>", " ", item["html"])
+                text = re.sub(r"\s+", " ", text).strip()
+                if text:
+                    cells = [TableCell(row=0, col=0, text=text, confidence=_safe_float(item.get("score"), 0.0))]
 
         tables.append(
             Table(
@@ -300,7 +305,7 @@ def _build_blocks_from_parsing_res_list(
                 source_engine=source_engine,
                 extra={
                     "label": label,
-                    "block_order": _safe_int(block_order, -1) if block_order is not None else -1,
+                    "block_order": _safe_int(block_order, -1) if block_order is not None else None,
                     "group_id": item.get("group_id"),
                 },
             )
@@ -309,14 +314,20 @@ def _build_blocks_from_parsing_res_list(
 
 
 def _reading_order(blocks: list[Block]) -> list[str]:
-    has_explicit_order = any(_safe_int(b.extra.get("block_order"), -1) >= 0 for b in blocks)
+    # Missing/invalid/negative block_order sorts to the BACK (large sentinel), not
+    # the front: a stored -1 or None must not jump an order-less block ahead of 0.
+    def order_of(block: Block) -> int:
+        order = _safe_int(block.extra.get("block_order"), -1)
+        return order if order >= 0 else 10**9
+
+    has_explicit_order = any(order_of(b) < 10**9 for b in blocks)
     if has_explicit_order:
         return [
             b.block_id
             for b in sorted(
                 blocks,
                 key=lambda block: (
-                    _safe_int(block.extra.get("block_order"), 10**9),
+                    order_of(block),
                     _centroid(block.bbox)[1],
                     _centroid(block.bbox)[0],
                 ),
@@ -417,9 +428,13 @@ def normalize_engine_output(raw: object, source_engine: str) -> tuple[list[PageP
                 markdown_parts.append(md2)
 
     root = normalized_raw.get("res", normalized_raw)
-    fallback_md = _extract_markdown(normalized_raw) or (_extract_markdown(root) if isinstance(root, dict) else None)
-    if fallback_md:
-        markdown_parts.append(fallback_md)
+    # Only reach for a fallback markdown when nothing was already extracted above;
+    # otherwise the same top-level markdown gets appended twice and the artifact
+    # ends up duplicated (it's the common single-dict / CLI payload shape).
+    if not markdown_parts:
+        fallback_md = _extract_markdown(normalized_raw) or (_extract_markdown(root) if isinstance(root, dict) else None)
+        if fallback_md:
+            markdown_parts.append(fallback_md)
     markdown = "\n\n".join([part for part in markdown_parts if part.strip()]) or None
 
     pages: list[PageParseResult] = []
