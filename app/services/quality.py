@@ -21,11 +21,11 @@ def assess_document_quality(input_path: str, app_settings: Settings = settings) 
     if path.suffix.lower() == ".pdf":
         # PDF quality is better assessed per rendered page by OCR engines.
         # Keep neutral defaults and defer to model confidence.
-        return QualityAssessment(flags=QualityFlags(), score=0.9)
+        return QualityAssessment(flags=QualityFlags(), score=app_settings.quality_pdf_default_score)
 
     image = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if image is None:
-        return QualityAssessment(flags=QualityFlags(), score=0.6)
+        return QualityAssessment(flags=QualityFlags(), score=app_settings.quality_unreadable_image_score)
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     height, width = gray.shape
@@ -42,12 +42,12 @@ def assess_document_quality(input_path: str, app_settings: Settings = settings) 
     )
 
     # Skew estimation by dominant line orientation in Hough transform.
-    edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-    lines = cv2.HoughLines(edges, 1, np.pi / 180, 180)
+    edges = cv2.Canny(gray, app_settings.quality_canny_threshold1, app_settings.quality_canny_threshold2, apertureSize=3)
+    lines = cv2.HoughLines(edges, 1, np.pi / 180, app_settings.quality_hough_threshold)
     skew_deg = 0.0
     if lines is not None and len(lines) > 0:
         thetas = []
-        for line in lines[: min(len(lines), 80)]:
+        for line in lines[: min(len(lines), app_settings.quality_skew_max_lines)]:
             rho, theta = line[0]
             deg = (theta * 180 / np.pi) - 90
             while deg > 45:
@@ -62,7 +62,7 @@ def assess_document_quality(input_path: str, app_settings: Settings = settings) 
     is_low_resolution = min(height, width) < app_settings.quality_min_resolution_px
 
     # Screen photo heuristic: visible perspective distortion + dark border tendency.
-    border_px = int(min(height, width) * 0.03)
+    border_px = int(min(height, width) * app_settings.quality_screen_photo_border_fraction)
     border_px = max(border_px, 2)
     center_crop = gray[border_px:-border_px, border_px:-border_px]
     border_mask = gray.copy()

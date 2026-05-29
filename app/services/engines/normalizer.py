@@ -6,6 +6,7 @@ from html import unescape
 import re
 import uuid
 
+from app.core.config import Settings, settings
 from app.domain.schemas import Block, BlockType, PageParseResult, Point, Table, TableCell
 
 
@@ -403,7 +404,11 @@ def _result_to_markdown_text(raw: object) -> str | None:
     return None
 
 
-def normalize_engine_output(raw: object, source_engine: str) -> tuple[list[PageParseResult], str | None, dict]:
+def normalize_engine_output(
+    raw: object,
+    source_engine: str,
+    app_settings: Settings = settings,
+) -> tuple[list[PageParseResult], str | None, dict]:
     """
     Convert adapter-specific output into a stable internal page schema.
     """
@@ -510,8 +515,17 @@ def normalize_engine_output(raw: object, source_engine: str) -> tuple[list[PageP
             confidence = _avg_positive(block.confidence for block in blocks)
         if confidence == 0.0 and blocks:
             non_empty = sum(1 for block in blocks if (block.content or "").strip())
-            content_ratio = non_empty / max(len(blocks), 1)
-            confidence = min(0.9, 0.55 + 0.35 * content_ratio + (0.05 if tables else 0.0))
+            # Only synthesize a confidence floor when the page actually recognized
+            # text. A page with blocks but zero text stays at 0.0 (low) instead of
+            # being inflated to the base floor.
+            if non_empty:
+                content_ratio = non_empty / len(blocks)
+                confidence = min(
+                    app_settings.normalizer_confidence_cap,
+                    app_settings.normalizer_confidence_base
+                    + app_settings.normalizer_confidence_content_weight * content_ratio
+                    + (app_settings.normalizer_confidence_table_bonus if tables else 0.0),
+                )
 
         pages.append(
             PageParseResult(

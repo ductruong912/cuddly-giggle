@@ -64,7 +64,7 @@ class PaddlePipelineEngine(ParseEngine):
         if raw is None:
             raise RuntimeError(self._unavailable_message(py_error, cli_error))
 
-        pages, markdown, normalized_raw = normalize_engine_output(raw, self.name)
+        pages, markdown, normalized_raw = normalize_engine_output(raw, self.name, self.settings)
         return EngineParseResult(engine_name=self.name, pages=pages, markdown=markdown, raw=normalized_raw)
 
     def _try_python_api(self, input_path: str, lang_hint: str) -> tuple[dict[str, Any] | None, str]:

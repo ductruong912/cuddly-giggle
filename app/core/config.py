@@ -71,6 +71,21 @@ class Settings:
     quality_penalty_illumination: float = _get_float("QUALITY_PENALTY_ILLUMINATION", 0.14)
     quality_penalty_screen_photo: float = _get_float("QUALITY_PENALTY_SCREEN_PHOTO", 0.18)
     quality_penalty_low_resolution: float = _get_float("QUALITY_PENALTY_LOW_RESOLUTION", 0.10)
+    # Quality detector internals. The PDF/unreadable scores straddle
+    # quality_fail_threshold, so they decide the quality branch for whole input classes.
+    quality_pdf_default_score: float = _get_float("QUALITY_PDF_DEFAULT_SCORE", 0.9)
+    quality_unreadable_image_score: float = _get_float("QUALITY_UNREADABLE_IMAGE_SCORE", 0.6)
+    quality_canny_threshold1: int = _get_int("QUALITY_CANNY_THRESHOLD1", 50)
+    quality_canny_threshold2: int = _get_int("QUALITY_CANNY_THRESHOLD2", 150)
+    quality_hough_threshold: int = _get_int("QUALITY_HOUGH_THRESHOLD", 180)
+    quality_skew_max_lines: int = _get_int("QUALITY_SKEW_MAX_LINES", 80)
+    quality_screen_photo_border_fraction: float = _get_float("QUALITY_SCREEN_PHOTO_BORDER_FRACTION", 0.03)
+    # Synthetic page-confidence heuristic in the normalizer (used only when an engine
+    # returns no numeric score). These flow into the pass/borderline/fail thresholds.
+    normalizer_confidence_base: float = _get_float("NORMALIZER_CONFIDENCE_BASE", 0.55)
+    normalizer_confidence_content_weight: float = _get_float("NORMALIZER_CONFIDENCE_CONTENT_WEIGHT", 0.35)
+    normalizer_confidence_table_bonus: float = _get_float("NORMALIZER_CONFIDENCE_TABLE_BONUS", 0.05)
+    normalizer_confidence_cap: float = _get_float("NORMALIZER_CONFIDENCE_CAP", 0.9)
     temp_dir: str = os.getenv("DOC_TEMP_DIR", ".tmp_doc_parse")
     parse_output_dir: str = os.getenv("PARSE_OUTPUT_DIR", "outputs")
     quiet_third_party_logs: bool = _get_bool("QUIET_THIRD_PARTY_LOGS", True)
