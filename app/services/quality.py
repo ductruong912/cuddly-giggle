@@ -6,6 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from app.core.config import Settings, settings
 from app.domain.schemas import QualityFlags
 
 
@@ -15,7 +16,7 @@ class QualityAssessment:
     score: float
 
 
-def assess_document_quality(input_path: str) -> QualityAssessment:
+def assess_document_quality(input_path: str, app_settings: Settings = settings) -> QualityAssessment:
     path = Path(input_path)
     if path.suffix.lower() == ".pdf":
         # PDF quality is better assessed per rendered page by OCR engines.
@@ -30,11 +31,15 @@ def assess_document_quality(input_path: str) -> QualityAssessment:
     height, width = gray.shape
 
     blur_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    is_blur = blur_var < 110.0
+    is_blur = blur_var < app_settings.quality_blur_var_threshold
 
     mean_intensity = float(np.mean(gray))
     std_intensity = float(np.std(gray))
-    is_illumination_issue = mean_intensity < 55.0 or mean_intensity > 220.0 or std_intensity < 24.0
+    is_illumination_issue = (
+        mean_intensity < app_settings.quality_dark_mean_threshold
+        or mean_intensity > app_settings.quality_bright_mean_threshold
+        or std_intensity < app_settings.quality_low_contrast_std_threshold
+    )
 
     # Skew estimation by dominant line orientation in Hough transform.
     edges = cv2.Canny(gray, 50, 150, apertureSize=3)
@@ -52,9 +57,9 @@ def assess_document_quality(input_path: str) -> QualityAssessment:
             thetas.append(float(deg))
         if thetas:
             skew_deg = float(np.median(thetas))
-    is_skew = abs(skew_deg) >= 3.0
+    is_skew = abs(skew_deg) >= app_settings.quality_skew_deg_threshold
 
-    is_low_resolution = min(height, width) < 1200
+    is_low_resolution = min(height, width) < app_settings.quality_min_resolution_px
 
     # Screen photo heuristic: visible perspective distortion + dark border tendency.
     border_px = int(min(height, width) * 0.03)
@@ -65,7 +70,7 @@ def assess_document_quality(input_path: str) -> QualityAssessment:
         border_mask[border_px:-border_px, border_px:-border_px] = 0
     border_mean = float(np.mean(border_mask[border_mask > 0])) if np.any(border_mask > 0) else 0.0
     center_mean = float(np.mean(center_crop)) if center_crop.size > 0 else border_mean
-    is_screen_photo = abs(border_mean - center_mean) > 30 and is_skew
+    is_screen_photo = abs(border_mean - center_mean) > app_settings.quality_screen_photo_border_diff and is_skew
 
     flags = QualityFlags(
         skew=is_skew,
@@ -76,11 +81,11 @@ def assess_document_quality(input_path: str) -> QualityAssessment:
     )
 
     penalties = (
-        (0.14 if flags.skew else 0.0)
-        + (0.20 if flags.blur else 0.0)
-        + (0.14 if flags.illumination_issue else 0.0)
-        + (0.18 if flags.screen_photo else 0.0)
-        + (0.10 if flags.low_resolution else 0.0)
+        (app_settings.quality_penalty_skew if flags.skew else 0.0)
+        + (app_settings.quality_penalty_blur if flags.blur else 0.0)
+        + (app_settings.quality_penalty_illumination if flags.illumination_issue else 0.0)
+        + (app_settings.quality_penalty_screen_photo if flags.screen_photo else 0.0)
+        + (app_settings.quality_penalty_low_resolution if flags.low_resolution else 0.0)
     )
     score = max(0.0, min(1.0, 1.0 - penalties))
     return QualityAssessment(flags=flags, score=score)

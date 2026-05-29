@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from app.core.config import Settings, settings
 from app.domain.schemas import Block, PageParseResult, Table
 from app.services.engines.base import EngineParseResult
 
 
-def merge_results(primary: EngineParseResult, fallback: EngineParseResult | None) -> EngineParseResult:
+def merge_results(
+    primary: EngineParseResult,
+    fallback: EngineParseResult | None,
+    app_settings: Settings = settings,
+) -> EngineParseResult:
     if fallback is None:
         return primary
 
@@ -24,7 +29,11 @@ def merge_results(primary: EngineParseResult, fallback: EngineParseResult | None
         if p_page is None or f_page is None:
             continue
 
-        winner, loser = _pick_winner_by_confidence(primary_page=p_page, fallback_page=f_page)
+        winner, loser = _pick_winner_by_confidence(
+            primary_page=p_page,
+            fallback_page=f_page,
+            confidence_margin=app_settings.merge_fallback_confidence_margin,
+        )
 
         # Merge in tables if winner has none or weaker table confidence.
         winner_tables = list(winner.tables)
@@ -72,8 +81,12 @@ def _table_avg_confidence(tables: list[Table]) -> float:
     return sum(t.confidence for t in tables) / len(tables)
 
 
-def _pick_winner_by_confidence(primary_page: PageParseResult, fallback_page: PageParseResult) -> tuple[PageParseResult, PageParseResult]:
-    if fallback_page.confidence >= primary_page.confidence + 0.08:
+def _pick_winner_by_confidence(
+    primary_page: PageParseResult,
+    fallback_page: PageParseResult,
+    confidence_margin: float,
+) -> tuple[PageParseResult, PageParseResult]:
+    if fallback_page.confidence >= primary_page.confidence + confidence_margin:
         return fallback_page, primary_page
     return primary_page, fallback_page
 

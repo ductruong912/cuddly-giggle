@@ -22,6 +22,16 @@ def _get_float(name: str, default: float) -> float:
         return default
 
 
+def _get_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 def _get_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -45,6 +55,22 @@ class Settings:
     confidence_pass_threshold: float = _get_float("CONFIDENCE_PASS_THRESHOLD", 0.84)
     confidence_borderline_threshold: float = _get_float("CONFIDENCE_BORDERLINE_THRESHOLD", 0.68)
     quality_fail_threshold: float = _get_float("QUALITY_FAIL_THRESHOLD", 0.62)
+    # Merge: how much higher the fallback page confidence must be to override primary.
+    merge_fallback_confidence_margin: float = _get_float("MERGE_FALLBACK_CONFIDENCE_MARGIN", 0.08)
+    # Image quality detection thresholds (image inputs only; PDFs use a neutral default).
+    quality_blur_var_threshold: float = _get_float("QUALITY_BLUR_VAR_THRESHOLD", 110.0)
+    quality_dark_mean_threshold: float = _get_float("QUALITY_DARK_MEAN_THRESHOLD", 55.0)
+    quality_bright_mean_threshold: float = _get_float("QUALITY_BRIGHT_MEAN_THRESHOLD", 220.0)
+    quality_low_contrast_std_threshold: float = _get_float("QUALITY_LOW_CONTRAST_STD_THRESHOLD", 24.0)
+    quality_skew_deg_threshold: float = _get_float("QUALITY_SKEW_DEG_THRESHOLD", 3.0)
+    quality_min_resolution_px: int = _get_int("QUALITY_MIN_RESOLUTION_PX", 1200)
+    quality_screen_photo_border_diff: float = _get_float("QUALITY_SCREEN_PHOTO_BORDER_DIFF", 30.0)
+    # Quality score penalties per detected flag (subtracted from 1.0).
+    quality_penalty_skew: float = _get_float("QUALITY_PENALTY_SKEW", 0.14)
+    quality_penalty_blur: float = _get_float("QUALITY_PENALTY_BLUR", 0.20)
+    quality_penalty_illumination: float = _get_float("QUALITY_PENALTY_ILLUMINATION", 0.14)
+    quality_penalty_screen_photo: float = _get_float("QUALITY_PENALTY_SCREEN_PHOTO", 0.18)
+    quality_penalty_low_resolution: float = _get_float("QUALITY_PENALTY_LOW_RESOLUTION", 0.10)
     temp_dir: str = os.getenv("DOC_TEMP_DIR", ".tmp_doc_parse")
     parse_output_dir: str = os.getenv("PARSE_OUTPUT_DIR", "outputs")
     quiet_third_party_logs: bool = _get_bool("QUIET_THIRD_PARTY_LOGS", True)

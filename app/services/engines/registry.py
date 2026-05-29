@@ -16,7 +16,7 @@ def create_engine(name: str, app_settings: Settings) -> ParseEngine:
     if key == PaddleOCRVLEngine.name:
         return PaddleOCRVLEngine(app_settings=app_settings)
     if key == PPStructureV3Engine.name:
-        return PPStructureV3Engine()
+        return PPStructureV3Engine(app_settings=app_settings)
     raise ValueError(
         f"Unknown OCR engine '{name}'. Supported engines: "
         f"{PaddleOCRVLEngine.name}, {PPStructureV3Engine.name}."

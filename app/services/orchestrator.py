@@ -45,7 +45,7 @@ class ParseOrchestrator:
         verify_elapsed = 0.0
 
         stage_start = time.perf_counter()
-        quality = assess_document_quality(input_path)
+        quality = assess_document_quality(input_path, self.settings)
         quality_elapsed = time.perf_counter() - stage_start
 
         stage_start = time.perf_counter()
@@ -66,7 +66,7 @@ class ParseOrchestrator:
                 fallback_error = self._compact_error(str(exc))
 
         stage_start = time.perf_counter()
-        merged = merge_results(primary, fallback)
+        merged = merge_results(primary, fallback, self.settings)
         merge_elapsed = time.perf_counter() - stage_start
 
         stage_start = time.perf_counter()
