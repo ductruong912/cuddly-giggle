@@ -6,14 +6,12 @@ import time
 import uuid
 
 from app.core.config import Settings, settings
-from app.domain.schemas import Block, OutputFormat, PageParseResult, ParseDecision, ParseOptions, ParseResponse, Table
+from app.domain.schemas import OutputFormat, PageParseResult, ParseDecision, ParseOptions, ParseResponse
 from app.services.engines.base import EngineParseResult, ParseEngine
-from app.services.engines.paddleocr_vl import PaddleOCRVLEngine
-from app.services.engines.pp_structure_v3 import PPStructureV3Engine
+from app.services.engines.registry import create_engine
 from app.services.merge import merge_results
 from app.services.quality import QualityAssessment, assess_document_quality
 from app.services.qwen_verifier import QwenVerifier
-from app.services.vietnamese_postprocess import postprocess_blocks, postprocess_markdown, postprocess_tables
 
 
 logger = logging.getLogger(__name__)
@@ -27,8 +25,8 @@ class ParseOrchestrator:
         fallback_engine: ParseEngine | None = None,
     ) -> None:
         self.settings = app_settings
-        self.primary_engine = primary_engine or PaddleOCRVLEngine(app_settings=self.settings)
-        self.fallback_engine = fallback_engine or PPStructureV3Engine()
+        self.primary_engine = primary_engine or create_engine(self.settings.primary_engine, self.settings)
+        self.fallback_engine = fallback_engine or create_engine(self.settings.fallback_engine, self.settings)
         self.verifier = None
         if self.settings.qwen_verifier_enabled:
             self.verifier = QwenVerifier(
@@ -44,7 +42,7 @@ class ParseOrchestrator:
         primary_elapsed = 0.0
         fallback_elapsed = 0.0
         merge_elapsed = 0.0
-        postprocess_elapsed = 0.0
+        verify_elapsed = 0.0
 
         stage_start = time.perf_counter()
         quality = assess_document_quality(input_path)
@@ -73,8 +71,7 @@ class ParseOrchestrator:
 
         stage_start = time.perf_counter()
         merged = self._apply_qwen_verification_if_needed(input_path, merged)
-        merged = self._apply_postprocess(merged)
-        postprocess_elapsed = time.perf_counter() - stage_start
+        verify_elapsed = time.perf_counter() - stage_start
 
         decision = self._build_decision(merged.page_confidence, quality)
         if fallback_error:
@@ -109,13 +106,13 @@ class ParseOrchestrator:
         )
         logger.info(
             "parse timings request_id=%s quality=%.3fs primary=%.3fs fallback=%.3fs "
-            "merge=%.3fs postprocess=%.3fs total=%.3fs primary_score=%.3f quality_score=%.3f",
+            "merge=%.3fs verify=%.3fs total=%.3fs primary_score=%.3f quality_score=%.3f",
             request_id,
             quality_elapsed,
             primary_elapsed,
             fallback_elapsed,
             merge_elapsed,
-            postprocess_elapsed,
+            verify_elapsed,
             time.perf_counter() - total_start,
             primary_score,
             quality.score,
@@ -135,32 +132,6 @@ class ParseOrchestrator:
         if score >= self.settings.confidence_borderline_threshold:
             return ParseDecision(status="borderline", reason="Moderate confidence; fallback or review recommended.")
         return ParseDecision(status="fail", reason="Low confidence parse; queued for manual review.")
-
-    def _apply_postprocess(self, result: EngineParseResult) -> EngineParseResult:
-        pages: list[PageParseResult] = []
-        for page in result.pages:
-            processed_blocks = postprocess_blocks(page.blocks)
-            processed_tables = postprocess_tables(page.tables)
-            updated_conf = page.confidence
-            if processed_blocks:
-                scored = [b.confidence for b in processed_blocks if b.confidence > 0.0]
-                if scored:
-                    updated_conf = sum(scored) / len(scored)
-            pages.append(
-                page.model_copy(
-                    update={
-                        "blocks": processed_blocks,
-                        "tables": processed_tables,
-                        "confidence": updated_conf,
-                    }
-                )
-            )
-        return EngineParseResult(
-            engine_name=result.engine_name,
-            pages=pages,
-            markdown=postprocess_markdown(result.markdown),
-            raw=result.raw,
-        )
 
     def _apply_qwen_verification_if_needed(self, input_path: str, result: EngineParseResult) -> EngineParseResult:
         if self.verifier is None:

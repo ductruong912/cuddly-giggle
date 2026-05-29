@@ -19,10 +19,9 @@ app/
     schemas.py                # API/domain schemas
   services/
     artifacts.py              # save JSON/Markdown outputs
-    orchestrator.py           # primary/fallback/quality/postprocess flow
+    orchestrator.py           # primary/fallback/quality flow
     merge.py                  # merge primary + fallback result
     quality.py                # document quality checks
-    vietnamese_postprocess.py # Unicode/mojibake/Vietnamese cleanup
     engines/                  # PaddleOCR-VL, PP-StructureV3 adapters
   eval/
     metrics.py                # CER/WER/table/reading-order metrics
