@@ -42,6 +42,14 @@ class PaddleOCRVLEngine(ParseEngine):
         pages, markdown, normalized_raw = normalize_engine_output(raw, self.name)
         return EngineParseResult(engine_name=self.name, pages=pages, markdown=markdown, raw=normalized_raw)
 
+    def warmup(self, pipeline_cls: type | None = None) -> None:
+        if pipeline_cls is None:
+            from paddleocr import PaddleOCRVL  # type: ignore
+
+            pipeline_cls = PaddleOCRVL
+        kwargs = self._build_kwargs(pipeline_cls, "auto")
+        self._get_or_create_pipeline(pipeline_cls, kwargs)
+
     def _try_python_api(self, input_path: str, lang_hint: str) -> tuple[dict[str, Any] | None, str]:
         try:
             from paddleocr import PaddleOCRVL  # type: ignore

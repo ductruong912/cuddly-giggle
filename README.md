@@ -51,6 +51,10 @@ python -m pip install -r requirements-gpu-cu130.txt
 
 ## Run Backend
 
+Create a local `.env` from `.env.example` if you want file-based configuration. The app loads `.env` automatically and real process env vars keep priority.
+
+By default, `python main.py` initializes PaddleOCR-VL before starting Uvicorn. On a fresh cache this downloads the configured model weights, using `PADDLEOCR_VL_PIPELINE_VERSION` (`v1.6` by default). Set `WARMUP_MODELS_ON_STARTUP=false` to defer model download until the first parse request.
+
 ```powershell
 $env:OCR_DEVICE="gpu:0"
 $env:PARSE_OUTPUT_DIR="outputs"

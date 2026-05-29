@@ -5,6 +5,11 @@ import os
 from pathlib import Path
 import site
 
+from dotenv import load_dotenv
+
+
+load_dotenv(Path.cwd() / ".env", override=False)
+
 
 def _get_float(name: str, default: float) -> float:
     raw = os.getenv(name)
@@ -25,12 +30,13 @@ def _get_bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    primary_engine: str = os.getenv("OCR_PRIMARY_ENGINE", "paddleocr_vl_1_5")
+    primary_engine: str = os.getenv("OCR_PRIMARY_ENGINE", "paddleocr_vl")
     fallback_engine: str = os.getenv("OCR_FALLBACK_ENGINE", "pp_structure_v3")
     default_enable_fallback: bool = _get_bool("DEFAULT_ENABLE_FALLBACK", True)
     ocr_device: str = os.getenv("OCR_DEVICE", "").strip()
     ocr_inference_engine: str = os.getenv("OCR_INFERENCE_ENGINE", "").strip()
     paddleocr_vl_pipeline_version: str = os.getenv("PADDLEOCR_VL_PIPELINE_VERSION", "v1.6").strip()
+    warmup_models_on_startup: bool = _get_bool("WARMUP_MODELS_ON_STARTUP", True)
     qwen_verifier_enabled: bool = _get_bool("QWEN_VERIFIER_ENABLED", False)
     qwen_verifier_base_url: str = os.getenv("QWEN_VERIFIER_BASE_URL", "")
     qwen_verifier_model: str = os.getenv("QWEN_VERIFIER_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
