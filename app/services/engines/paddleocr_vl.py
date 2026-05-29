@@ -14,10 +14,11 @@ from app.services.engines.base import EngineParseResult, ParseEngine
 from app.services.engines.normalizer import normalize_engine_output
 
 
-class PaddleOCRVL15Engine(ParseEngine):
-    name = "paddleocr_vl_1_5"
+class PaddleOCRVLEngine(ParseEngine):
+    name = "paddleocr_vl"
 
-    def __init__(self) -> None:
+    def __init__(self, app_settings=settings) -> None:  # type: ignore[no-untyped-def]
+        self.settings = app_settings
         self._pipeline = None
         self._pipeline_key: tuple[tuple[str, str], ...] | None = None
         self._pipeline_lock = threading.Lock()
@@ -32,8 +33,9 @@ class PaddleOCRVL15Engine(ParseEngine):
             raw, cli_error = self._try_cli(input_path, lang_hint)
         if raw is None:
             raise RuntimeError(
-                "PaddleOCR-VL-1.5 is unavailable. Install paddleocr and paddlepaddle-gpu, "
+                "PaddleOCR-VL is unavailable. Install paddleocr[doc-parser] and paddlepaddle-gpu, "
                 "or ensure `paddleocr` CLI exists in PATH. "
+                f"pipeline_version={self.settings.paddleocr_vl_pipeline_version or 'default'}; "
                 f"python_api_error={py_error or 'n/a'}; cli_error={cli_error or 'n/a'}"
             )
 
@@ -62,12 +64,14 @@ class PaddleOCRVL15Engine(ParseEngine):
 
         with tempfile.TemporaryDirectory(prefix="paddleocr_vl_") as tmp_dir:
             cmd = [cli_bin, "doc_parser", "-i", input_path, "--save_path", tmp_dir]
+            if self.settings.paddleocr_vl_pipeline_version:
+                cmd.extend(["--pipeline_version", self.settings.paddleocr_vl_pipeline_version])
             if lang_hint != "auto":
                 cmd.extend(["--lang", lang_hint])
-            if settings.ocr_device:
-                cmd.extend(["--device", settings.ocr_device])
-            if settings.ocr_inference_engine:
-                cmd.extend(["--engine", settings.ocr_inference_engine])
+            if self.settings.ocr_device:
+                cmd.extend(["--device", self.settings.ocr_device])
+            if self.settings.ocr_inference_engine:
+                cmd.extend(["--engine", self.settings.ocr_inference_engine])
             completed = subprocess.run(cmd, capture_output=True, text=True, check=False)
             if completed.returncode != 0:
                 stderr = (completed.stderr or "").strip()
@@ -97,8 +101,7 @@ class PaddleOCRVL15Engine(ParseEngine):
                 payload["markdown"] = md_files[0].read_text(encoding="utf-8", errors="ignore")
             return payload, ""
 
-    @staticmethod
-    def _build_kwargs(engine_cls: type, lang_hint: str) -> dict[str, Any]:
+    def _build_kwargs(self, engine_cls: type, lang_hint: str) -> dict[str, Any]:
         kwargs: dict[str, Any] = {}
 
         try:
@@ -110,10 +113,12 @@ class PaddleOCRVL15Engine(ParseEngine):
             kwargs["lang"] = lang_hint
 
         # Common args accepted by PaddleOCR parser via **kwargs.
-        if settings.ocr_device:
-            kwargs["device"] = settings.ocr_device
-        if settings.ocr_inference_engine:
-            kwargs["engine"] = settings.ocr_inference_engine
+        if self.settings.paddleocr_vl_pipeline_version:
+            kwargs["pipeline_version"] = self.settings.paddleocr_vl_pipeline_version
+        if self.settings.ocr_device:
+            kwargs["device"] = self.settings.ocr_device
+        if self.settings.ocr_inference_engine:
+            kwargs["engine"] = self.settings.ocr_inference_engine
         return kwargs
 
     def _get_or_create_pipeline(self, pipeline_cls: type, kwargs: dict[str, Any]):  # type: ignore[no-untyped-def]

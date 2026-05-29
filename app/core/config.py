@@ -30,6 +30,7 @@ class Settings:
     default_enable_fallback: bool = _get_bool("DEFAULT_ENABLE_FALLBACK", True)
     ocr_device: str = os.getenv("OCR_DEVICE", "").strip()
     ocr_inference_engine: str = os.getenv("OCR_INFERENCE_ENGINE", "").strip()
+    paddleocr_vl_pipeline_version: str = os.getenv("PADDLEOCR_VL_PIPELINE_VERSION", "v1.6").strip()
     qwen_verifier_enabled: bool = _get_bool("QWEN_VERIFIER_ENABLED", False)
     qwen_verifier_base_url: str = os.getenv("QWEN_VERIFIER_BASE_URL", "")
     qwen_verifier_model: str = os.getenv("QWEN_VERIFIER_MODEL", "Qwen/Qwen3-VL-8B-Instruct")

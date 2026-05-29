@@ -6,7 +6,7 @@ import uuid
 from app.core.config import Settings, settings
 from app.domain.schemas import Block, OutputFormat, PageParseResult, ParseDecision, ParseOptions, ParseResponse, Table
 from app.services.engines.base import EngineParseResult, ParseEngine
-from app.services.engines.paddleocr_vl import PaddleOCRVL15Engine
+from app.services.engines.paddleocr_vl import PaddleOCRVLEngine
 from app.services.engines.pp_structure_v3 import PPStructureV3Engine
 from app.services.merge import merge_results
 from app.services.quality import QualityAssessment, assess_document_quality
@@ -22,7 +22,7 @@ class ParseOrchestrator:
         fallback_engine: ParseEngine | None = None,
     ) -> None:
         self.settings = app_settings
-        self.primary_engine = primary_engine or PaddleOCRVL15Engine()
+        self.primary_engine = primary_engine or PaddleOCRVLEngine(app_settings=self.settings)
         self.fallback_engine = fallback_engine or PPStructureV3Engine()
         self.verifier = None
         if self.settings.qwen_verifier_enabled:

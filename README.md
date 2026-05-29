@@ -1,6 +1,6 @@
 # Vietnamese Document OCR & Extraction API
 
-Self-host backend de parse PDF scan / anh tai lieu. He thong uu tien PaddleOCR-VL-1.5, co fallback PP-StructureV3, va auto-save ket qua ra `outputs/`.
+Self-host backend de parse PDF scan / anh tai lieu. He thong uu tien PaddleOCR-VL, mac dinh pipeline `v1.6`, co fallback PP-StructureV3, va auto-save ket qua ra `outputs/`.
 
 ## Project Structure
 
@@ -56,6 +56,14 @@ $env:OCR_DEVICE="gpu:0"
 $env:PARSE_OUTPUT_DIR="outputs"
 venv\Scripts\python.exe main.py
 ```
+
+Optional PaddleOCR-VL version override:
+
+```powershell
+$env:PADDLEOCR_VL_PIPELINE_VERSION="v1.6"
+```
+
+Set it to an empty string only if you want PaddleOCR to use its package default.
 
 Optional:
 
@@ -137,4 +145,5 @@ venv\Scripts\python.exe -m pytest -q
 - Model cache defaults to `.paddlex/official_models`.
 - First request can be slow because OCR models are loaded into GPU.
 - `paddleocr` is the OCR framework package. GPU/CPU is decided by Paddle runtime; production should install `paddlepaddle-gpu` via `requirements-gpu-cu130.txt`.
+- PaddleOCR-VL pipeline version defaults to `v1.6` through `PADDLEOCR_VL_PIPELINE_VERSION`.
 - If PP-StructureV3 fallback fails, the API still returns PaddleOCR-VL result when primary parsing succeeds.

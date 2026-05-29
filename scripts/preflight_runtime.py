@@ -94,6 +94,7 @@ def main() -> None:
         "service_defaults": {
             "loaded": app_settings is not None,
             "paddlex_cache_home": getattr(app_settings, "paddlex_cache_home", ""),
+            "paddleocr_vl_pipeline_version": getattr(app_settings, "paddleocr_vl_pipeline_version", ""),
             "paddlex_disable_model_source_check": getattr(
                 app_settings, "paddlex_disable_model_source_check", None
             ),
