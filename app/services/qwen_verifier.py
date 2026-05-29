@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 import httpx
@@ -69,10 +70,7 @@ class QwenVerifier:
             return None
 
         # Some providers wrap JSON in markdown fences.
-        content = str(content).strip()
-        if content.startswith("```"):
-            content = content.strip("`")
-            content = content.replace("json", "", 1).strip()
+        content = self._strip_code_fence(str(content))
 
         try:
             parsed = json.loads(content)
@@ -81,6 +79,16 @@ class QwenVerifier:
         if not isinstance(parsed, dict):
             return None
         return parsed
+
+    @staticmethod
+    def _strip_code_fence(content: str) -> str:
+        # Remove only a leading ```/```lang fence and a trailing ``` fence. The old
+        # strip("`") + replace("json", "", 1) deleted backticks and the first "json"
+        # substring anywhere in the body, corrupting content that contained them.
+        content = content.strip()
+        content = re.sub(r"^```[a-zA-Z0-9]*\n?", "", content)
+        content = re.sub(r"\n?```$", "", content)
+        return content.strip()
 
     def _build_page_prompt(self, page: PageParseResult) -> str:
         lines = []

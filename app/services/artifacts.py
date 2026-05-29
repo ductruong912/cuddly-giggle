@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from app.core.config import settings
 from app.domain.schemas import OutputFormat, ParseResponse
+
+
+logger = logging.getLogger(__name__)
 
 
 def save_parse_artifacts(
@@ -30,9 +34,19 @@ def save_parse_artifacts(
         )
         saved.append(str(json_path.resolve()))
 
-    if output_format in {OutputFormat.markdown, OutputFormat.both} and response.markdown:
+    wants_markdown = output_format in {OutputFormat.markdown, OutputFormat.both}
+    if wants_markdown and response.markdown:
         md_path = output_dir / f"{stem}.md"
         md_path.write_text(response.markdown, encoding="utf-8")
         saved.append(str(md_path.resolve()))
+    elif wants_markdown:
+        # Markdown was requested but the engine produced none. Surface a signal so an
+        # empty saved_files (markdown-only) is not mistaken for a successful export.
+        logger.warning(
+            "markdown output requested (output_format=%s) but no markdown was produced "
+            "for request_id=%s; no .md written",
+            output_format.value,
+            response.request_id,
+        )
 
     return saved

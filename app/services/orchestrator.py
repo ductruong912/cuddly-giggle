@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+from pathlib import Path
 import time
 import uuid
 
@@ -127,14 +128,30 @@ class ParseOrchestrator:
         return False
 
     def _build_decision(self, score: float, quality: QualityAssessment) -> ParseDecision:
-        if score >= self.settings.confidence_pass_threshold and quality.score >= self.settings.quality_fail_threshold:
+        quality_ok = quality.score >= self.settings.quality_fail_threshold
+        if score >= self.settings.confidence_pass_threshold and quality_ok:
             return ParseDecision(status="pass", reason="High confidence parse result.")
-        if score >= self.settings.confidence_borderline_threshold:
+        if score >= self.settings.confidence_borderline_threshold and quality_ok:
             return ParseDecision(status="borderline", reason="Moderate confidence; fallback or review recommended.")
-        return ParseDecision(status="fail", reason="Low confidence parse; queued for manual review.")
+        # Low confidence OR failing document quality queues for manual review, so a
+        # high-confidence parse on a poor-quality image is not silently passed.
+        reasons: list[str] = []
+        if score < self.settings.confidence_borderline_threshold:
+            reasons.append("low confidence")
+        if not quality_ok:
+            reasons.append("low document quality")
+        return ParseDecision(status="fail", reason="Queued for manual review: " + ", ".join(reasons) + ".")
 
     def _apply_qwen_verification_if_needed(self, input_path: str, result: EngineParseResult) -> EngineParseResult:
         if self.verifier is None:
+            return result
+
+        # The verifier attaches input_path as the page image, which is only correct
+        # for a single-image input. For a (multi-page) PDF we cannot supply the right
+        # per-page image without a PDF renderer, so skip rather than verify each page
+        # against the wrong visual evidence.
+        if Path(input_path).suffix.lower() == ".pdf":
+            logger.info("qwen verification skipped: per-page image unavailable for PDF input")
             return result
 
         pages = []
