@@ -8,3 +8,5 @@ data_test/
 outputs/
 .env
 *.log
+plan.md
+data

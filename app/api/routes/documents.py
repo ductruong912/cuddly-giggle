@@ -20,8 +20,12 @@ logger = logging.getLogger(__name__)
 SUPPORTED_INPUT_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 
 
+# NOTE: declared as a sync `def` (not `async def`) on purpose. The body performs
+# blocking work (file copy + synchronous OCR inference / subprocess), so Starlette
+# runs it in its worker threadpool, keeping the event loop free for other requests.
+# Concurrent parses are serialized on the engine's inference lock (see paddle_base).
 @router.post("/parse", response_model=ParseResponse)
-async def parse_document(
+def parse_document(
     file: UploadFile = File(...),
     lang_hint: LangHint = Form(default=LangHint.auto),
     output_format: OutputFormat = Form(default=OutputFormat.both),
