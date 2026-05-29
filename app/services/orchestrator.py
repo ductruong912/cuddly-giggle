@@ -34,6 +34,8 @@ class ParseOrchestrator:
                 base_url=self.settings.qwen_verifier_base_url,
                 model=self.settings.qwen_verifier_model,
                 api_key=self.settings.qwen_verifier_api_key,
+                timeout_seconds=self.settings.qwen_verifier_timeout_seconds,
+                chat_path=self.settings.qwen_verifier_chat_path,
             )
 
     def parse(self, input_path: str, options: ParseOptions) -> ParseResponse:

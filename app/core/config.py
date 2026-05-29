@@ -52,6 +52,8 @@ class Settings:
     qwen_verifier_base_url: str = os.getenv("QWEN_VERIFIER_BASE_URL", "")
     qwen_verifier_model: str = os.getenv("QWEN_VERIFIER_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
     qwen_verifier_api_key: str = os.getenv("QWEN_VERIFIER_API_KEY", "")
+    qwen_verifier_timeout_seconds: float = _get_float("QWEN_VERIFIER_TIMEOUT_SECONDS", 60.0)
+    qwen_verifier_chat_path: str = os.getenv("QWEN_VERIFIER_CHAT_PATH", "/v1/chat/completions")
     confidence_pass_threshold: float = _get_float("CONFIDENCE_PASS_THRESHOLD", 0.84)
     confidence_borderline_threshold: float = _get_float("CONFIDENCE_BORDERLINE_THRESHOLD", 0.68)
     quality_fail_threshold: float = _get_float("QUALITY_FAIL_THRESHOLD", 0.62)

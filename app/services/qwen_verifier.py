@@ -21,10 +21,19 @@ class QwenVerifier:
     }
     """
 
-    def __init__(self, base_url: str, model: str, api_key: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        api_key: str,
+        timeout_seconds: float = 60.0,
+        chat_path: str = "/v1/chat/completions",
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
+        self.timeout_seconds = timeout_seconds
+        self.chat_path = chat_path
 
     def verify_page(self, input_path: str, page: PageParseResult) -> dict[str, Any] | None:
         if not self.base_url:
@@ -57,8 +66,8 @@ class QwenVerifier:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         try:
-            with httpx.Client(timeout=60.0) as client:
-                response = client.post(f"{self.base_url}/v1/chat/completions", headers=headers, json=payload)
+            with httpx.Client(timeout=self.timeout_seconds) as client:
+                response = client.post(f"{self.base_url}{self.chat_path}", headers=headers, json=payload)
                 response.raise_for_status()
             data = response.json()
         except Exception:
