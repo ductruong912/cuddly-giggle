@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import os
 from pathlib import Path
 import site
@@ -105,3 +106,16 @@ def configure_third_party_logging() -> None:
         paddlex_logging.setup_logging("WARNING")
     except Exception:
         pass
+
+
+def configure_app_logging() -> None:
+    app_logger = logging.getLogger("app")
+    app_logger.setLevel(logging.INFO)
+    app_logger.propagate = True
+    if any(getattr(handler, "_cuddly_giggle_app_handler", False) for handler in app_logger.handlers):
+        return
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter("INFO:     %(message)s"))
+    handler._cuddly_giggle_app_handler = True  # type: ignore[attr-defined]
+    app_logger.addHandler(handler)

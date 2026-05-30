@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import itertools
+import logging
+import time
 import uuid
 
 from app.core.config import Settings, settings
@@ -12,6 +14,9 @@ from app.services.merge import merge_results
 from app.services.quality import QualityAssessment, assess_document_quality
 from app.services.qwen_verifier import QwenVerifier
 from app.services.vietnamese_postprocess import postprocess_blocks, postprocess_markdown, postprocess_tables
+
+
+logger = logging.getLogger(__name__)
 
 
 class ParseOrchestrator:
@@ -33,24 +38,43 @@ class ParseOrchestrator:
             )
 
     def parse(self, input_path: str, options: ParseOptions) -> ParseResponse:
+        total_start = time.perf_counter()
         request_id = f"req_{uuid.uuid4().hex[:12]}"
-        quality = assess_document_quality(input_path)
+        quality_elapsed = 0.0
+        primary_elapsed = 0.0
+        fallback_elapsed = 0.0
+        merge_elapsed = 0.0
+        postprocess_elapsed = 0.0
 
+        stage_start = time.perf_counter()
+        quality = assess_document_quality(input_path)
+        quality_elapsed = time.perf_counter() - stage_start
+
+        stage_start = time.perf_counter()
         primary = self.primary_engine.parse(input_path, options.lang_hint.value)
+        primary_elapsed = time.perf_counter() - stage_start
         primary_score = primary.page_confidence
 
         fallback: EngineParseResult | None = None
         fallback_error: str | None = None
         if options.enable_fallback and self._needs_fallback(primary_score, quality):
             try:
+                stage_start = time.perf_counter()
                 fallback = self.fallback_engine.parse(input_path, options.lang_hint.value)
+                fallback_elapsed = time.perf_counter() - stage_start
             except Exception as exc:  # pragma: no cover - exercised via orchestrator tests
+                fallback_elapsed = time.perf_counter() - stage_start
                 fallback = None
                 fallback_error = self._compact_error(str(exc))
 
+        stage_start = time.perf_counter()
         merged = merge_results(primary, fallback)
+        merge_elapsed = time.perf_counter() - stage_start
+
+        stage_start = time.perf_counter()
         merged = self._apply_qwen_verification_if_needed(input_path, merged)
         merged = self._apply_postprocess(merged)
+        postprocess_elapsed = time.perf_counter() - stage_start
 
         decision = self._build_decision(merged.page_confidence, quality)
         if fallback_error:
@@ -71,7 +95,7 @@ class ParseOrchestrator:
         review_queued = decision.status == "fail"
         review_reason = decision.reason if review_queued else None
 
-        return ParseResponse(
+        response = ParseResponse(
             request_id=request_id,
             decision=decision,
             pages=pages,
@@ -83,6 +107,20 @@ class ParseOrchestrator:
             review_queued=review_queued,
             review_reason=review_reason,
         )
+        logger.info(
+            "parse timings request_id=%s quality=%.3fs primary=%.3fs fallback=%.3fs "
+            "merge=%.3fs postprocess=%.3fs total=%.3fs primary_score=%.3f quality_score=%.3f",
+            request_id,
+            quality_elapsed,
+            primary_elapsed,
+            fallback_elapsed,
+            merge_elapsed,
+            postprocess_elapsed,
+            time.perf_counter() - total_start,
+            primary_score,
+            quality.score,
+        )
+        return response
 
     def _needs_fallback(self, primary_score: float, quality: QualityAssessment) -> bool:
         if primary_score < self.settings.confidence_pass_threshold:
