@@ -113,6 +113,10 @@ class Settings:
     # DOCX is parsed natively. Legacy DOC is converted to DOCX with LibreOffice when available.
     word_text_confidence: float = _get_float("WORD_TEXT_CONFIDENCE", 0.99)
 
+    # --- Excel text fast-path ---
+    # XLSX/XLSM are parsed natively. Legacy XLS is converted to XLSX with LibreOffice when available.
+    excel_text_confidence: float = _get_float("EXCEL_TEXT_CONFIDENCE", 0.99)
+
     # --- Normalizer synthetic confidence heuristic ---
     # Used only when an engine returns no numeric score.
     normalizer_confidence_base: float           = _get_float("NORMALIZER_CONFIDENCE_BASE", 0.55)

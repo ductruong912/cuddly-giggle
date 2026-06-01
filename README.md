@@ -6,6 +6,7 @@ A production-ready, self-hosted API backend designed for high-precision parsing 
 
 - **Smart PDF Parsing**: Instantly extracts native text layer using PyMuPDF. Bypasses heavy OCR when high-quality digital text is available.
 - **Word Parsing**: Extracts `.docx` directly to Markdown and supports legacy `.doc` through LibreOffice/soffice conversion when available.
+- **Excel Parsing**: Extracts `.xlsx` / `.xlsm` worksheets to Markdown tables and supports legacy `.xls` through LibreOffice/soffice conversion when available.
 - **Legacy Font Repair**: Auto-detects and converts legacy Vietnamese printer fonts (TCVN3 / VNI / ABC) to standard Unicode.
 - **Vision-Language OCR**: Leverages **PaddleOCR-VL** (v1.6) as the primary engine for complex layouts and robust Vietnamese OCR.
 - **Resilient Fallback**: Automatically cascades to **PP-StructureV3** for highly-structured outputs if the primary engine yields borderline confidence or low image quality.
@@ -80,9 +81,10 @@ venv\Scripts\python.exe main.py
 
 ### `POST /v1/doc/parse`
 
-Extracts Markdown from an uploaded document (PDF, DOCX, DOC, PNG, JPG). The API response body is `text/markdown`; JSON and `both` output modes are not exposed.
+Extracts Markdown from an uploaded document (PDF, DOCX, DOC, XLSX, XLSM, XLS, PNG, JPG). The API response body is `text/markdown`; JSON and `both` output modes are not exposed.
 
 `.docx` files are parsed natively. Legacy `.doc` files require LibreOffice/soffice on the server so they can be converted to `.docx` before parsing.
+`.xlsx` and `.xlsm` files are parsed natively. Legacy `.xls` files require LibreOffice/soffice so they can be converted to `.xlsx` before parsing.
 
 **Form-Data Parameters:**
 - `file`*(required)*: The document binary.

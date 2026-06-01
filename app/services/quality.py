@@ -18,7 +18,7 @@ class QualityAssessment:
 
 def assess_document_quality(input_path: str, app_settings: Settings = settings) -> QualityAssessment:
     path = Path(input_path)
-    if path.suffix.lower() in {".pdf", ".doc", ".docx"}:
+    if path.suffix.lower() in {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".xlsm"}:
         # Text documents are better assessed by their parser or rendered pages.
         # Keep neutral defaults and defer to model confidence.
         return QualityAssessment(flags=QualityFlags(), score=app_settings.quality_pdf_default_score)
