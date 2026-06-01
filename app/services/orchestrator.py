@@ -7,7 +7,7 @@ import time
 import uuid
 
 from app.core.config import Settings, settings
-from app.domain.schemas import OutputFormat, PageParseResult, ParseDecision, ParseOptions, ParseResponse
+from app.domain.schemas import PageParseResult, ParseDecision, ParseOptions, ParseResponse
 from app.services.engines.base import EngineParseResult, ParseEngine
 from app.services.engines.pdf_text import PdfTextEngine, is_pdf_text_result_usable
 from app.services.engines.registry import create_engine
@@ -144,10 +144,6 @@ class ParseOrchestrator:
         tables = list(itertools.chain.from_iterable(page.tables for page in pages))
         reading_order = list(itertools.chain.from_iterable(page.reading_order for page in pages))
 
-        markdown = result.markdown if options.output_format in {OutputFormat.markdown, OutputFormat.both} else None
-        if options.output_format == OutputFormat.json:
-            markdown = None
-
         review_queued = decision.status == "fail"
         review_reason = decision.reason if review_queued else None
 
@@ -159,7 +155,7 @@ class ParseOrchestrator:
             tables=tables,
             reading_order=reading_order,
             quality_flags=quality.flags,
-            markdown=markdown,
+            markdown=result.markdown,
             review_queued=review_queued,
             review_reason=review_reason,
         )

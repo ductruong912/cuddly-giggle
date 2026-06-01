@@ -79,12 +79,11 @@ venv\Scripts\python.exe main.py
 
 ### `POST /v1/doc/parse`
 
-Extracts content from an uploaded document (PDF, PNG, JPG).
+Extracts Markdown from an uploaded document (PDF, PNG, JPG). The API response body is `text/markdown`; JSON and `both` output modes are not exposed.
 
 **Form-Data Parameters:**
 - `file`*(required)*: The document binary.
 - `lang_hint`*(optional)*: Language hint (`auto` or `vi`).
-- `output_format` *(optional)*: Which artifact to save and return (`json`, `markdown`, `both`). Default is `json`.
 - `enable_fallback` *(optional)*: Set to `true`/`false`. Defauts to application settings.
 - `output_basename` *(optional)*: Custom prefix for saved files in the `outputs/` folder.
 
@@ -92,10 +91,10 @@ Extracts content from an uploaded document (PDF, PNG, JPG).
 ```bash
 curl -X 'POST' \
   'http://127.0.0.1:8000/v1/doc/parse' \
-  -H 'accept: application/json' \
+  -H 'accept: text/markdown' \
   -H 'Content-Type: multipart/form-data' \
   -F 'file=@sample_invoice.pdf;type=application/pdf' \
-  -F 'output_format=both'
+  -F 'enable_fallback=true'
 ```
 
 ---

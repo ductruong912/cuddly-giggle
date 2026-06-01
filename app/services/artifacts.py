@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 
 from app.core.config import settings
-from app.domain.schemas import OutputFormat, ParseResponse
+from app.domain.schemas import ParseResponse
 
 
 logger = logging.getLogger(__name__)
@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 def save_parse_artifacts(
     response: ParseResponse,
     input_filename: str,
-    output_format: OutputFormat,
     output_basename: str | None = None,
 ) -> list[str]:
     output_dir = Path(settings.parse_output_dir)
@@ -25,28 +24,14 @@ def save_parse_artifacts(
         stem = "document"
     stem = f"{stem}_{response.request_id}"
 
-    saved: list[str] = []
-    if output_format in {OutputFormat.json, OutputFormat.both}:
-        json_path = output_dir / f"{stem}.json"
-        json_path.write_text(
-            response.model_dump_json(indent=2, exclude_none=True),
-            encoding="utf-8",
-        )
-        saved.append(str(json_path.resolve()))
-
-    wants_markdown = output_format in {OutputFormat.markdown, OutputFormat.both}
-    if wants_markdown and response.markdown:
+    if response.markdown:
         md_path = output_dir / f"{stem}.md"
         md_path.write_text(response.markdown, encoding="utf-8")
-        saved.append(str(md_path.resolve()))
-    elif wants_markdown:
-        # Markdown was requested but the engine produced none. Surface a signal so an
-        # empty saved_files (markdown-only) is not mistaken for a successful export.
-        logger.warning(
-            "markdown output requested (output_format=%s) but no markdown was produced "
-            "for request_id=%s; no .md written",
-            output_format.value,
-            response.request_id,
-        )
+        return [str(md_path.resolve())]
 
-    return saved
+    # Surface a signal so an empty saved_files is not mistaken for a successful export.
+    logger.warning(
+        "markdown output requested but no markdown was produced for request_id=%s; no .md written",
+        response.request_id,
+    )
+    return []

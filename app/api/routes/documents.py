@@ -7,10 +7,11 @@ import time
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import PlainTextResponse
 
 from app.api.dependencies import get_orchestrator
 from app.core.config import settings
-from app.domain.schemas import LangHint, OutputFormat, ParseOptions, ParseResponse
+from app.domain.schemas import LangHint, ParseOptions
 from app.services.artifacts import save_parse_artifacts
 from app.services.orchestrator import ParseOrchestrator
 
@@ -24,15 +25,14 @@ SUPPORTED_INPUT_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".
 # blocking work (file copy + synchronous OCR inference / subprocess), so Starlette
 # runs it in its worker threadpool, keeping the event loop free for other requests.
 # Concurrent parses are serialized on the engine's inference lock (see paddle_base).
-@router.post("/parse", response_model=ParseResponse)
+@router.post("/parse", response_class=PlainTextResponse)
 def parse_document(
     file: UploadFile = File(...),
     lang_hint: LangHint = Form(default=LangHint.auto),
-    output_format: OutputFormat = Form(default=OutputFormat.both),
     enable_fallback: bool = Form(default=settings.default_enable_fallback),
     output_basename: str | None = Form(default=None),
     orchestrator: ParseOrchestrator = Depends(get_orchestrator),
-) -> ParseResponse:
+) -> PlainTextResponse:
     total_start = time.perf_counter()
     upload_elapsed = 0.0
     parse_elapsed = 0.0
@@ -52,7 +52,6 @@ def parse_document(
         upload_elapsed = time.perf_counter() - stage_start
         options = ParseOptions(
             lang_hint=lang_hint,
-            output_format=output_format,
             enable_fallback=enable_fallback,
         )
         stage_start = time.perf_counter()
@@ -62,20 +61,23 @@ def parse_document(
         saved_files = save_parse_artifacts(
             response=response,
             input_filename=file.filename or temp_path.name,
-            output_format=output_format,
             output_basename=output_basename,
         )
         save_elapsed = time.perf_counter() - stage_start
-        final_response = response.model_copy(update={"saved_files": saved_files})
+        if not response.markdown:
+            raise HTTPException(status_code=500, detail="No markdown output produced.")
         logger.info(
-            "api timings request_id=%s upload=%.3fs parse=%.3fs save=%.3fs total=%.3fs",
+            "api timings request_id=%s upload=%.3fs parse=%.3fs save=%.3fs total=%.3fs saved_files=%s",
             response.request_id,
             upload_elapsed,
             parse_elapsed,
             save_elapsed,
             time.perf_counter() - total_start,
+            saved_files,
         )
-        return final_response
+        return PlainTextResponse(response.markdown, media_type="text/markdown")
+    except HTTPException:
+        raise
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:

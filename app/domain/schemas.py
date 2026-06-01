@@ -11,12 +11,6 @@ class LangHint(str, Enum):
     auto = "auto"
 
 
-class OutputFormat(str, Enum):
-    json = "json"
-    markdown = "markdown"
-    both = "both"
-
-
 class BlockType(str, Enum):
     text = "text"
     table = "table"
@@ -98,5 +92,4 @@ class ParseResponse(BaseModel):
 
 class ParseOptions(BaseModel):
     lang_hint: LangHint = LangHint.auto
-    output_format: OutputFormat = OutputFormat.both
     enable_fallback: bool = True
