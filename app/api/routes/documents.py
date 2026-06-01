@@ -18,7 +18,7 @@ from app.services.orchestrator import ParseOrchestrator
 router = APIRouter(prefix="/v1/doc", tags=["documents"])
 logger = logging.getLogger(__name__)
 
-SUPPORTED_INPUT_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
+SUPPORTED_INPUT_SUFFIXES = {".pdf", ".doc", ".docx", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 
 
 # NOTE: declared as a sync `def` (not `async def`) on purpose. The body performs
@@ -39,7 +39,7 @@ def parse_document(
     save_elapsed = 0.0
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in SUPPORTED_INPUT_SUFFIXES:
-        raise HTTPException(status_code=400, detail="Unsupported input type. Use PDF or image files.")
+        raise HTTPException(status_code=400, detail="Unsupported input type. Use PDF, Word, or image files.")
 
     temp_root = Path(settings.temp_dir)
     temp_root.mkdir(parents=True, exist_ok=True)

@@ -1,14 +1,15 @@
 # Cuddly Giggle: Vietnamese Document OCR & Extraction API 
 
-A production-ready, self-hosted API backend designed for high-precision parsing of Vietnamese documents, scanned images, and PDFs. It intelligently combines native PDF text extraction, Vision-Language (VL) OCR models, and structural document parsing to deliver accurate JSON and Markdown outputs.
+A production-ready, self-hosted API backend designed for high-precision parsing of Vietnamese documents, scanned images, PDFs, and Word files. It intelligently combines native text extraction, Vision-Language (VL) OCR models, and structural document parsing to deliver accurate Markdown outputs.
 
 ## Key Features
 
 - **Smart PDF Parsing**: Instantly extracts native text layer using PyMuPDF. Bypasses heavy OCR when high-quality digital text is available.
+- **Word Parsing**: Extracts `.docx` directly to Markdown and supports legacy `.doc` through LibreOffice/soffice conversion when available.
 - **Legacy Font Repair**: Auto-detects and converts legacy Vietnamese printer fonts (TCVN3 / VNI / ABC) to standard Unicode.
 - **Vision-Language OCR**: Leverages **PaddleOCR-VL** (v1.6) as the primary engine for complex layouts and robust Vietnamese OCR.
 - **Resilient Fallback**: Automatically cascades to **PP-StructureV3** for highly-structured outputs if the primary engine yields borderline confidence or low image quality.
-- **Auto-Artifacts**: Automatically saves parse results as `JSON` and/or `Markdown` to your local `outputs/` directory.
+- **Auto-Artifacts**: Automatically saves parse results as `Markdown` to your local `outputs/` directory.
 - **Offline Ready**: Transparent model caching mechanism allows seamless air-gapped deployments.
 
 ---
@@ -57,7 +58,7 @@ The app uses a `.env` file for configuration. Copy `.env.example` to `.env` (if 
 | `PADDLEOCR_VL_PIPELINE_VERSION`| `v1.6` | Specific version of the VL pipeline to download/use. |
 | `WARMUP_MODELS_ON_STARTUP` | `true` | Load models into GPU RAM during server boot (reduces latency of first request). |
 | `OCR_DEVICE` | `gpu:0` | Hardware selector (`gpu:0`, `cpu`, etc.). |
-| `PARSE_OUTPUT_DIR` | `outputs` | Directory to save `.md` and `.json` files. |
+| `PARSE_OUTPUT_DIR` | `outputs` | Directory to save `.md` files. |
 | `HOST` / `PORT` | `127.0.0.1` / `8000` | Uvicorn server binding. |
 
 ---
@@ -79,7 +80,9 @@ venv\Scripts\python.exe main.py
 
 ### `POST /v1/doc/parse`
 
-Extracts Markdown from an uploaded document (PDF, PNG, JPG). The API response body is `text/markdown`; JSON and `both` output modes are not exposed.
+Extracts Markdown from an uploaded document (PDF, DOCX, DOC, PNG, JPG). The API response body is `text/markdown`; JSON and `both` output modes are not exposed.
+
+`.docx` files are parsed natively. Legacy `.doc` files require LibreOffice/soffice on the server so they can be converted to `.docx` before parsing.
 
 **Form-Data Parameters:**
 - `file`*(required)*: The document binary.

@@ -108,6 +108,11 @@ class Settings:
     pdf_text_min_text_pages_ratio: float   = _get_float("PDF_TEXT_MIN_TEXT_PAGES_RATIO", 1.0)
     pdf_text_confidence: float             = _get_float("PDF_TEXT_CONFIDENCE", 0.98)
 
+
+    # --- Word text fast-path ---
+    # DOCX is parsed natively. Legacy DOC is converted to DOCX with LibreOffice when available.
+    word_text_confidence: float = _get_float("WORD_TEXT_CONFIDENCE", 0.99)
+
     # --- Normalizer synthetic confidence heuristic ---
     # Used only when an engine returns no numeric score.
     normalizer_confidence_base: float           = _get_float("NORMALIZER_CONFIDENCE_BASE", 0.55)

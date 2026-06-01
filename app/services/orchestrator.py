@@ -11,6 +11,7 @@ from app.domain.schemas import PageParseResult, ParseDecision, ParseOptions, Par
 from app.services.engines.base import EngineParseResult, ParseEngine
 from app.services.engines.pdf_text import PdfTextEngine, is_pdf_text_result_usable
 from app.services.engines.registry import create_engine
+from app.services.engines.word_text import WordTextEngine
 from app.services.merge import merge_results
 from app.services.quality import QualityAssessment, assess_document_quality
 from app.services.qwen_verifier import QwenVerifier
@@ -26,11 +27,13 @@ class ParseOrchestrator:
         primary_engine: ParseEngine | None = None,
         fallback_engine: ParseEngine | None = None,
         pdf_text_engine: ParseEngine | None = None,
+        word_text_engine: ParseEngine | None = None,
     ) -> None:
         self.settings = app_settings
         self.primary_engine = primary_engine or create_engine(self.settings.primary_engine, self.settings)
         self.fallback_engine = fallback_engine or create_engine(self.settings.fallback_engine, self.settings)
         self.pdf_text_engine = pdf_text_engine or PdfTextEngine(self.settings)
+        self.word_text_engine = word_text_engine or WordTextEngine(self.settings)
         self.verifier = None
         if self.settings.qwen_verifier_enabled:
             self.verifier = QwenVerifier(
@@ -48,12 +51,31 @@ class ParseOrchestrator:
         primary_elapsed = 0.0
         fallback_elapsed = 0.0
         pdf_text_elapsed = 0.0
+        word_text_elapsed = 0.0
         merge_elapsed = 0.0
         verify_elapsed = 0.0
 
         stage_start = time.perf_counter()
         quality = assess_document_quality(input_path, self.settings)
         quality_elapsed = time.perf_counter() - stage_start
+
+        if self._should_try_word_text(input_path):
+            stage_start = time.perf_counter()
+            word_text = self.word_text_engine.parse(input_path, options.lang_hint.value)
+            word_text_elapsed = time.perf_counter() - stage_start
+            decision = self._build_decision(word_text.page_confidence, quality)
+            response = self._build_response(request_id, word_text, quality, options, decision)
+            logger.info(
+                "parse timings request_id=%s quality=%.3fs word_text=%.3fs total=%.3fs "
+                "word_text_score=%.3f quality_score=%.3f",
+                request_id,
+                quality_elapsed,
+                word_text_elapsed,
+                time.perf_counter() - total_start,
+                word_text.page_confidence,
+                quality.score,
+            )
+            return response
 
         if self._should_try_pdf_text(input_path):
             try:
@@ -114,12 +136,13 @@ class ParseOrchestrator:
         response = self._build_response(request_id, merged, quality, options, decision)
         logger.info(
             "parse timings request_id=%s quality=%.3fs pdf_text=%.3fs primary=%.3fs fallback=%.3fs "
-            "merge=%.3fs verify=%.3fs total=%.3fs primary_score=%.3f quality_score=%.3f",
+            "word_text=%.3fs merge=%.3fs verify=%.3fs total=%.3fs primary_score=%.3f quality_score=%.3f",
             request_id,
             quality_elapsed,
             pdf_text_elapsed,
             primary_elapsed,
             fallback_elapsed,
+            word_text_elapsed,
             merge_elapsed,
             verify_elapsed,
             time.perf_counter() - total_start,
@@ -130,6 +153,9 @@ class ParseOrchestrator:
 
     def _should_try_pdf_text(self, input_path: str) -> bool:
         return self.settings.pdf_text_parse_enabled and Path(input_path).suffix.lower() == ".pdf"
+
+    def _should_try_word_text(self, input_path: str) -> bool:
+        return Path(input_path).suffix.lower() in {".doc", ".docx"}
 
     def _build_response(
         self,
