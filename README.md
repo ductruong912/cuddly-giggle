@@ -1,152 +1,147 @@
-# Vietnamese Document OCR & Extraction API
+# Cuddly Giggle: Vietnamese Document OCR & Extraction API 
 
-Self-host backend de parse PDF scan / anh tai lieu. He thong uu tien PaddleOCR-VL, mac dinh pipeline `v1.6`, co fallback PP-StructureV3, va auto-save ket qua ra `outputs/`.
+A production-ready, self-hosted API backend designed for high-precision parsing of Vietnamese documents, scanned images, and PDFs. It intelligently combines native PDF text extraction, Vision-Language (VL) OCR models, and structural document parsing to deliver accurate JSON and Markdown outputs.
+
+## Key Features
+
+- **Smart PDF Parsing**: Instantly extracts native text layer using PyMuPDF. Bypasses heavy OCR when high-quality digital text is available.
+- **Legacy Font Repair**: Auto-detects and converts legacy Vietnamese printer fonts (TCVN3 / VNI / ABC) to standard Unicode.
+- **Vision-Language OCR**: Leverages **PaddleOCR-VL** (v1.6) as the primary engine for complex layouts and robust Vietnamese OCR.
+- **Resilient Fallback**: Automatically cascades to **PP-StructureV3** for highly-structured outputs if the primary engine yields borderline confidence or low image quality.
+- **Auto-Artifacts**: Automatically saves parse results as `JSON` and/or `Markdown` to your local `outputs/` directory.
+- **Offline Ready**: Transparent model caching mechanism allows seamless air-gapped deployments.
+
+---
+
+## Prerequisites
+
+- **OS**: Windows or Linux
+- **Python**: 3.9 - 3.11
+- **Hardware**: NVIDIA GPU is highly recommended (CUDA 13.0 or 12.6 supported).
+
+---
+
+## Installation & Setup
+
+**1. Clone the repository**
+```powershell
+git clone https://github.com/ductruong912/cuddly-giggle
+cd cuddly-giggle
+```
+
+**2. Setup Virtual Environment**
+```powershell
+python -m venv venv
+venv\Scripts\activate  # On Linux use: source venv/bin/activate
+```
+
+**3. Install Dependencies**
+
+By default, the project is configured for **CUDA 13.0** on Windows:
+```powershell
+python -m pip install --upgrade pip
+python -m pip install -r requirements-gpu-cu130.txt
+```
+*(Note: If you have an older NVIDIA driver indicating CUDA 12.6, you should install the cu126 PaddlePaddle wheel instead of this requirements file).*
+
+---
+
+## Configuration
+
+The app uses a `.env` file for configuration. Copy `.env.example` to `.env` (if available) or create one. Environment variables can also be set directly in your terminal.
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `OCR_PRIMARY_ENGINE` | `paddleocr_vl` | Primary extraction engine (`paddleocr_vl` or `pp_structure_v3`). |
+| `OCR_FALLBACK_ENGINE` | `pp_structure_v3` | Secondary engine if the primary fails quality/confidence thresholds. |
+| `PADDLEOCR_VL_PIPELINE_VERSION`| `v1.6` | Specific version of the VL pipeline to download/use. |
+| `WARMUP_MODELS_ON_STARTUP` | `true` | Load models into GPU RAM during server boot (reduces latency of first request). |
+| `OCR_DEVICE` | `gpu:0` | Hardware selector (`gpu:0`, `cpu`, etc.). |
+| `PARSE_OUTPUT_DIR` | `outputs` | Directory to save `.md` and `.json` files. |
+| `HOST` / `PORT` | `127.0.0.1` / `8000` | Uvicorn server binding. |
+
+---
+
+## Running the Service
+
+Start the backend server. The first startup will download required AI models into `.paddlex/official_models` and warm them up on the GPU.
+
+```powershell
+$env:OCR_DEVICE="gpu:0"
+venv\Scripts\python.exe main.py
+```
+
+> **API Interactive Docs**: Visit http://127.0.0.1:8000/docs once the server is running to view the Swagger UI.
+
+---
+
+## API Usage
+
+### `POST /v1/doc/parse`
+
+Extracts content from an uploaded document (PDF, PNG, JPG).
+
+**Form-Data Parameters:**
+- `file`*(required)*: The document binary.
+- `lang_hint`*(optional)*: Language hint (`auto` or `vi`).
+- `output_format` *(optional)*: Which artifact to save and return (`json`, `markdown`, `both`). Default is `json`.
+- `enable_fallback` *(optional)*: Set to `true`/`false`. Defauts to application settings.
+- `output_basename` *(optional)*: Custom prefix for saved files in the `outputs/` folder.
+
+**Example via cURL:**
+```bash
+curl -X 'POST' \
+  'http://127.0.0.1:8000/v1/doc/parse' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: multipart/form-data' \
+  -F 'file=@sample_invoice.pdf;type=application/pdf' \
+  -F 'output_format=both'
+```
+
+---
 
 ## Project Structure
 
 ```text
-main.py                       # root entrypoint: python main.py
-app/
-  application.py              # FastAPI app factory
-  api/
-    dependencies.py           # dependency injection
-    routes/
-      documents.py            # POST /v1/doc/parse
-      health.py               # GET /healthz
-  core/
-    config.py                 # env settings, model cache, GPU bootstrap
-  domain/
-    schemas.py                # API/domain schemas
-  services/
-    artifacts.py              # save JSON/Markdown outputs
-    orchestrator.py           # primary/fallback/quality flow
-    merge.py                  # merge primary + fallback result
-    quality.py                # document quality checks
-    engines/                  # PaddleOCR-VL, PP-StructureV3 adapters
-  eval/
-    metrics.py                # CER/WER/table/reading-order metrics
-scripts/
-  preflight_runtime.py        # check Python/GPU/Paddle/model cache
-  evaluate_acceptance.py      # evaluate prediction vs ground truth
-tests/                        # unit/regression tests
-outputs/                      # auto-saved parse artifacts
-data_test/                    # local sample documents
+├── main.py                       # Root entrypoint
+├── app/
+│   ├── application.py            # FastAPI app factory
+│   ├── api/                      # Routing & DI
+│   ├── core/                     # App settings & environment bootstraps
+│   ├── domain/                   # Schemas (Pydantic models)
+│   ├── eval/                     # CER/WER metrics tracking
+│   └── services/                 # Business logic, Quality checks, Merging
+│       └── engines/              # Base classes & Adapters (PaddleOCR, StructureV3)
+├── scripts/                      # Utility scripts (preflight checks, evaluation)
+├── tests/                        # Unit and integration tests
+├── outputs/                      # (Git-ignored) Target folder for parsed artifacts
+└── data_test/                    # (Git-ignored) Local sample documents
 ```
 
-## Install
+---
 
-```powershell
-python -m venv venv
-venv\Scripts\activate
-python -m pip install -r requirements-gpu-cu130.txt
-```
+## Offline & Production Deployment
 
-`requirements.txt` contains common app/OCR packages. `requirements-gpu-cu130.txt` adds the required Paddle GPU runtime for Windows + NVIDIA CUDA 13.
+For environments without internet access (Air-Gapped):
 
-```powershell
-python -m pip uninstall -y paddlepaddle
-python -m pip install -r requirements-gpu-cu130.txt
-```
+1. **Pre-download Models**: Run the application once on an internet-connected machine. This caches models inside the `.paddlex/official_models` folder.
+2. **Transfer**: Copy the code along with the `.paddlex` folder to your offline server.
+3. **Configure Volume**: Set the cache location explicitly if you move it:
+   ```powershell
+   $env:PADDLE_PDX_CACHE_HOME="C:\deploy\.paddlex"
+   ```
+*Pro Tip: Do not commit the `.paddlex` or `outputs/` directories to source control. They are `.gitignore`d for a reason!*
 
-## Run Backend
+---
 
-Create a local `.env` from `.env.example` if you want file-based configuration. The app loads `.env` automatically and real process env vars keep priority.
+## Testing & Diagnostics
 
-By default, `python main.py` initializes PaddleOCR-VL before starting Uvicorn. On a fresh cache this downloads the configured model weights, using `PADDLEOCR_VL_PIPELINE_VERSION` (`v1.6` by default). Set `WARMUP_MODELS_ON_STARTUP=false` to defer model download until the first parse request.
-
-```powershell
-$env:OCR_DEVICE="gpu:0"
-$env:PARSE_OUTPUT_DIR="outputs"
-venv\Scripts\python.exe main.py
-```
-
-Optional PaddleOCR-VL version override:
-
-```powershell
-$env:PADDLEOCR_VL_PIPELINE_VERSION="v1.6"
-```
-
-Set it to an empty string only if you want PaddleOCR to use its package default.
-
-Optional:
-
-```powershell
-$env:HOST="127.0.0.1"
-$env:PORT="8000"
-venv\Scripts\python.exe main.py
-```
-
-API docs: `http://127.0.0.1:8000/docs`
-
-## GitHub / Clone Notes
-
-Do not commit model cache or local data:
-
-- `.paddlex/` is PaddleX/PaddleOCR model cache and can be very large.
-- `outputs/` contains local parse results.
-- `data_test/` contains local/private test documents.
-- `venv/` is the local Python environment.
-
-These folders are ignored by `.gitignore`.
-
-After cloning on another machine:
-
-```powershell
-git clone <your-repo-url>
-cd <your-repo>
-python -m venv venv
-venv\Scripts\activate
-python -m pip install -r requirements-gpu-cu130.txt
-$env:OCR_DEVICE="gpu:0"
-venv\Scripts\python.exe main.py
-```
-
-On the first parse request, PaddleOCR/PaddleX will download model files again into `.paddlex/official_models`.
-
-For offline deployment, copy the old `.paddlex/official_models` folder to the new machine, or mount it as a persistent volume, then set:
-
-```powershell
-$env:PADDLE_PDX_CACHE_HOME="C:\path\to\.paddlex"
-```
-
-Production recommendation: keep code in GitHub, keep models in a model cache volume/artifact storage, not inside Git.
-
-## API
-
-`POST /v1/doc/parse`
-
-Form fields:
-
-- `file`: PDF/image
-- `lang_hint`: `auto` or `vi`
-- `output_format`: `json`, `markdown`, `both`
-- `enable_fallback`: `true` or `false`
-- `output_basename`: optional output filename prefix
-
-Auto-save:
-
-- `json` saves `.json`
-- `markdown` saves `.md`
-- `both` saves `.json` and `.md`
-
-Response always includes `saved_files[]`.
-
-## Check Runtime
-
+**Check System Readiness (Python, GPU, Paddle, Model Cache):**
 ```powershell
 venv\Scripts\python.exe scripts\preflight_runtime.py
 ```
 
-## Test
-
+**Run Unit Tests:**
 ```powershell
 venv\Scripts\python.exe -m pytest -q
 ```
-
-## Notes
-
-- Model cache defaults to `.paddlex/official_models`.
-- First request can be slow because OCR models are loaded into GPU.
-- `paddleocr` is the OCR framework package. GPU/CPU is decided by Paddle runtime; production should install `paddlepaddle-gpu` via `requirements-gpu-cu130.txt`.
-- PaddleOCR-VL pipeline version defaults to `v1.6` through `PADDLEOCR_VL_PIPELINE_VERSION`.
-- If PP-StructureV3 fallback fails, the API still returns PaddleOCR-VL result when primary parsing succeeds.

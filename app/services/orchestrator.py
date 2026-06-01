@@ -9,6 +9,7 @@ import uuid
 from app.core.config import Settings, settings
 from app.domain.schemas import OutputFormat, PageParseResult, ParseDecision, ParseOptions, ParseResponse
 from app.services.engines.base import EngineParseResult, ParseEngine
+from app.services.engines.pdf_text import PdfTextEngine, is_pdf_text_result_usable
 from app.services.engines.registry import create_engine
 from app.services.merge import merge_results
 from app.services.quality import QualityAssessment, assess_document_quality
@@ -24,10 +25,12 @@ class ParseOrchestrator:
         app_settings: Settings = settings,
         primary_engine: ParseEngine | None = None,
         fallback_engine: ParseEngine | None = None,
+        pdf_text_engine: ParseEngine | None = None,
     ) -> None:
         self.settings = app_settings
         self.primary_engine = primary_engine or create_engine(self.settings.primary_engine, self.settings)
         self.fallback_engine = fallback_engine or create_engine(self.settings.fallback_engine, self.settings)
+        self.pdf_text_engine = pdf_text_engine or PdfTextEngine(self.settings)
         self.verifier = None
         if self.settings.qwen_verifier_enabled:
             self.verifier = QwenVerifier(
@@ -44,12 +47,37 @@ class ParseOrchestrator:
         quality_elapsed = 0.0
         primary_elapsed = 0.0
         fallback_elapsed = 0.0
+        pdf_text_elapsed = 0.0
         merge_elapsed = 0.0
         verify_elapsed = 0.0
 
         stage_start = time.perf_counter()
         quality = assess_document_quality(input_path, self.settings)
         quality_elapsed = time.perf_counter() - stage_start
+
+        if self._should_try_pdf_text(input_path):
+            try:
+                stage_start = time.perf_counter()
+                pdf_text = self.pdf_text_engine.parse(input_path, options.lang_hint.value)
+                pdf_text_elapsed = time.perf_counter() - stage_start
+                if is_pdf_text_result_usable(pdf_text, self.settings):
+                    decision = ParseDecision(status="pass", reason="PDF text layer parsed without OCR.")
+                    response = self._build_response(request_id, pdf_text, quality, options, decision)
+                    logger.info(
+                        "parse timings request_id=%s quality=%.3fs pdf_text=%.3fs total=%.3fs "
+                        "pdf_text_score=%.3f quality_score=%.3f",
+                        request_id,
+                        quality_elapsed,
+                        pdf_text_elapsed,
+                        time.perf_counter() - total_start,
+                        pdf_text.page_confidence,
+                        quality.score,
+                    )
+                    return response
+                logger.info("pdf text parser result too sparse; falling back to OCR")
+            except Exception as exc:
+                pdf_text_elapsed = time.perf_counter() - stage_start
+                logger.info("pdf text parser skipped; falling back to OCR: %s", self._compact_error(str(exc)))
 
         stage_start = time.perf_counter()
         primary = self.primary_engine.parse(input_path, options.lang_hint.value)
@@ -83,19 +111,47 @@ class ParseOrchestrator:
                     "reason": f"{decision.reason} Fallback skipped: {fallback_error}",
                 }
             )
-        pages = self._attach_quality_to_pages(merged.pages, quality)
+        response = self._build_response(request_id, merged, quality, options, decision)
+        logger.info(
+            "parse timings request_id=%s quality=%.3fs pdf_text=%.3fs primary=%.3fs fallback=%.3fs "
+            "merge=%.3fs verify=%.3fs total=%.3fs primary_score=%.3f quality_score=%.3f",
+            request_id,
+            quality_elapsed,
+            pdf_text_elapsed,
+            primary_elapsed,
+            fallback_elapsed,
+            merge_elapsed,
+            verify_elapsed,
+            time.perf_counter() - total_start,
+            primary_score,
+            quality.score,
+        )
+        return response
+
+    def _should_try_pdf_text(self, input_path: str) -> bool:
+        return self.settings.pdf_text_parse_enabled and Path(input_path).suffix.lower() == ".pdf"
+
+    def _build_response(
+        self,
+        request_id: str,
+        result: EngineParseResult,
+        quality: QualityAssessment,
+        options: ParseOptions,
+        decision: ParseDecision,
+    ) -> ParseResponse:
+        pages = self._attach_quality_to_pages(result.pages, quality)
         blocks = list(itertools.chain.from_iterable(page.blocks for page in pages))
         tables = list(itertools.chain.from_iterable(page.tables for page in pages))
         reading_order = list(itertools.chain.from_iterable(page.reading_order for page in pages))
 
-        markdown = merged.markdown if options.output_format in {OutputFormat.markdown, OutputFormat.both} else None
+        markdown = result.markdown if options.output_format in {OutputFormat.markdown, OutputFormat.both} else None
         if options.output_format == OutputFormat.json:
             markdown = None
 
         review_queued = decision.status == "fail"
         review_reason = decision.reason if review_queued else None
 
-        response = ParseResponse(
+        return ParseResponse(
             request_id=request_id,
             decision=decision,
             pages=pages,
@@ -107,20 +163,6 @@ class ParseOrchestrator:
             review_queued=review_queued,
             review_reason=review_reason,
         )
-        logger.info(
-            "parse timings request_id=%s quality=%.3fs primary=%.3fs fallback=%.3fs "
-            "merge=%.3fs verify=%.3fs total=%.3fs primary_score=%.3f quality_score=%.3f",
-            request_id,
-            quality_elapsed,
-            primary_elapsed,
-            fallback_elapsed,
-            merge_elapsed,
-            verify_elapsed,
-            time.perf_counter() - total_start,
-            primary_score,
-            quality.score,
-        )
-        return response
 
     def _needs_fallback(self, primary_score: float, quality: QualityAssessment) -> bool:
         if primary_score < self.settings.confidence_pass_threshold:

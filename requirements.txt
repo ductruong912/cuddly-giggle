@@ -7,5 +7,6 @@ numpy==2.2.6
 opencv-python-headless==4.11.0.86
 httpx==0.28.1
 pytest==8.3.5
+PyMuPDF==1.27.2.3
 paddleocr[doc-parser]==3.6.0
 paddlex[ocr]==3.6.0
