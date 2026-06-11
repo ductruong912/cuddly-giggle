@@ -1,0 +1,238 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+import logging
+import os
+from pathlib import Path
+import shutil
+import tempfile
+import zipfile
+
+import httpx
+
+
+logger = logging.getLogger("app")
+
+HF_GGUF_REPO = "https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6-GGUF/resolve/main"
+LLAMA_CPP_LATEST_RELEASE_API = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
+DEFAULT_LLAMA_CPP_FLAVOR = "win-cuda-cu13.3-x64"
+DEFAULT_MODEL_BYTES = 800 * 1024 * 1024
+DEFAULT_HTTP_TIMEOUT_SECONDS = 60.0
+
+REQUIRED_LLAMA_FILES = (
+    "llama-server.exe",
+    "llama.dll",
+    "llama-common.dll",
+    "ggml.dll",
+    "ggml-base.dll",
+)
+
+
+@dataclass(frozen=True)
+class DownloadArtifact:
+    url: str
+    path: Path
+    min_bytes: int = 1
+
+
+@dataclass(frozen=True)
+class LlamaBootstrapConfig:
+    llama_dir: Path = field(default_factory=lambda: Path.cwd() / "llama")
+    models_dir: Path = field(default_factory=lambda: Path.cwd() / "models")
+    llama_release_url: str = ""
+    llama_release_urls: tuple[str, ...] = ()
+    min_model_bytes: int = DEFAULT_MODEL_BYTES
+    timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS
+
+
+@dataclass(frozen=True)
+class LlamaBootstrapResult:
+    downloaded_llama_cpp: bool
+    downloaded_models: list[str]
+    llama_dir: Path
+    models_dir: Path
+
+
+class HttpDownloader:
+    def __init__(self, timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS) -> None:
+        self.timeout_seconds = timeout_seconds
+
+    def download_file(self, url: str, destination: Path) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=destination.parent,
+                prefix=f".{destination.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as tmp:
+                tmp_path = Path(tmp.name)
+                with httpx.stream("GET", url, follow_redirects=True, timeout=self.timeout_seconds) as response:
+                    response.raise_for_status()
+                    for chunk in response.iter_bytes():
+                        tmp.write(chunk)
+                tmp.flush()
+            os.replace(tmp_path, destination)
+        except Exception:
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
+            raise
+
+    def download_and_extract_zip(self, url: str, destination_dir: Path) -> None:
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=destination_dir.parent) as tmp_dir_name:
+            tmp_dir = Path(tmp_dir_name)
+            archive_path = tmp_dir / "llama.cpp.zip"
+            extract_dir = tmp_dir / "extract"
+            extract_dir.mkdir()
+            self.download_file(url, archive_path)
+            with zipfile.ZipFile(archive_path) as archive:
+                archive.extractall(extract_dir)
+            _copy_extracted_files(extract_dir, destination_dir)
+
+    def get_json(self, url: str) -> dict[str, object]:
+        response = httpx.get(url, follow_redirects=True, timeout=self.timeout_seconds)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"Expected JSON object from {url}")
+        return payload
+
+
+def default_model_artifacts(models_dir: Path, min_bytes: int = DEFAULT_MODEL_BYTES) -> list[DownloadArtifact]:
+    filenames = [
+        "PaddleOCR-VL-1.6-GGUF.gguf",
+        "PaddleOCR-VL-1.6-GGUF-mmproj.gguf",
+    ]
+    return [
+        DownloadArtifact(
+            url=f"{HF_GGUF_REPO}/{filename}",
+            path=models_dir / filename,
+            min_bytes=min_bytes,
+        )
+        for filename in filenames
+    ]
+
+
+def is_artifact_ready(path: Path, min_bytes: int = 1) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size >= min_bytes
+    except OSError:
+        return False
+
+
+def is_llama_cpp_ready(llama_dir: Path) -> bool:
+    return all(is_artifact_ready(llama_dir / name) for name in REQUIRED_LLAMA_FILES)
+
+
+def select_llama_cpp_release_urls(
+    release_payload: dict[str, object],
+    *,
+    flavor: str = DEFAULT_LLAMA_CPP_FLAVOR,
+) -> list[str]:
+    assets = release_payload.get("assets")
+    if not isinstance(assets, list):
+        raise RuntimeError("GitHub release payload does not contain an assets list.")
+
+    binary_suffix = f"-bin-{flavor}.zip"
+    runtime_suffix = _cuda_runtime_suffix(flavor)
+    binary_url = ""
+    runtime_url = ""
+
+    for item in assets:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        url = item.get("browser_download_url")
+        if not isinstance(name, str) or not isinstance(url, str):
+            continue
+        if name.startswith("llama-") and name.endswith(binary_suffix):
+            binary_url = url
+        elif runtime_suffix and name == runtime_suffix:
+            runtime_url = url
+
+    if not binary_url:
+        raise RuntimeError(f"Could not find llama.cpp release asset for flavor {flavor!r}.")
+    if runtime_suffix and not runtime_url:
+        raise RuntimeError(f"Could not find llama.cpp CUDA runtime asset {runtime_suffix!r}.")
+
+    urls = [binary_url]
+    if runtime_url:
+        urls.append(runtime_url)
+    return urls
+
+
+def resolve_latest_llama_cpp_release_urls(
+    *,
+    flavor: str = DEFAULT_LLAMA_CPP_FLAVOR,
+    downloader: HttpDownloader | None = None,
+) -> list[str]:
+    downloader = downloader or HttpDownloader()
+    payload = downloader.get_json(LLAMA_CPP_LATEST_RELEASE_API)
+    return select_llama_cpp_release_urls(payload, flavor=flavor)
+
+
+def bootstrap_llama_cpp(
+    *,
+    config: LlamaBootstrapConfig | None = None,
+    downloader: HttpDownloader | None = None,
+) -> LlamaBootstrapResult:
+    config = config or LlamaBootstrapConfig()
+    downloader = downloader or HttpDownloader(timeout_seconds=config.timeout_seconds)
+
+    downloaded_llama_cpp = False
+    if not is_llama_cpp_ready(config.llama_dir):
+        release_urls = _configured_release_urls(config)
+        if not release_urls:
+            raise RuntimeError(
+                "llama.cpp is missing and LLAMA_CPP_RELEASE_URL is not configured. "
+                "Set LLAMA_CPP_RELEASE_URL to a Windows llama.cpp release zip."
+            )
+        for release_url in release_urls:
+            logger.info("Downloading llama.cpp from %s", release_url)
+            downloader.download_and_extract_zip(release_url, config.llama_dir)
+        downloaded_llama_cpp = True
+        if not is_llama_cpp_ready(config.llama_dir):
+            missing = [name for name in REQUIRED_LLAMA_FILES if not (config.llama_dir / name).is_file()]
+            raise RuntimeError(f"llama.cpp archive did not provide required files: {', '.join(missing)}")
+
+    downloaded_models: list[str] = []
+    for artifact in default_model_artifacts(config.models_dir, min_bytes=config.min_model_bytes):
+        if is_artifact_ready(artifact.path, artifact.min_bytes):
+            continue
+        logger.info("Downloading model artifact %s", artifact.path.name)
+        downloader.download_file(artifact.url, artifact.path)
+        downloaded_models.append(artifact.path.name)
+
+    return LlamaBootstrapResult(
+        downloaded_llama_cpp=downloaded_llama_cpp,
+        downloaded_models=downloaded_models,
+        llama_dir=config.llama_dir,
+        models_dir=config.models_dir,
+    )
+
+
+def _copy_extracted_files(source_dir: Path, destination_dir: Path) -> None:
+    for path in source_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        target = destination_dir / path.name
+        shutil.copy2(path, target)
+
+
+def _configured_release_urls(config: LlamaBootstrapConfig) -> list[str]:
+    urls = [url.strip() for url in config.llama_release_urls if url.strip()]
+    if urls:
+        return urls
+    raw = config.llama_release_url.strip()
+    if not raw:
+        return []
+    return [url.strip() for url in raw.replace(",", ";").split(";") if url.strip()]
+
+
+def _cuda_runtime_suffix(flavor: str) -> str:
+    marker = "win-cuda-cu"
+    if marker not in flavor:
+        return ""
+    return f"cudart-llama-bin-{flavor.replace(marker, 'win-cuda-')}.zip"

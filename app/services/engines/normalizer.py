@@ -404,6 +404,55 @@ def _result_to_markdown_text(raw: object) -> str | None:
     return None
 
 
+def _starts_with_text_page_marker(line: str) -> bool:
+    return bool(re.match(r"^(?:#{1,6}\s*)?\[Tr\.\s*\d+\s*\]\s*:?", line.strip()))
+
+
+def _is_standalone_text_page_marker(line: str) -> bool:
+    return bool(re.match(r"^(?:#{1,6}\s*)?\[Tr\.\s*\d+\s*\]\s*:?\s*$", line.strip()))
+
+
+def _text_only_markdown_needs_blank_before(line: str, previous_line: str) -> bool:
+    line = line.strip()
+    previous_line = previous_line.strip()
+
+    if _starts_with_text_page_marker(line):
+        return True
+    if _is_standalone_text_page_marker(previous_line):
+        return False
+    if previous_line.startswith("#"):
+        return True
+    if re.match(r"^Ngày\b", line, flags=re.IGNORECASE):
+        return True
+    return line.startswith(("Người dịch:", "Hiệu đính:", "VIỆN ", "VIỆN NGHIÊN"))
+
+
+def _compact_text_only_markdown(markdown: str | None) -> str | None:
+    if markdown is None:
+        return None
+
+    text = markdown.strip()
+    if not text:
+        return None
+
+    # Structured markdown carries meaningful blank lines for tables/code blocks.
+    if any(marker in text for marker in ("<table", "```")) or re.search(r"^\s*\|.*\|\s*$", text, re.MULTILINE):
+        return text
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    compacted = [lines[0]]
+    for line in lines[1:]:
+        previous_line = compacted[-1]
+        if _text_only_markdown_needs_blank_before(line, previous_line):
+            compacted.extend(["", line])
+        else:
+            compacted.append(line)
+    return "\n".join(compacted)
+
+
 def normalize_engine_output(
     raw: object,
     source_engine: str,
@@ -449,7 +498,7 @@ def normalize_engine_output(
         fallback_md = _extract_markdown(normalized_raw) or (_extract_markdown(root) if isinstance(root, dict) else None)
         if fallback_md:
             markdown_parts.append(fallback_md)
-    markdown = "\n\n".join([part for part in markdown_parts if part.strip()]) or None
+    markdown = _compact_text_only_markdown("\n\n".join([part for part in markdown_parts if part.strip()]) or None)
 
     pages: list[PageParseResult] = []
     if isinstance(root, dict) and isinstance(root.get("pages"), list):

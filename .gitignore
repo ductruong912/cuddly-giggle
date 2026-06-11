@@ -10,3 +10,5 @@ outputs/
 *.log
 plan.md
 data
+llama/
+models/

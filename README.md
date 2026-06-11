@@ -46,6 +46,14 @@ python -m pip install -r requirements-gpu-cu130.txt
 ```
 *(Note: If you have an older NVIDIA driver indicating CUDA 12.6, you should install the cu126 PaddlePaddle wheel instead of this requirements file).*
 
+**4. Optional: pre-download llama.cpp and GGUF models**
+
+This prepares the ignored `llama/` and `models/` folders before the first GGUF run. You can skip this step if `PADDLEOCR_VL_USE_GGUF=true`; `main.py` downloads missing artifacts automatically.
+
+```powershell
+venv\Scripts\python.exe scripts\setup_llama_cpp.py
+```
+
 ---
 
 ## Configuration
@@ -57,6 +65,14 @@ The app uses a `.env` file for configuration. Copy `.env.example` to `.env` (if 
 | `OCR_PRIMARY_ENGINE` | `paddleocr_vl` | Primary extraction engine (`paddleocr_vl` or `pp_structure_v3`). |
 | `OCR_FALLBACK_ENGINE` | `pp_structure_v3` | Secondary engine if the primary fails quality/confidence thresholds. |
 | `PADDLEOCR_VL_PIPELINE_VERSION`| `v1.6` | Specific version of the VL pipeline to download/use. |
+| `PADDLEOCR_VL_USE_GGUF` | `false` | `true` runs PaddleOCR-VL recognition through GGUF + llama.cpp; `false` uses the original PaddleOCR-VL model. |
+| `LLAMA_CPP_DIR` | `llama` | Local folder for llama.cpp binaries. |
+| `LLAMA_CPP_MODELS_DIR` | `models` | Local folder for GGUF model files. |
+| `LLAMA_CPP_RELEASE_URL` | *(empty)* | Optional pinned llama.cpp release zip URL. Empty resolves the latest GitHub release for `LLAMA_CPP_RELEASE_FLAVOR`. |
+| `LLAMA_CPP_RELEASE_FLAVOR` | `win-cuda-cu13.3-x64` | llama.cpp Windows release flavor (`win-cuda-cu13.3-x64`, `win-cuda-cu12.4-x64`, or `win-x64`). |
+| `LLAMA_SERVER_AUTOSTART` | `true` | When GGUF is enabled, start `llama-server.exe` automatically from `main.py`. |
+| `LLAMA_SERVER_HOST` / `LLAMA_SERVER_PORT` | `127.0.0.1` / `8080` | llama.cpp server binding used by the app. |
+| `LLAMA_SERVER_N_GPU_LAYERS` | `40` | Number of layers to offload to GPU for llama.cpp. |
 | `WARMUP_MODELS_ON_STARTUP` | `true` | Load models into GPU RAM during server boot (reduces latency of first request). |
 | `OCR_DEVICE` | `gpu:0` | Hardware selector (`gpu:0`, `cpu`, etc.). |
 | `PARSE_OUTPUT_DIR` | `outputs` | Directory to save `.md` files. |
@@ -72,6 +88,15 @@ Start the backend server. The first startup will download required AI models int
 $env:OCR_DEVICE="gpu:0"
 venv\Scripts\python.exe main.py
 ```
+
+To run the GGUF backend, set one flag before the same command:
+
+```powershell
+$env:PADDLEOCR_VL_USE_GGUF="true"
+venv\Scripts\python.exe main.py
+```
+
+When GGUF is enabled, `main.py` downloads missing `llama/` and `models/` artifacts, starts `llama-server.exe`, points PaddleOCR-VL at `http://127.0.0.1:8080/v1`, then starts the API. Set `PADDLEOCR_VL_USE_GGUF=false` to run the original PaddleOCR-VL model without llama.cpp.
 
 > **API Interactive Docs**: Visit http://127.0.0.1:8000/docs once the server is running to view the Swagger UI.
 
@@ -90,7 +115,7 @@ Extracts Markdown from an uploaded document (PDF, DOCX, DOC, XLSX, XLSM, XLS, PN
 - `file`*(required)*: The document binary.
 - `lang_hint`*(optional)*: Language hint (`auto` or `vi`).
 - `enable_fallback` *(optional)*: Set to `true`/`false`. Defauts to application settings.
-- `output_basename` *(optional)*: Custom prefix for saved files in the `outputs/` folder.
+- `output_basename` *(optional)*: Custom basename for saved files in the `outputs/` folder. By default, the Markdown artifact matches the uploaded filename stem (for example `VB 6.pdf` -> `VB 6.md`); duplicate names are saved as `VB 6 (2).md`, `VB 6 (3).md`, and so on.
 
 **Example via cURL:**
 ```bash
@@ -135,6 +160,19 @@ For environments without internet access (Air-Gapped):
    $env:PADDLE_PDX_CACHE_HOME="C:\deploy\.paddlex"
    ```
 *Pro Tip: Do not commit the `.paddlex` or `outputs/` directories to source control. They are `.gitignore`d for a reason!*
+
+---
+
+### Remote VL Recognition / GGUF
+
+The normal GGUF path is a single terminal:
+
+```powershell
+$env:PADDLEOCR_VL_USE_GGUF="true"
+venv\Scripts\python.exe main.py
+```
+
+For advanced setups, set `LLAMA_SERVER_AUTOSTART=false` and run a compatible OpenAI-style server yourself. The app will still use the `PADDLEOCR_VL_REC_*` override variables when `PADDLEOCR_VL_USE_GGUF=true`.
 
 ---
 

@@ -57,7 +57,37 @@ class Settings:
     ocr_device: str                    = os.getenv("OCR_DEVICE", "").strip()
     ocr_inference_engine: str          = os.getenv("OCR_INFERENCE_ENGINE", "").strip()
     paddleocr_vl_pipeline_version: str = os.getenv("PADDLEOCR_VL_PIPELINE_VERSION", "v1.6").strip()
+    paddleocr_vl_rec_backend: str      = os.getenv("PADDLEOCR_VL_REC_BACKEND", "").strip()
+    paddleocr_vl_rec_server_url: str   = os.getenv("PADDLEOCR_VL_REC_SERVER_URL", "").strip()
+    paddleocr_vl_rec_max_concurrency: int = _get_int("PADDLEOCR_VL_REC_MAX_CONCURRENCY", 0)
+    paddleocr_vl_rec_api_model_name: str = os.getenv("PADDLEOCR_VL_REC_API_MODEL_NAME", "").strip()
+    paddleocr_vl_rec_api_key: str      = os.getenv("PADDLEOCR_VL_REC_API_KEY", "").strip()
+    paddleocr_vl_use_gguf: bool        = _get_bool("PADDLEOCR_VL_USE_GGUF", False)
     warmup_models_on_startup: bool     = _get_bool("WARMUP_MODELS_ON_STARTUP", True)
+
+    # --- llama.cpp / GGUF bootstrap ---
+    auto_download_llama_cpp: bool = _get_bool("AUTO_DOWNLOAD_LLAMA_CPP", False)
+    llama_cpp_dir: str = os.getenv("LLAMA_CPP_DIR", "llama").strip()
+    llama_cpp_models_dir: str = os.getenv("LLAMA_CPP_MODELS_DIR", "models").strip()
+    llama_cpp_release_url: str = os.getenv("LLAMA_CPP_RELEASE_URL", "").strip()
+    llama_cpp_release_flavor: str = os.getenv(
+        "LLAMA_CPP_RELEASE_FLAVOR",
+        "win-cuda-cu13.3-x64",
+    ).strip()
+
+    # --- llama.cpp server autostart ---
+    llama_server_autostart: bool = _get_bool("LLAMA_SERVER_AUTOSTART", True)
+    llama_server_host: str = os.getenv("LLAMA_SERVER_HOST", "127.0.0.1").strip()
+    llama_server_port: int = _get_int("LLAMA_SERVER_PORT", 8080)
+    llama_server_ctx_size: int = _get_int("LLAMA_SERVER_CTX_SIZE", 4096)
+    llama_server_parallel: int = _get_int("LLAMA_SERVER_PARALLEL", 1)
+    llama_server_n_gpu_layers: int = _get_int("LLAMA_SERVER_N_GPU_LAYERS", 40)
+    llama_server_mmproj_offload: bool = _get_bool("LLAMA_SERVER_MMPROJ_OFFLOAD", True)
+    llama_server_flash_attn: str = os.getenv("LLAMA_SERVER_FLASH_ATTN", "on").strip()
+    llama_server_threads: int = _get_int("LLAMA_SERVER_THREADS", 4)
+    llama_server_threads_batch: int = _get_int("LLAMA_SERVER_THREADS_BATCH", 4)
+    llama_server_temp: float = _get_float("LLAMA_SERVER_TEMP", 0.0)
+    llama_server_startup_timeout_seconds: float = _get_float("LLAMA_SERVER_STARTUP_TIMEOUT_SECONDS", 120.0)
 
     # --- Qwen verifier ---
     qwen_verifier_enabled: bool          = _get_bool("QWEN_VERIFIER_ENABLED", False)
