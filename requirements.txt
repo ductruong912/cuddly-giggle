@@ -4,7 +4,6 @@ pydantic==2.11.4
 python-multipart==0.0.20
 python-dotenv==1.1.0
 numpy==2.2.6
-opencv-python-headless==4.11.0.86
 httpx==0.28.1
 pytest==8.3.5
 PyMuPDF==1.27.2.3

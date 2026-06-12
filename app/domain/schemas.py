@@ -58,16 +58,7 @@ class PageParseResult(BaseModel):
     tables: list[Table] = Field(default_factory=list)
     reading_order: list[str] = Field(default_factory=list)
     confidence: float = 0.0
-    quality_score: float = 0.0
     source_engine: str = ""
-
-
-class QualityFlags(BaseModel):
-    skew: bool = False
-    blur: bool = False
-    illumination_issue: bool = False
-    screen_photo: bool = False
-    low_resolution: bool = False
 
 
 class ParseDecision(BaseModel):
@@ -82,7 +73,6 @@ class ParseResponse(BaseModel):
     blocks: list[Block]
     tables: list[Table]
     reading_order: list[str]
-    quality_flags: QualityFlags
     markdown: str | None = None
     review_queued: bool = False
     review_reason: str | None = None

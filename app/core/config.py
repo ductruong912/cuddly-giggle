@@ -86,31 +86,6 @@ class Settings:
     llama_server_temp: float = _get_float("LLAMA_SERVER_TEMP", 0.0)
     llama_server_startup_timeout_seconds: float = _get_float("LLAMA_SERVER_STARTUP_TIMEOUT_SECONDS", 120.0)
 
-    # --- Image quality detection (images only; PDFs use a neutral default) ---
-    quality_blur_var_threshold: float          = _get_float("QUALITY_BLUR_VAR_THRESHOLD", 110.0)
-    quality_dark_mean_threshold: float         = _get_float("QUALITY_DARK_MEAN_THRESHOLD", 55.0)
-    quality_bright_mean_threshold: float       = _get_float("QUALITY_BRIGHT_MEAN_THRESHOLD", 220.0)
-    quality_low_contrast_std_threshold: float  = _get_float("QUALITY_LOW_CONTRAST_STD_THRESHOLD", 24.0)
-    quality_skew_deg_threshold: float          = _get_float("QUALITY_SKEW_DEG_THRESHOLD", 3.0)
-    quality_min_resolution_px: int             = _get_int("QUALITY_MIN_RESOLUTION_PX", 1200)
-    quality_screen_photo_border_diff: float    = _get_float("QUALITY_SCREEN_PHOTO_BORDER_DIFF", 30.0)
-
-    # --- Quality score penalties (subtracted from 1.0 per detected flag) ---
-    quality_penalty_skew: float          = _get_float("QUALITY_PENALTY_SKEW", 0.14)
-    quality_penalty_blur: float          = _get_float("QUALITY_PENALTY_BLUR", 0.20)
-    quality_penalty_illumination: float  = _get_float("QUALITY_PENALTY_ILLUMINATION", 0.14)
-    quality_penalty_screen_photo: float  = _get_float("QUALITY_PENALTY_SCREEN_PHOTO", 0.18)
-    quality_penalty_low_resolution: float = _get_float("QUALITY_PENALTY_LOW_RESOLUTION", 0.10)
-
-    # --- Quality detector internals ---
-    quality_pdf_default_score: float           = _get_float("QUALITY_PDF_DEFAULT_SCORE", 0.9)
-    quality_unreadable_image_score: float      = _get_float("QUALITY_UNREADABLE_IMAGE_SCORE", 0.6)
-    quality_canny_threshold1: int              = _get_int("QUALITY_CANNY_THRESHOLD1", 50)
-    quality_canny_threshold2: int              = _get_int("QUALITY_CANNY_THRESHOLD2", 150)
-    quality_hough_threshold: int               = _get_int("QUALITY_HOUGH_THRESHOLD", 180)
-    quality_skew_max_lines: int                = _get_int("QUALITY_SKEW_MAX_LINES", 80)
-    quality_screen_photo_border_fraction: float = _get_float("QUALITY_SCREEN_PHOTO_BORDER_FRACTION", 0.03)
-
     # --- PDF text fast-path ---
     # Skips OCR when a digital PDF already has a usable embedded text layer.
     pdf_text_parse_enabled: bool           = _get_bool("PDF_TEXT_PARSE_ENABLED", True)

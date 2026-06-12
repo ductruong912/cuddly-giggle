@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.api.dependencies import get_orchestrator
 from app.application import app
-from app.domain.schemas import LangHint, ParseDecision, ParseResponse, QualityFlags
+from app.domain.schemas import LangHint, ParseDecision, ParseResponse
 import app.services.output.artifacts as artifacts
 
 
@@ -20,7 +20,6 @@ class StubOrchestrator:
             blocks=[],
             tables=[],
             reading_order=[],
-            quality_flags=QualityFlags(),
             markdown="# Parsed",
             review_queued=False,
             review_reason=None,
