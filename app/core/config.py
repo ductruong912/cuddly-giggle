@@ -70,10 +70,7 @@ class Settings:
     llama_cpp_dir: str = os.getenv("LLAMA_CPP_DIR", "llama").strip()
     llama_cpp_models_dir: str = os.getenv("LLAMA_CPP_MODELS_DIR", "models").strip()
     llama_cpp_release_url: str = os.getenv("LLAMA_CPP_RELEASE_URL", "").strip()
-    llama_cpp_release_flavor: str = os.getenv(
-        "LLAMA_CPP_RELEASE_FLAVOR",
-        "win-cuda-cu13.3-x64",
-    ).strip()
+    llama_cpp_release_flavor: str = os.getenv("LLAMA_CPP_RELEASE_FLAVOR", "win-cuda-cu13.3-x64").strip()
 
     # --- llama.cpp server autostart ---
     llama_server_autostart: bool = _get_bool("LLAMA_SERVER_AUTOSTART", True)
@@ -88,14 +85,6 @@ class Settings:
     llama_server_threads_batch: int = _get_int("LLAMA_SERVER_THREADS_BATCH", 4)
     llama_server_temp: float = _get_float("LLAMA_SERVER_TEMP", 0.0)
     llama_server_startup_timeout_seconds: float = _get_float("LLAMA_SERVER_STARTUP_TIMEOUT_SECONDS", 120.0)
-
-    # --- Qwen verifier ---
-    qwen_verifier_enabled: bool          = _get_bool("QWEN_VERIFIER_ENABLED", False)
-    qwen_verifier_base_url: str          = os.getenv("QWEN_VERIFIER_BASE_URL", "")
-    qwen_verifier_model: str             = os.getenv("QWEN_VERIFIER_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
-    qwen_verifier_api_key: str           = os.getenv("QWEN_VERIFIER_API_KEY", "")
-    qwen_verifier_timeout_seconds: float = _get_float("QWEN_VERIFIER_TIMEOUT_SECONDS", 60.0)
-    qwen_verifier_chat_path: str         = os.getenv("QWEN_VERIFIER_CHAT_PATH", "/v1/chat/completions")
 
     # --- Confidence thresholds ---
     confidence_pass_threshold: float        = _get_float("CONFIDENCE_PASS_THRESHOLD", 0.84)

@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field
 
 
 class LangHint(str, Enum):
-    vi = "vi"
     auto = "auto"
 
 

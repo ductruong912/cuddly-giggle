@@ -15,7 +15,6 @@ from app.services.engines.registry import create_engine
 from app.services.engines.word_text import WordTextEngine
 from app.services.merge import merge_results
 from app.services.quality import QualityAssessment, assess_document_quality
-from app.services.qwen_verifier import QwenVerifier
 
 
 logger = logging.getLogger(__name__)
@@ -37,15 +36,6 @@ class ParseOrchestrator:
         self.pdf_text_engine = pdf_text_engine or PdfTextEngine(self.settings)
         self.word_text_engine = word_text_engine or WordTextEngine(self.settings)
         self.excel_text_engine = excel_text_engine or ExcelTextEngine(self.settings)
-        self.verifier = None
-        if self.settings.qwen_verifier_enabled:
-            self.verifier = QwenVerifier(
-                base_url=self.settings.qwen_verifier_base_url,
-                model=self.settings.qwen_verifier_model,
-                api_key=self.settings.qwen_verifier_api_key,
-                timeout_seconds=self.settings.qwen_verifier_timeout_seconds,
-                chat_path=self.settings.qwen_verifier_chat_path,
-            )
 
     def parse(self, input_path: str, options: ParseOptions) -> ParseResponse:
         total_start = time.perf_counter()
@@ -57,7 +47,6 @@ class ParseOrchestrator:
         word_text_elapsed = 0.0
         excel_text_elapsed = 0.0
         merge_elapsed = 0.0
-        verify_elapsed = 0.0
 
         stage_start = time.perf_counter()
         quality = assess_document_quality(input_path, self.settings)
@@ -144,10 +133,6 @@ class ParseOrchestrator:
         merged = merge_results(primary, fallback, self.settings)
         merge_elapsed = time.perf_counter() - stage_start
 
-        stage_start = time.perf_counter()
-        merged = self._apply_qwen_verification_if_needed(input_path, merged)
-        verify_elapsed = time.perf_counter() - stage_start
-
         decision = self._build_decision(merged.page_confidence, quality)
         if fallback_error:
             decision = decision.model_copy(
@@ -158,7 +143,7 @@ class ParseOrchestrator:
         response = self._build_response(request_id, merged, quality, options, decision)
         logger.info(
             "parse timings request_id=%s quality=%.3fs pdf_text=%.3fs primary=%.3fs fallback=%.3fs "
-            "word_text=%.3fs excel_text=%.3fs merge=%.3fs verify=%.3fs total=%.3fs "
+            "word_text=%.3fs excel_text=%.3fs merge=%.3fs total=%.3fs "
             "primary_score=%.3f quality_score=%.3f",
             request_id,
             quality_elapsed,
@@ -168,7 +153,6 @@ class ParseOrchestrator:
             word_text_elapsed,
             excel_text_elapsed,
             merge_elapsed,
-            verify_elapsed,
             time.perf_counter() - total_start,
             primary_score,
             quality.score,
@@ -234,70 +218,6 @@ class ParseOrchestrator:
         if not quality_ok:
             reasons.append("low document quality")
         return ParseDecision(status="fail", reason="Queued for manual review: " + ", ".join(reasons) + ".")
-
-    def _apply_qwen_verification_if_needed(self, input_path: str, result: EngineParseResult) -> EngineParseResult:
-        if self.verifier is None:
-            return result
-
-        # The verifier attaches input_path as the page image, which is only correct
-        # for a single-image input. For a (multi-page) PDF we cannot supply the right
-        # per-page image without a PDF renderer, so skip rather than verify each page
-        # against the wrong visual evidence.
-        if Path(input_path).suffix.lower() == ".pdf":
-            logger.info("qwen verification skipped: per-page image unavailable for PDF input")
-            return result
-
-        pages = []
-        for page in result.pages:
-            if page.confidence >= self.settings.confidence_borderline_threshold:
-                pages.append(page)
-                continue
-            patch = self.verifier.verify_page(input_path, page)
-            if not patch or "corrections" not in patch:
-                pages.append(page)
-                continue
-            pages.append(self._patch_page(page, patch["corrections"]))
-
-        return EngineParseResult(
-            engine_name=result.engine_name,
-            pages=pages,
-            markdown=result.markdown,
-            raw=result.raw,
-        )
-
-    @staticmethod
-    def _patch_page(page: PageParseResult, corrections: object) -> PageParseResult:
-        if not isinstance(corrections, list):
-            return page
-        blocks = page.blocks
-        by_id = {b.block_id: b for b in blocks}
-        changed = False
-        for corr in corrections:
-            if not isinstance(corr, dict):
-                continue
-            block_id = str(corr.get("block_id", "")).strip()
-            content = str(corr.get("content", "")).strip()
-            conf = corr.get("confidence")
-            if not block_id or not content or block_id not in by_id:
-                continue
-            old = by_id[block_id]
-            new_conf = old.confidence
-            if isinstance(conf, (float, int)):
-                new_conf = max(new_conf, float(conf))
-            by_id[block_id] = old.model_copy(update={"content": content, "confidence": new_conf})
-            changed = True
-        # A no-op / non-matching verifier response must not touch the page. And a
-        # real correction can only raise confidence: never overwrite the page score
-        # with a raw block-average (zero-confidence blocks are legitimate, see the
-        # normalizer's confidence heuristics) or borderline pages collapse to fail.
-        if not changed:
-            return page
-        new_blocks = [by_id[b.block_id] for b in blocks]
-        new_conf = page.confidence
-        if new_blocks:
-            block_avg = sum(b.confidence for b in new_blocks) / len(new_blocks)
-            new_conf = max(page.confidence, block_avg)
-        return page.model_copy(update={"blocks": new_blocks, "confidence": new_conf})
 
     @staticmethod
     def _attach_quality_to_pages(pages: list[PageParseResult], quality: QualityAssessment) -> list[PageParseResult]:

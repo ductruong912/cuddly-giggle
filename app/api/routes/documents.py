@@ -11,7 +11,7 @@ from fastapi.responses import PlainTextResponse
 
 from app.api.dependencies import get_orchestrator
 from app.core.config import settings
-from app.domain.schemas import LangHint, ParseOptions
+from app.domain.schemas import ParseOptions
 from app.services.artifacts import save_parse_artifacts
 from app.services.orchestrator import ParseOrchestrator
 
@@ -42,9 +42,7 @@ SUPPORTED_INPUT_SUFFIXES = {
 @router.post("/parse", response_class=PlainTextResponse)
 def parse_document(
     file: UploadFile = File(...),
-    lang_hint: LangHint = Form(default=LangHint.auto),
     enable_fallback: bool = Form(default=settings.default_enable_fallback),
-    output_basename: str | None = Form(default=None),
     orchestrator: ParseOrchestrator = Depends(get_orchestrator),
 ) -> PlainTextResponse:
     total_start = time.perf_counter()
@@ -65,7 +63,6 @@ def parse_document(
             shutil.copyfileobj(file.file, f)
         upload_elapsed = time.perf_counter() - stage_start
         options = ParseOptions(
-            lang_hint=lang_hint,
             enable_fallback=enable_fallback,
         )
         stage_start = time.perf_counter()
@@ -75,7 +72,6 @@ def parse_document(
         saved_files = save_parse_artifacts(
             response=response,
             input_filename=file.filename or temp_path.name,
-            output_basename=output_basename,
         )
         save_elapsed = time.perf_counter() - stage_start
         if not response.markdown:
