@@ -53,7 +53,7 @@ class Settings:
     # --- OCR engines ---
     primary_engine: str                = os.getenv("OCR_PRIMARY_ENGINE", "paddleocr_vl")
     fallback_engine: str               = os.getenv("OCR_FALLBACK_ENGINE", "pp_structure_v3")
-    default_enable_fallback: bool      = _get_bool("DEFAULT_ENABLE_FALLBACK", True)
+    default_enable_fallback: bool      = True
     ocr_device: str                    = os.getenv("OCR_DEVICE", "").strip()
     ocr_inference_engine: str          = os.getenv("OCR_INFERENCE_ENGINE", "").strip()
     paddleocr_vl_pipeline_version: str = os.getenv("PADDLEOCR_VL_PIPELINE_VERSION", "v1.6").strip()
@@ -86,13 +86,6 @@ class Settings:
     llama_server_temp: float = _get_float("LLAMA_SERVER_TEMP", 0.0)
     llama_server_startup_timeout_seconds: float = _get_float("LLAMA_SERVER_STARTUP_TIMEOUT_SECONDS", 120.0)
 
-    # --- Confidence thresholds ---
-    confidence_pass_threshold: float        = _get_float("CONFIDENCE_PASS_THRESHOLD", 0.84)
-    confidence_borderline_threshold: float  = _get_float("CONFIDENCE_BORDERLINE_THRESHOLD", 0.68)
-    quality_fail_threshold: float           = _get_float("QUALITY_FAIL_THRESHOLD", 0.62)
-    # How much higher the fallback page confidence must be to override primary.
-    merge_fallback_confidence_margin: float = _get_float("MERGE_FALLBACK_CONFIDENCE_MARGIN", 0.08)
-
     # --- Image quality detection (images only; PDFs use a neutral default) ---
     quality_blur_var_threshold: float          = _get_float("QUALITY_BLUR_VAR_THRESHOLD", 110.0)
     quality_dark_mean_threshold: float         = _get_float("QUALITY_DARK_MEAN_THRESHOLD", 55.0)
@@ -110,7 +103,6 @@ class Settings:
     quality_penalty_low_resolution: float = _get_float("QUALITY_PENALTY_LOW_RESOLUTION", 0.10)
 
     # --- Quality detector internals ---
-    # PDF/unreadable scores straddle quality_fail_threshold, deciding the quality branch.
     quality_pdf_default_score: float           = _get_float("QUALITY_PDF_DEFAULT_SCORE", 0.9)
     quality_unreadable_image_score: float      = _get_float("QUALITY_UNREADABLE_IMAGE_SCORE", 0.6)
     quality_canny_threshold1: int              = _get_int("QUALITY_CANNY_THRESHOLD1", 50)

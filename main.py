@@ -8,13 +8,13 @@ import uvicorn
 from app.api.dependencies import get_orchestrator
 from app.application import app
 from app.core.config import Settings, settings
-from app.services.llama_bootstrap import (
+from app.services.runtime.llama_bootstrap import (
     LlamaBootstrapConfig,
     bootstrap_llama_cpp,
     is_llama_cpp_ready,
     resolve_latest_llama_cpp_release_urls,
 )
-from app.services.llama_server import (
+from app.services.runtime.llama_server import (
     LlamaServerConfig,
     start_llama_server_if_needed,
     stop_llama_server,

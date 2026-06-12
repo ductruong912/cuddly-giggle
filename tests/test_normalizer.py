@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.engines.normalizer import normalize_engine_output
+from app.services.engines.paddle.normalizer import normalize_engine_output
 
 
 class DummyResult:

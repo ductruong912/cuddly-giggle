@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.engines.paddle_base import PaddlePipelineEngine
+from app.services.engines.paddle.base import PaddlePipelineEngine
 
 
 class PaddleOCRVLEngine(PaddlePipelineEngine):

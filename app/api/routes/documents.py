@@ -12,8 +12,8 @@ from fastapi.responses import PlainTextResponse
 from app.api.dependencies import get_orchestrator
 from app.core.config import settings
 from app.domain.schemas import ParseOptions
-from app.services.artifacts import save_parse_artifacts
-from app.services.orchestrator import ParseOrchestrator
+from app.services.output.artifacts import save_parse_artifacts
+from app.services.parsing.orchestrator import ParseOrchestrator
 
 router = APIRouter(prefix="/v1/doc", tags=["documents"])
 logger = logging.getLogger(__name__)

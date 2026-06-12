@@ -3,18 +3,18 @@ from __future__ import annotations
 import itertools
 import logging
 from pathlib import Path
+import threading
 import time
 import uuid
 
 from app.core.config import Settings, settings
 from app.domain.schemas import PageParseResult, ParseDecision, ParseOptions, ParseResponse
 from app.services.engines.base import EngineParseResult, ParseEngine
-from app.services.engines.excel_text import ExcelTextEngine
-from app.services.engines.pdf_text import PdfTextEngine, is_pdf_text_result_usable
+from app.services.engines.native.excel_text import ExcelTextEngine
+from app.services.engines.native.pdf_text import PdfTextEngine, is_pdf_text_result_usable
+from app.services.engines.native.word_text import WordTextEngine
 from app.services.engines.registry import create_engine
-from app.services.engines.word_text import WordTextEngine
-from app.services.merge import merge_results
-from app.services.quality import QualityAssessment, assess_document_quality
+from app.services.parsing.quality import QualityAssessment, assess_document_quality
 
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,8 @@ class ParseOrchestrator:
     ) -> None:
         self.settings = app_settings
         self.primary_engine = primary_engine or create_engine(self.settings.primary_engine, self.settings)
-        self.fallback_engine = fallback_engine or create_engine(self.settings.fallback_engine, self.settings)
+        self._fallback_engine = fallback_engine
+        self._fallback_engine_lock = threading.Lock()
         self.pdf_text_engine = pdf_text_engine or PdfTextEngine(self.settings)
         self.word_text_engine = word_text_engine or WordTextEngine(self.settings)
         self.excel_text_engine = excel_text_engine or ExcelTextEngine(self.settings)
@@ -46,7 +47,6 @@ class ParseOrchestrator:
         pdf_text_elapsed = 0.0
         word_text_elapsed = 0.0
         excel_text_elapsed = 0.0
-        merge_elapsed = 0.0
 
         stage_start = time.perf_counter()
         quality = assess_document_quality(input_path, self.settings)
@@ -56,7 +56,7 @@ class ParseOrchestrator:
             stage_start = time.perf_counter()
             word_text = self.word_text_engine.parse(input_path, options.lang_hint.value)
             word_text_elapsed = time.perf_counter() - stage_start
-            decision = self._build_decision(word_text.page_confidence, quality)
+            decision = self._build_decision()
             response = self._build_response(request_id, word_text, quality, options, decision)
             logger.info(
                 "parse timings request_id=%s quality=%.3fs word_text=%.3fs total=%.3fs "
@@ -74,7 +74,7 @@ class ParseOrchestrator:
             stage_start = time.perf_counter()
             excel_text = self.excel_text_engine.parse(input_path, options.lang_hint.value)
             excel_text_elapsed = time.perf_counter() - stage_start
-            decision = self._build_decision(excel_text.page_confidence, quality)
+            decision = self._build_decision()
             response = self._build_response(request_id, excel_text, quality, options, decision)
             logger.info(
                 "parse timings request_id=%s quality=%.3fs excel_text=%.3fs total=%.3fs "
@@ -112,38 +112,35 @@ class ParseOrchestrator:
                 pdf_text_elapsed = time.perf_counter() - stage_start
                 logger.info("pdf text parser skipped; falling back to OCR: %s", self._compact_error(str(exc)))
 
-        stage_start = time.perf_counter()
-        primary = self.primary_engine.parse(input_path, options.lang_hint.value)
-        primary_elapsed = time.perf_counter() - stage_start
-        primary_score = primary.page_confidence
-
-        fallback: EngineParseResult | None = None
-        fallback_error: str | None = None
-        if options.enable_fallback and self._needs_fallback(primary_score, quality):
+        try:
+            stage_start = time.perf_counter()
+            result = self.primary_engine.parse(input_path, options.lang_hint.value)
+            primary_elapsed = time.perf_counter() - stage_start
+            primary_score = result.page_confidence
+            decision = self._build_decision()
+        except Exception as exc:
+            primary_elapsed = time.perf_counter() - stage_start
+            primary_score = 0.0
+            primary_error = self._compact_error(str(exc))
+            if not options.enable_fallback:
+                raise
+            logger.info("primary engine failed; trying fallback: %s", primary_error)
             try:
                 stage_start = time.perf_counter()
-                fallback = self.fallback_engine.parse(input_path, options.lang_hint.value)
+                result = self._get_fallback_engine().parse(input_path, options.lang_hint.value)
                 fallback_elapsed = time.perf_counter() - stage_start
-            except Exception as exc:  # pragma: no cover - exercised via orchestrator tests
+            except Exception as fallback_exc:
                 fallback_elapsed = time.perf_counter() - stage_start
-                fallback = None
-                fallback_error = self._compact_error(str(exc))
+                fallback_error = self._compact_error(str(fallback_exc))
+                raise RuntimeError(
+                    f"Primary engine failed: {primary_error}; fallback engine failed: {fallback_error}"
+                ) from fallback_exc
+            decision = self._build_decision(f"Parse completed via fallback after primary failed: {primary_error}")
 
-        stage_start = time.perf_counter()
-        merged = merge_results(primary, fallback, self.settings)
-        merge_elapsed = time.perf_counter() - stage_start
-
-        decision = self._build_decision(merged.page_confidence, quality)
-        if fallback_error:
-            decision = decision.model_copy(
-                update={
-                    "reason": f"{decision.reason} Fallback skipped: {fallback_error}",
-                }
-            )
-        response = self._build_response(request_id, merged, quality, options, decision)
+        response = self._build_response(request_id, result, quality, options, decision)
         logger.info(
             "parse timings request_id=%s quality=%.3fs pdf_text=%.3fs primary=%.3fs fallback=%.3fs "
-            "word_text=%.3fs excel_text=%.3fs merge=%.3fs total=%.3fs "
+            "word_text=%.3fs excel_text=%.3fs total=%.3fs "
             "primary_score=%.3f quality_score=%.3f",
             request_id,
             quality_elapsed,
@@ -152,7 +149,6 @@ class ParseOrchestrator:
             fallback_elapsed,
             word_text_elapsed,
             excel_text_elapsed,
-            merge_elapsed,
             time.perf_counter() - total_start,
             primary_score,
             quality.score,
@@ -197,27 +193,15 @@ class ParseOrchestrator:
             review_reason=review_reason,
         )
 
-    def _needs_fallback(self, primary_score: float, quality: QualityAssessment) -> bool:
-        if primary_score < self.settings.confidence_pass_threshold:
-            return True
-        if quality.score < self.settings.quality_fail_threshold:
-            return True
-        return False
+    @staticmethod
+    def _build_decision(reason: str = "Parse completed.") -> ParseDecision:
+        return ParseDecision(status="pass", reason=reason)
 
-    def _build_decision(self, score: float, quality: QualityAssessment) -> ParseDecision:
-        quality_ok = quality.score >= self.settings.quality_fail_threshold
-        if score >= self.settings.confidence_pass_threshold and quality_ok:
-            return ParseDecision(status="pass", reason="High confidence parse result.")
-        if score >= self.settings.confidence_borderline_threshold and quality_ok:
-            return ParseDecision(status="borderline", reason="Moderate confidence; fallback or review recommended.")
-        # Low confidence OR failing document quality queues for manual review, so a
-        # high-confidence parse on a poor-quality image is not silently passed.
-        reasons: list[str] = []
-        if score < self.settings.confidence_borderline_threshold:
-            reasons.append("low confidence")
-        if not quality_ok:
-            reasons.append("low document quality")
-        return ParseDecision(status="fail", reason="Queued for manual review: " + ", ".join(reasons) + ".")
+    def _get_fallback_engine(self) -> ParseEngine:
+        with self._fallback_engine_lock:
+            if self._fallback_engine is None:
+                self._fallback_engine = create_engine(self.settings.fallback_engine, self.settings)
+            return self._fallback_engine
 
     @staticmethod
     def _attach_quality_to_pages(pages: list[PageParseResult], quality: QualityAssessment) -> list[PageParseResult]:

@@ -11,7 +11,7 @@ from typing import Any
 
 from app.core.config import Settings, settings
 from app.services.engines.base import EngineParseResult, ParseEngine
-from app.services.engines.normalizer import normalize_engine_output
+from app.services.engines.paddle.normalizer import normalize_engine_output
 
 
 class PaddlePipelineEngine(ParseEngine):

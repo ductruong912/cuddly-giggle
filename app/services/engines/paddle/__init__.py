@@ -1,0 +1,1 @@
+"""PaddleOCR-based engine adapters."""

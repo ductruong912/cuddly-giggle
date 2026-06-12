@@ -9,7 +9,7 @@ A production-ready, self-hosted API backend designed for high-precision parsing 
 - **Excel Parsing**: Extracts `.xlsx` / `.xlsm` worksheets to Markdown tables and supports legacy `.xls` through LibreOffice/soffice conversion when available.
 - **Legacy Font Repair**: Auto-detects and converts legacy Vietnamese printer fonts (TCVN3 / VNI / ABC) to standard Unicode.
 - **Vision-Language OCR**: Leverages **PaddleOCR-VL** (v1.6) as the primary engine for complex layouts and robust Vietnamese OCR.
-- **Resilient Fallback**: Automatically cascades to **PP-StructureV3** for highly-structured outputs if the primary engine yields borderline confidence or low image quality.
+- **Resilient Fallback**: Can cascade to **PP-StructureV3** only when the primary OCR engine fails.
 - **Auto-Artifacts**: Automatically saves parse results as `Markdown` to your local `outputs/` directory.
 - **Offline Ready**: Transparent model caching mechanism allows seamless air-gapped deployments.
 
@@ -63,7 +63,7 @@ The app uses a `.env` file for configuration. Copy `.env.example` to `.env` (if 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `OCR_PRIMARY_ENGINE` | `paddleocr_vl` | Primary extraction engine (`paddleocr_vl` or `pp_structure_v3`). |
-| `OCR_FALLBACK_ENGINE` | `pp_structure_v3` | Secondary engine if the primary fails quality/confidence thresholds. |
+| `OCR_FALLBACK_ENGINE` | `pp_structure_v3` | Secondary engine used only if the primary OCR engine fails and fallback is enabled. |
 | `PADDLEOCR_VL_PIPELINE_VERSION`| `v1.6` | Specific version of the VL pipeline to download/use. |
 | `PADDLEOCR_VL_USE_GGUF` | `false` | `true` runs PaddleOCR-VL recognition through GGUF + llama.cpp; `false` uses the original PaddleOCR-VL model. |
 | `LLAMA_CPP_DIR` | `llama` | Local folder for llama.cpp binaries. |
@@ -113,9 +113,9 @@ Extracts Markdown from an uploaded document (PDF, DOCX, DOC, XLSX, XLSM, XLS, PN
 
 **Form-Data Parameters:**
 - `file`*(required)*: The document binary.
-- `lang_hint`*(optional)*: Language hint (`auto` or `vi`).
-- `enable_fallback` *(optional)*: Set to `true`/`false`. Defauts to application settings.
-- `output_basename` *(optional)*: Custom basename for saved files in the `outputs/` folder. By default, the Markdown artifact matches the uploaded filename stem (for example `VB 6.pdf` -> `VB 6.md`); duplicate names are saved as `VB 6 (2).md`, `VB 6 (3).md`, and so on.
+- `enable_fallback` *(optional)*: Set to `true`/`false`. Defaults to `true`. When enabled, fallback is used only if the primary OCR engine fails.
+
+Saved Markdown artifacts use the uploaded filename stem (for example `VB 6.pdf` -> `VB 6.md`); duplicate names are saved as `VB 6 (2).md`, `VB 6 (3).md`, and so on.
 
 **Example via cURL:**
 ```bash
@@ -123,8 +123,7 @@ curl -X 'POST' \
   'http://127.0.0.1:8000/v1/doc/parse' \
   -H 'accept: text/markdown' \
   -H 'Content-Type: multipart/form-data' \
-  -F 'file=@sample_invoice.pdf;type=application/pdf' \
-  -F 'enable_fallback=true'
+  -F 'file=@sample_invoice.pdf;type=application/pdf'
 ```
 
 ---
@@ -132,19 +131,26 @@ curl -X 'POST' \
 ## Project Structure
 
 ```text
-├── main.py                       # Root entrypoint
-├── app/
-│   ├── application.py            # FastAPI app factory
-│   ├── api/                      # Routing & DI
-│   ├── core/                     # App settings & environment bootstraps
-│   ├── domain/                   # Schemas (Pydantic models)
-│   ├── eval/                     # CER/WER metrics tracking
-│   └── services/                 # Business logic, Quality checks, Merging
-│       └── engines/              # Base classes & Adapters (PaddleOCR, StructureV3)
-├── scripts/                      # Utility scripts (preflight checks, evaluation)
-├── tests/                        # Unit and integration tests
-├── outputs/                      # (Git-ignored) Target folder for parsed artifacts
-└── data_test/                    # (Git-ignored) Local sample documents
+main.py                         # Root entrypoint
+app/
+  application.py                # FastAPI app factory
+  api/                          # Routing and DI
+  core/                         # App settings and environment bootstraps
+  domain/                       # Schemas (Pydantic models)
+  eval/                         # CER/WER metrics tracking
+  services/
+    parsing/                    # Orchestration and quality assessment
+    engines/
+      base.py                   # Engine interfaces
+      registry.py               # Config-driven engine factory
+      native/                   # PDF/Word/Excel text-layer parsers
+      paddle/                   # PaddleOCR adapters and normalizer
+    output/                     # Markdown artifact writing
+    runtime/                    # llama.cpp bootstrap and server helpers
+scripts/                       # Utility scripts
+tests/                         # Unit and integration tests
+outputs/                       # Git-ignored parsed artifacts
+data_test/                     # Git-ignored local sample documents
 ```
 
 ---
@@ -187,3 +193,7 @@ venv\Scripts\python.exe scripts\preflight_runtime.py
 ```powershell
 venv\Scripts\python.exe -m pytest -q
 ```
+
+.\llama\llama-server.exe -m "H:\Github\cuddly-giggle\models\PaddleOCR-VL-1.6-GGUF.gguf" --mmproj "H:\Github\cuddly-giggle\models\PaddleOCR-VL-1.6-GGUF-mmproj.gguf" --host 127.0.0.1 --port 8080 --ctx-size 4096 --parallel 1 --n-gpu-layers 40 --mmproj-offload --flash-attn on --threads 4 --threads-batch 4 --temp 0
+
+

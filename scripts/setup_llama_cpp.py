@@ -9,7 +9,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.core.config import Settings, settings  # noqa: E402
-from app.services.llama_bootstrap import (  # noqa: E402
+from app.services.runtime.llama_bootstrap import (  # noqa: E402
     LlamaBootstrapConfig,
     LlamaBootstrapResult,
     bootstrap_llama_cpp,
