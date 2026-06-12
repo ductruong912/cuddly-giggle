@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import warnings
 from pathlib import Path
+
+warnings.filterwarnings("ignore", message="No ccache found")
 
 import uvicorn
 
@@ -81,6 +84,9 @@ def configure_gguf_runtime_on_startup(
             threads=app_settings.llama_server_threads,
             threads_batch=app_settings.llama_server_threads_batch,
             temp=app_settings.llama_server_temp,
+            batch_size=app_settings.llama_server_batch_size,
+            ubatch_size=app_settings.llama_server_ubatch_size,
+            log_verbosity=app_settings.llama_server_log_verbosity,
             startup_timeout_seconds=app_settings.llama_server_startup_timeout_seconds,
         )
     )
@@ -96,7 +102,12 @@ def warmup_models_on_startup() -> None:
     warmup()
 
 
+def silence_known_warnings() -> None:
+    warnings.filterwarnings("ignore", message=r"'llama-cpp-server' does not support")
+
+
 def main() -> None:
+    silence_known_warnings()
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "8000"))
     llama_process = configure_gguf_runtime_on_startup()

@@ -84,10 +84,12 @@ class Settings:
     llama_server_threads: int = _get_int("LLAMA_SERVER_THREADS", 4)
     llama_server_threads_batch: int = _get_int("LLAMA_SERVER_THREADS_BATCH", 4)
     llama_server_temp: float = _get_float("LLAMA_SERVER_TEMP", 0.0)
+    llama_server_batch_size: int = _get_int("LLAMA_SERVER_BATCH_SIZE", 2048)
+    llama_server_ubatch_size: int = _get_int("LLAMA_SERVER_UBATCH_SIZE", 512)
+    llama_server_log_verbosity: int = _get_int("LLAMA_SERVER_LOG_VERBOSITY", 1)
     llama_server_startup_timeout_seconds: float = _get_float("LLAMA_SERVER_STARTUP_TIMEOUT_SECONDS", 120.0)
 
     # --- PDF text fast-path ---
-    # Skips OCR when a digital PDF already has a usable embedded text layer.
     pdf_text_parse_enabled: bool           = _get_bool("PDF_TEXT_PARSE_ENABLED", True)
     pdf_text_min_total_chars: int          = _get_int("PDF_TEXT_MIN_TOTAL_CHARS", 80)
     pdf_text_min_chars_per_text_page: int  = _get_int("PDF_TEXT_MIN_CHARS_PER_TEXT_PAGE", 40)
@@ -96,15 +98,12 @@ class Settings:
 
 
     # --- Word text fast-path ---
-    # DOCX is parsed natively. Legacy DOC is converted to DOCX with LibreOffice when available.
     word_text_confidence: float = _get_float("WORD_TEXT_CONFIDENCE", 0.99)
 
     # --- Excel text fast-path ---
-    # XLSX/XLSM are parsed natively. Legacy XLS is converted to XLSX with LibreOffice when available.
     excel_text_confidence: float = _get_float("EXCEL_TEXT_CONFIDENCE", 0.99)
 
     # --- Normalizer synthetic confidence heuristic ---
-    # Used only when an engine returns no numeric score.
     normalizer_confidence_base: float           = _get_float("NORMALIZER_CONFIDENCE_BASE", 0.55)
     normalizer_confidence_content_weight: float = _get_float("NORMALIZER_CONFIDENCE_CONTENT_WEIGHT", 0.35)
     normalizer_confidence_table_bonus: float    = _get_float("NORMALIZER_CONFIDENCE_TABLE_BONUS", 0.05)

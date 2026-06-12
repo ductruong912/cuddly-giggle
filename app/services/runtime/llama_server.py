@@ -34,6 +34,9 @@ class LlamaServerConfig:
     threads: int = 4
     threads_batch: int = 4
     temp: float = 0.0
+    batch_size: int = 2048
+    ubatch_size: int = 512
+    log_verbosity: int = 1
     startup_timeout_seconds: float = 120.0
 
 
@@ -67,6 +70,12 @@ def build_llama_server_command(config: LlamaServerConfig) -> list[str]:
             str(config.threads_batch),
             "--temp",
             _format_float(config.temp),
+            "--batch-size",
+            str(config.batch_size),
+            "--ubatch-size",
+            str(config.ubatch_size),
+            "-lv",
+            str(config.log_verbosity),
         ]
     )
     return command
