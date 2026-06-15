@@ -62,7 +62,7 @@ class ExcelTextEngine(ParseEngine):
                 shared_strings = _load_shared_strings(archive)
                 sheet_refs = _extract_sheet_refs(workbook_root, rels_root)
                 pages = [_parse_sheet(archive, sheet_ref, index, shared_strings, self.settings.excel_text_confidence)
-                         for index, sheet_ref in enumerate(sheet_refs)]
+                        for index, sheet_ref in enumerate(sheet_refs)]
         except KeyError as exc:
             raise RuntimeError(f"Invalid Excel file: missing {exc.args[0]}.") from exc
         except zipfile.BadZipFile as exc:

@@ -28,12 +28,7 @@ class PaddlePipelineEngine(ParseEngine):
         self.settings = app_settings
         self._pipeline = None
         self._pipeline_key: tuple[tuple[str, str], ...] | None = None
-        # Guards pipeline (re)creation.
         self._pipeline_lock = threading.Lock()
-        # Serializes predict() calls: the orchestrator is a process-wide singleton
-        # holding one mutable pipeline, and the route now runs in a threadpool, so
-        # concurrent requests would otherwise call predict() on the shared pipeline
-        # at the same time. PaddleOCR/PaddleX pipelines are not thread-safe.
         self._inference_lock = threading.Lock()
 
     # --- hooks subclasses override -------------------------------------------------

@@ -587,10 +587,6 @@ def normalize_engine_output(
             )
         )
 
-    # Last resort for shapes that only expose markdown at the document root (no
-    # per-page markdown). Only safe for single-page documents, where attaching to
-    # the sole page is correct; multi-page docs rely on the per-page extraction
-    # above to keep correct page attribution.
     if markdown and len(pages) == 1 and not pages[0].tables:
         md_tables = _extract_tables_from_markdown(markdown, page_index=pages[0].page_index)
         if md_tables:

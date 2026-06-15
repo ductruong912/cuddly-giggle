@@ -35,10 +35,6 @@ SUPPORTED_INPUT_SUFFIXES = {
 }
 
 
-# NOTE: declared as a sync `def` (not `async def`) on purpose. The body performs
-# blocking work (file copy + synchronous OCR inference / subprocess), so Starlette
-# runs it in its worker threadpool, keeping the event loop free for other requests.
-# Concurrent parses are serialized on the engine's inference lock (see paddle_base).
 @router.post("/parse", response_class=PlainTextResponse)
 def parse_document(
     file: UploadFile = File(...),
