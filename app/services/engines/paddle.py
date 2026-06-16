@@ -7,11 +7,12 @@ import shutil
 import subprocess
 import tempfile
 import threading
-from typing import Any
+from typing import Any, Callable
 
 from app.core.config import Settings, settings
+from app.domain.schemas import PageParseResult
 from app.services.engines.base import EngineParseResult, ParseEngine
-from app.services.engines.paddle.normalizer import normalize_engine_output
+from app.services.engines.normalizer import normalize_engine_output
 
 
 class PaddlePipelineEngine(ParseEngine):
@@ -50,6 +51,21 @@ class PaddlePipelineEngine(ParseEngine):
 
     # --- shared flow ---------------------------------------------------------------
     def parse(self, input_path: str, lang_hint: str = "auto") -> EngineParseResult:
+        # Dense PDFs (e.g. vector CAD title blocks) read far more reliably when each
+        # page is rasterized to a standalone image and OCR'd alone, instead of letting
+        # PaddleOCR render+batch the whole PDF. Fall back to the original flow if
+        # rasterization is disabled, the input is not a PDF, or rendering fails.
+        page_images, cleanup = self._rasterize_pdf_pages(input_path)
+        try:
+            if page_images is None:
+                return self._parse_single(input_path, lang_hint)
+            return self._merge_page_results(
+                [self._parse_single(image_path, lang_hint) for image_path in page_images]
+            )
+        finally:
+            cleanup()
+
+    def _parse_single(self, input_path: str, lang_hint: str) -> EngineParseResult:
         # 1) Prefer official Python API when available.
         raw, py_error = self._try_python_api(input_path, lang_hint)
         cli_error = ""
@@ -61,6 +77,54 @@ class PaddlePipelineEngine(ParseEngine):
 
         pages, markdown, normalized_raw = normalize_engine_output(raw, self.name, self.settings)
         return EngineParseResult(engine_name=self.name, pages=pages, markdown=markdown, raw=normalized_raw)
+
+    def _rasterize_pdf_pages(self, input_path: str) -> tuple[list[str] | None, Callable[[], None]]:
+        noop: Callable[[], None] = lambda: None
+        if not self.settings.pdf_rasterize_enabled or Path(input_path).suffix.lower() != ".pdf":
+            return None, noop
+        try:
+            import fitz  # PyMuPDF
+        except Exception:
+            return None, noop  # PyMuPDF missing: keep the original whole-PDF flow.
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix=f"{self.name}_pages_"))
+        try:
+            zoom = max(self.settings.pdf_rasterize_dpi, 72) / 72.0
+            matrix = fitz.Matrix(zoom, zoom)
+            image_paths: list[str] = []
+            doc = fitz.open(input_path)
+            try:
+                for page_index, page in enumerate(doc):
+                    pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+                    image_path = tmp_dir / f"page_{page_index:04d}.png"
+                    pixmap.save(str(image_path))
+                    image_paths.append(str(image_path))
+            finally:
+                doc.close()
+        except Exception:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return None, noop
+
+        if not image_paths:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return None, noop
+
+        return image_paths, lambda: shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def _merge_page_results(self, results: list[EngineParseResult]) -> EngineParseResult:
+        merged_pages: list[PageParseResult] = []
+        markdown_parts: list[str] = []
+        page_no = 0
+        for result in results:
+            for page in result.pages:
+                blocks = [block.model_copy(update={"page_index": page_no}) for block in page.blocks]
+                tables = [table.model_copy(update={"page_index": page_no}) for table in page.tables]
+                merged_pages.append(page.model_copy(update={"page_index": page_no, "blocks": blocks, "tables": tables}))
+                page_no += 1
+            if result.markdown and result.markdown.strip():
+                markdown_parts.append(result.markdown)
+        markdown = "\n\n".join(markdown_parts) or None
+        return EngineParseResult(engine_name=self.name, pages=merged_pages, markdown=markdown, raw={})
 
     def _try_python_api(self, input_path: str, lang_hint: str) -> tuple[dict[str, Any] | None, str]:
         try:
@@ -149,3 +213,73 @@ class PaddlePipelineEngine(ParseEngine):
                 self._pipeline = pipeline_cls(**kwargs)
                 self._pipeline_key = key
         return self._pipeline
+
+
+class PaddleOCRVLEngine(PaddlePipelineEngine):
+    name = "paddleocr_vl"
+    cli_subcommand = "doc_parser"
+
+    def _load_pipeline_cls(self) -> type:
+        from paddleocr import PaddleOCRVL  # type: ignore
+
+        return PaddleOCRVL
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {}
+        if self.settings.paddleocr_vl_pipeline_version:
+            kwargs["pipeline_version"] = self.settings.paddleocr_vl_pipeline_version
+        if self.settings.paddleocr_vl_use_gguf:
+            kwargs.update(self._remote_vl_kwargs())
+        return kwargs
+
+    def _extra_cli_args(self) -> list[str]:
+        args: list[str] = []
+        if self.settings.paddleocr_vl_pipeline_version:
+            args.extend(["--pipeline_version", self.settings.paddleocr_vl_pipeline_version])
+        if self.settings.paddleocr_vl_use_gguf:
+            for key, value in self._remote_vl_kwargs().items():
+                args.extend([f"--{key}", str(value)])
+        return args
+
+    def _remote_vl_kwargs(self) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "vl_rec_backend": self.settings.paddleocr_vl_rec_backend or "llama-cpp-server",
+            "vl_rec_server_url": self.settings.paddleocr_vl_rec_server_url
+            or f"http://{self.settings.llama_server_host}:{self.settings.llama_server_port}/v1",
+            "vl_rec_max_concurrency": self.settings.paddleocr_vl_rec_max_concurrency or 1,
+            "vl_rec_api_model_name": self.settings.paddleocr_vl_rec_api_model_name or "paddleocr-vl",
+        }
+        if self.settings.paddleocr_vl_rec_api_key:
+            kwargs["vl_rec_api_key"] = self.settings.paddleocr_vl_rec_api_key
+        return kwargs
+
+    def _unavailable_message(self, py_error: str, cli_error: str) -> str:
+        return (
+            "PaddleOCR-VL is unavailable. Install paddleocr[doc-parser] and paddlepaddle-gpu, "
+            "or ensure `paddleocr` CLI exists in PATH. "
+            f"pipeline_version={self.settings.paddleocr_vl_pipeline_version or 'default'}; "
+            f"python_api_error={py_error or 'n/a'}; cli_error={cli_error or 'n/a'}"
+        )
+
+    def warmup(self, pipeline_cls: type | None = None) -> None:
+        if pipeline_cls is None:
+            pipeline_cls = self._load_pipeline_cls()
+        kwargs = self._build_kwargs(pipeline_cls, "auto")
+        self._get_or_create_pipeline(pipeline_cls, kwargs)
+
+
+class PPStructureV3Engine(PaddlePipelineEngine):
+    name = "pp_structure_v3"
+    cli_subcommand = "pp_structurev3"
+
+    def _load_pipeline_cls(self) -> type:
+        from paddleocr import PPStructureV3  # type: ignore
+
+        return PPStructureV3
+
+    def _unavailable_message(self, py_error: str, cli_error: str) -> str:
+        return (
+            "PP-StructureV3 is unavailable. Install paddleocr and paddlepaddle-gpu, "
+            "or ensure `paddleocr` CLI exists in PATH. "
+            f"python_api_error={py_error or 'n/a'}; cli_error={cli_error or 'n/a'}"
+        )

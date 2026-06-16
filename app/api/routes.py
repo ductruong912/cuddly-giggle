@@ -1,5 +1,7 @@
+"""HTTP routes and the orchestrator dependency."""
 from __future__ import annotations
 
+from functools import lru_cache
 import logging
 from pathlib import Path
 import shutil
@@ -9,14 +11,41 @@ import uuid
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 
-from app.api.dependencies import get_orchestrator
 from app.core.config import settings
 from app.domain.schemas import ParseOptions
-from app.services.output.artifacts import save_parse_artifacts
-from app.services.parsing.orchestrator import ParseOrchestrator
+from app.services.orchestrator import ParseOrchestrator
+from app.services.output import save_parse_artifacts
 
-router = APIRouter(prefix="/v1/doc", tags=["documents"])
+
 logger = logging.getLogger(__name__)
+
+
+# =====================================================================================
+# Dependencies
+# =====================================================================================
+
+@lru_cache(maxsize=1)
+def get_orchestrator() -> ParseOrchestrator:
+    return ParseOrchestrator()
+
+
+# =====================================================================================
+# Health
+# =====================================================================================
+
+health_router = APIRouter(tags=["health"])
+
+
+@health_router.get("/healthz")
+def healthz() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+# =====================================================================================
+# Documents
+# =====================================================================================
+
+doc_router = APIRouter(prefix="/v1/doc", tags=["documents"])
 
 SUPPORTED_INPUT_SUFFIXES = {
     ".pdf",
@@ -35,7 +64,7 @@ SUPPORTED_INPUT_SUFFIXES = {
 }
 
 
-@router.post("/parse", response_class=PlainTextResponse)
+@doc_router.post("/parse", response_class=PlainTextResponse)
 def parse_document(
     file: UploadFile = File(...),
     enable_fallback: bool = Form(default=settings.default_enable_fallback),

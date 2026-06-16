@@ -69,6 +69,8 @@ class Settings:
     auto_download_llama_cpp: bool = _get_bool("AUTO_DOWNLOAD_LLAMA_CPP", False)
     llama_cpp_dir: str = os.getenv("LLAMA_CPP_DIR", "llama").strip()
     llama_cpp_models_dir: str = os.getenv("LLAMA_CPP_MODELS_DIR", "models").strip()
+    llama_cpp_model_file: str = os.getenv("LLAMA_CPP_MODEL_FILE", "PaddleOCR-VL-1.6-GGUF.gguf").strip()
+    llama_cpp_mmproj_file: str = os.getenv("LLAMA_CPP_MMPROJ_FILE", "PaddleOCR-VL-1.6-GGUF-mmproj.gguf").strip()
     llama_cpp_release_url: str = os.getenv("LLAMA_CPP_RELEASE_URL", "").strip()
     llama_cpp_release_flavor: str = os.getenv("LLAMA_CPP_RELEASE_FLAVOR", "win-cuda-cu13.3-x64").strip()
 
@@ -108,6 +110,13 @@ class Settings:
     normalizer_confidence_content_weight: float = _get_float("NORMALIZER_CONFIDENCE_CONTENT_WEIGHT", 0.35)
     normalizer_confidence_table_bonus: float    = _get_float("NORMALIZER_CONFIDENCE_TABLE_BONUS", 0.05)
     normalizer_confidence_cap: float            = _get_float("NORMALIZER_CONFIDENCE_CAP", 0.9)
+
+    # --- PDF rasterization for OCR (render each page to an image, OCR per page) ---
+    pdf_rasterize_enabled: bool          = _get_bool("PDF_RASTERIZE_ENABLED", True)
+    pdf_rasterize_dpi: int               = _get_int("PDF_RASTERIZE_DPI", 300)
+
+    # --- Output filtering ---
+    table_only_output: bool              = _get_bool("TABLE_ONLY_OUTPUT", False)
 
     # --- Paths & misc ---
     temp_dir: str                        = os.getenv("DOC_TEMP_DIR", ".tmp_doc_parse")

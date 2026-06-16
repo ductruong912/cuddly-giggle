@@ -10,10 +10,14 @@ import uuid
 from app.core.config import Settings, settings
 from app.domain.schemas import ParseDecision, ParseOptions, ParseResponse
 from app.services.engines.base import EngineParseResult, ParseEngine
-from app.services.engines.native.excel_text import ExcelTextEngine
-from app.services.engines.native.pdf_text import PdfTextEngine, is_pdf_text_result_usable
-from app.services.engines.native.word_text import WordTextEngine
+from app.services.engines.native import (
+    ExcelTextEngine,
+    PdfTextEngine,
+    WordTextEngine,
+    is_pdf_text_result_usable,
+)
 from app.services.engines.registry import create_engine
+from app.services.output import filter_tables_markdown
 
 
 logger = logging.getLogger(__name__)
@@ -82,7 +86,7 @@ class ParseOrchestrator:
                 pdf_text = self.pdf_text_engine.parse(input_path, options.lang_hint.value)
                 pdf_text_elapsed = time.perf_counter() - stage_start
                 if is_pdf_text_result_usable(pdf_text, self.settings):
-                    decision = ParseDecision(status="pass", reason="PDF text layer parsed without OCR.")
+                    decision = ParseDecision(reason="PDF text layer parsed without OCR.")
                     response = self._build_response(request_id, pdf_text, options, decision)
                     logger.info(
                         "parse timings request_id=%s pdf_text=%.3fs total=%.3fs pdf_text_score=%.3f",
@@ -158,8 +162,9 @@ class ParseOrchestrator:
         tables = list(itertools.chain.from_iterable(page.tables for page in pages))
         reading_order = list(itertools.chain.from_iterable(page.reading_order for page in pages))
 
-        review_queued = decision.status == "fail"
-        review_reason = decision.reason if review_queued else None
+        markdown = result.markdown
+        if self.settings.table_only_output:
+            markdown = filter_tables_markdown(markdown)
 
         return ParseResponse(
             request_id=request_id,
@@ -168,14 +173,12 @@ class ParseOrchestrator:
             blocks=blocks,
             tables=tables,
             reading_order=reading_order,
-            markdown=result.markdown,
-            review_queued=review_queued,
-            review_reason=review_reason,
+            markdown=markdown,
         )
 
     @staticmethod
     def _build_decision(reason: str = "Parse completed.") -> ParseDecision:
-        return ParseDecision(status="pass", reason=reason)
+        return ParseDecision(reason=reason)
 
     def _get_fallback_engine(self) -> ParseEngine:
         with self._fallback_engine_lock:

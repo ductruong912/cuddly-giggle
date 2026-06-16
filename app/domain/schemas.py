@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -62,7 +62,6 @@ class PageParseResult(BaseModel):
 
 
 class ParseDecision(BaseModel):
-    status: Literal["pass", "borderline", "fail"]
     reason: str
 
 
@@ -74,9 +73,6 @@ class ParseResponse(BaseModel):
     tables: list[Table]
     reading_order: list[str]
     markdown: str | None = None
-    review_queued: bool = False
-    review_reason: str | None = None
-    saved_files: list[str] = Field(default_factory=list)
 
 
 class ParseOptions(BaseModel):

@@ -1,104 +1,249 @@
-# Cuddly Giggle: Vietnamese Document OCR & Extraction API 
+# Cuddly Giggle — Vietnamese Document OCR & Extraction API
 
-A production-ready, self-hosted API backend designed for high-precision parsing of Vietnamese documents, scanned images, PDFs, and Word files. It intelligently combines native text extraction, Vision-Language (VL) OCR models, and structural document parsing to deliver accurate Markdown outputs.
+A self-hosted FastAPI backend for high-precision parsing of Vietnamese documents:
+scanned images, PDFs, Word, and Excel files. It combines native text extraction,
+Vision-Language (VL) OCR, and structural document parsing, and returns clean
+**Markdown**.
+
+---
 
 ## Key Features
 
-- **Smart PDF Parsing**: Instantly extracts native text layer using PyMuPDF. Bypasses heavy OCR when high-quality digital text is available.
-- **Word Parsing**: Extracts `.docx` directly to Markdown and supports legacy `.doc` through LibreOffice/soffice conversion when available.
-- **Excel Parsing**: Extracts `.xlsx` / `.xlsm` worksheets to Markdown tables and supports legacy `.xls` through LibreOffice/soffice conversion when available.
-- **Legacy Font Repair**: Auto-detects and converts legacy Vietnamese printer fonts (TCVN3 / VNI / ABC) to standard Unicode.
-- **Vision-Language OCR**: Leverages **PaddleOCR-VL** (v1.6) as the primary engine for complex layouts and robust Vietnamese OCR.
-- **Resilient Fallback**: Can cascade to **PP-StructureV3** only when the primary OCR engine fails.
-- **Auto-Artifacts**: Automatically saves parse results as `Markdown` to your local `outputs/` directory.
-- **Offline Ready**: Transparent model caching mechanism allows seamless air-gapped deployments.
+- **Native PDF fast-path** — pulls the existing text layer with PyMuPDF and skips OCR entirely when a PDF already has high-quality digital text.
+- **Word & Excel parsing** — converts `.docx`/`.xlsx`/`.xlsm` directly to Markdown; legacy `.doc`/`.xls` are converted first via LibreOffice/soffice when available.
+- **Legacy font repair** — auto-detects and converts legacy Vietnamese printer fonts (TCVN3 / ABC) to standard Unicode.
+- **Vision-Language OCR** — uses **PaddleOCR-VL** (v1.6) as the primary engine for complex layouts and robust Vietnamese OCR.
+- **Resilient fallback** — cascades to **PP-StructureV3** only when the primary OCR engine fails.
+- **Optional GGUF backend** — can run PaddleOCR-VL recognition through llama.cpp + GGUF for lower-VRAM GPUs.
+- **Auto-artifacts** — saves every result as a `.md` file under `outputs/`.
+- **Offline ready** — model cache can be pre-populated for air-gapped deployments.
+
+---
+
+## How It Works
+
+For each uploaded file the orchestrator picks the cheapest reliable path:
+
+```
+            ┌─────────────┐
+ upload ──▶ │ orchestrator│
+            └─────┬───────┘
+                  │  .docx/.doc  ──▶ Word text engine ─────┐
+                  │  .xlsx/.xls  ──▶ Excel text engine ─────┤
+                  │  .pdf (digital text) ──▶ PDF text engine┤──▶ normalizer ──▶ Markdown ──▶ outputs/
+                  │  otherwise / sparse text ──▶ PaddleOCR-VL│
+                  │       (on failure) ──────▶ PP-StructureV3┘
+```
+
+Native engines (PDF/Word/Excel) run on CPU. The OCR engines (PaddleOCR-VL,
+PP-StructureV3) require an NVIDIA GPU.
+
+---
+
+## Project Structure
+
+```text
+cuddly-giggle/
+├── main.py                       # Entrypoint: bootstraps runtime, starts the API
+├── requirements.txt              # Base Python dependencies
+├── requirements-gpu-cu130.txt    # Base deps + PaddlePaddle GPU (CUDA 13.0)
+├── .env.example                  # Sample configuration — copy to .env
+├── app/
+│   ├── api/
+│   │   ├── application.py         # FastAPI app factory (ASGI entrypoint)
+│   │   └── routes.py             # Routes (/v1/doc/parse, /healthz) + orchestrator DI
+│   ├── core/
+│   │   └── config.py             # Settings + environment bootstrap
+│   ├── domain/
+│   │   └── schemas.py            # Pydantic models
+│   └── services/
+│       ├── orchestrator.py       # Per-file-type engine selection + fallback
+│       ├── output.py             # Markdown table filter + artifact writing
+│       ├── llama.py              # llama.cpp bootstrap + server control
+│       └── engines/
+│           ├── base.py           # Engine interface
+│           ├── registry.py       # Config-driven engine factory
+│           ├── native.py         # PDF / Word / Excel text-layer parsers
+│           ├── paddle.py         # PaddleOCR-VL + PP-StructureV3 adapters
+│           └── normalizer.py     # Normalizes engine output to the page schema
+├── scripts/                      # setup_llama_cpp, preflight_runtime, eval helpers
+├── tests/                        # pytest suite
+├── outputs/                      # Saved .md artifacts (git-ignored)
+└── data_test/                    # Local sample documents (git-ignored)
+```
 
 ---
 
 ## Prerequisites
 
-- **OS**: Windows or Linux
-- **Python**: 3.9 - 3.11
-- **Hardware**: NVIDIA GPU is highly recommended (CUDA 13.0 or 12.6 supported).
+- **OS**: Windows 10/11 or Linux
+- **Python**: 3.9 – 3.11
+- **GPU**: NVIDIA GPU with CUDA 13.0 or 12.6 — **required** for the OCR engines
+- **Optional**: LibreOffice/soffice on `PATH` — only needed to parse legacy `.doc` / `.xls`
+
+> Native PDF/Word/Excel text extraction works without a GPU, but the OCR engines
+> (used for scans, images, and image-only PDFs) need CUDA. Running the OCR engines
+> on CPU is **not supported**.
 
 ---
 
-## Installation & Setup
+## Installation
 
-**1. Clone the repository**
-```powershell
+**1. Clone**
+
+```bash
 git clone https://github.com/ductruong912/cuddly-giggle
 cd cuddly-giggle
 ```
 
-**2. Setup Virtual Environment**
-```powershell
+**2. Create a virtual environment**
+
+```bash
 python -m venv venv
-venv\Scripts\activate  # On Linux use: source venv/bin/activate
 ```
 
-**3. Install Dependencies**
+Activate it:
 
-By default, the project is configured for **CUDA 13.0** on Windows:
-```powershell
+- Windows (PowerShell): `venv\Scripts\Activate.ps1`
+- Linux/macOS: `source venv/bin/activate`
+
+**3. Install dependencies**
+
+The default target is **CUDA 13.0**:
+
+```bash
 python -m pip install --upgrade pip
 python -m pip install -r requirements-gpu-cu130.txt
 ```
-*(Note: If you have an older NVIDIA driver indicating CUDA 12.6, you should install the cu126 PaddlePaddle wheel instead of this requirements file).*
 
-**4. Optional: pre-download llama.cpp and GGUF models**
+For **CUDA 12.6**, install the base requirements and the matching PaddlePaddle wheel:
 
-This prepares the ignored `llama/` and `models/` folders before the first GGUF run. You can skip this step if `PADDLEOCR_VL_USE_GGUF=true`; `main.py` downloads missing artifacts automatically.
-
-```powershell
-venv\Scripts\python.exe scripts\setup_llama_cpp.py
+```bash
+python -m pip install -r requirements.txt
+python -m pip install paddlepaddle-gpu==3.3.0 --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
 ```
+
+**4. Create your configuration**
+
+Copy the sample and edit values as needed:
+
+- Windows (PowerShell): `Copy-Item .env.example .env`
+- Linux/macOS: `cp .env.example .env`
 
 ---
 
 ## Configuration
 
-The app uses a `.env` file for configuration. Copy `.env.example` to `.env` (if available) or create one. Environment variables can also be set directly in your terminal.
+All configuration lives in the **`.env`** file (loaded automatically on startup).
+Edit `.env` to change behavior — there is no need to export shell variables.
+
+Most-used settings:
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `OCR_PRIMARY_ENGINE` | `paddleocr_vl` | Primary extraction engine (`paddleocr_vl` or `pp_structure_v3`). |
-| `OCR_FALLBACK_ENGINE` | `pp_structure_v3` | Secondary engine used only if the primary OCR engine fails and fallback is enabled. |
-| `PADDLEOCR_VL_PIPELINE_VERSION`| `v1.6` | Specific version of the VL pipeline to download/use. |
-| `PADDLEOCR_VL_USE_GGUF` | `false` | `true` runs PaddleOCR-VL recognition through GGUF + llama.cpp; `false` uses the original PaddleOCR-VL model. |
-| `LLAMA_CPP_DIR` | `llama` | Local folder for llama.cpp binaries. |
-| `LLAMA_CPP_MODELS_DIR` | `models` | Local folder for GGUF model files. |
-| `LLAMA_CPP_RELEASE_URL` | *(empty)* | Optional pinned llama.cpp release zip URL. Empty resolves the latest GitHub release for `LLAMA_CPP_RELEASE_FLAVOR`. |
-| `LLAMA_CPP_RELEASE_FLAVOR` | `win-cuda-cu13.3-x64` | llama.cpp Windows release flavor (`win-cuda-cu13.3-x64`, `win-cuda-cu12.4-x64`, or `win-x64`). |
-| `LLAMA_SERVER_AUTOSTART` | `true` | When GGUF is enabled, start `llama-server.exe` automatically from `main.py`. |
-| `LLAMA_SERVER_HOST` / `LLAMA_SERVER_PORT` | `127.0.0.1` / `8080` | llama.cpp server binding used by the app. |
-| `LLAMA_SERVER_N_GPU_LAYERS` | `40` | Number of layers to offload to GPU for llama.cpp. |
-| `WARMUP_MODELS_ON_STARTUP` | `true` | Load models into GPU RAM during server boot (reduces latency of first request). |
-| `OCR_DEVICE` | `gpu:0` | Hardware selector (`gpu:0`, `cpu`, etc.). |
-| `PARSE_OUTPUT_DIR` | `outputs` | Directory to save `.md` files. |
-| `HOST` / `PORT` | `127.0.0.1` / `8000` | Uvicorn server binding. |
+| `HOST` / `PORT` | `127.0.0.1` / `8000` | API server binding. |
+| `OCR_PRIMARY_ENGINE` | `paddleocr_vl` | Primary engine (`paddleocr_vl` or `pp_structure_v3`). |
+| `OCR_FALLBACK_ENGINE` | `pp_structure_v3` | Used only if the primary OCR engine fails. |
+| `OCR_DEVICE` | `gpu:0` | GPU selector for the OCR engines (e.g. `gpu:0`). |
+| `WARMUP_MODELS_ON_STARTUP` | `true` | Load OCR models into GPU memory at boot (faster first request). |
+| `PADDLEOCR_VL_USE_GGUF` | `false` | `true` runs PaddleOCR-VL recognition via llama.cpp + GGUF. |
+| `PADDLE_PDX_CACHE_HOME` | `.paddlex` | Where downloaded OCR models are cached. |
+| `PARSE_OUTPUT_DIR` | `outputs` | Where parsed `.md` files are saved. |
+| `TABLE_ONLY_OUTPUT` | `false` | Keep only tables in the Markdown output. |
+| `PDF_TEXT_PARSE_ENABLED` | `true` | Use the native PDF text fast-path before OCR. |
+
+GGUF / llama.cpp settings (used only when `PADDLEOCR_VL_USE_GGUF=true`):
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `LLAMA_SERVER_AUTOSTART` | `true` | Auto-start `llama-server` from `main.py` (Windows). |
+| `LLAMA_SERVER_HOST` / `LLAMA_SERVER_PORT` | `127.0.0.1` / `8080` | llama.cpp server binding. |
+| `LLAMA_SERVER_N_GPU_LAYERS` | `40` | Layers offloaded to GPU. Lower this on small-VRAM cards. |
+| `LLAMA_CPP_DIR` / `LLAMA_CPP_MODELS_DIR` | `llama` / `models` | Local folders for binaries and GGUF models. |
+| `LLAMA_CPP_RELEASE_FLAVOR` | `win-cuda-cu13.3-x64` | llama.cpp Windows release flavor to download. |
+| `LLAMA_CPP_RELEASE_URL` | *(empty)* | Pin a specific llama.cpp release zip; empty = latest GitHub release. |
+
+See `.env.example` for the complete list (rasterization, native-text thresholds,
+confidence heuristics, logging, etc.).
 
 ---
 
 ## Running the Service
 
-Start the backend server. The first startup will download required AI models into `.paddlex/official_models` and warm them up on the GPU.
+After editing `.env`, start the server:
 
-```powershell
-$env:OCR_DEVICE="gpu:0"
-venv\Scripts\python.exe main.py
+- Windows (PowerShell): `venv\Scripts\python.exe main.py`
+- Linux/macOS: `venv/bin/python main.py`
+
+On first start the app downloads the required OCR models into `.paddlex/official_models`
+and warms them up on the GPU. Then open the interactive docs:
+
+> **Swagger UI**: http://127.0.0.1:8000/docs
+
+---
+
+## Running on Different Machines
+
+Behavior is controlled entirely through `.env`. Pick the scenario that matches the host.
+
+### 1. Standard GPU machine (CUDA 13.0) — default
+
+Install `requirements-gpu-cu130.txt`, then in `.env`:
+
+```dotenv
+OCR_DEVICE=gpu:0
+PADDLEOCR_VL_USE_GGUF=false
 ```
 
-To run the GGUF backend, set one flag before the same command:
+Run `main.py`. This uses the full PaddleOCR-VL model directly on the GPU.
 
-```powershell
-$env:PADDLEOCR_VL_USE_GGUF="true"
-venv\Scripts\python.exe main.py
+### 2. GPU machine with CUDA 12.6
+
+Install the cu126 PaddlePaddle wheel (see [Installation](#installation)). The `.env`
+is the same as scenario 1. Nothing else changes.
+
+### 3. Low-VRAM GPU — GGUF backend (Windows)
+
+If the full model does not fit in GPU memory, run recognition through llama.cpp.
+In `.env`:
+
+```dotenv
+PADDLEOCR_VL_USE_GGUF=true
+LLAMA_SERVER_AUTOSTART=true
+LLAMA_SERVER_N_GPU_LAYERS=20
 ```
 
-When GGUF is enabled, `main.py` downloads missing `llama/` and `models/` artifacts, starts `llama-server.exe`, points PaddleOCR-VL at `http://127.0.0.1:8080/v1`, then starts the API. Set `PADDLEOCR_VL_USE_GGUF=false` to run the original PaddleOCR-VL model without llama.cpp.
+Run `main.py`. It downloads any missing `llama/` binaries and `models/` GGUF files,
+starts `llama-server.exe`, points PaddleOCR-VL at `http://127.0.0.1:8080/v1`, then
+starts the API. To pre-download the artifacts beforehand:
 
-> **API Interactive Docs**: Visit http://127.0.0.1:8000/docs once the server is running to view the Swagger UI.
+```bash
+venv\Scripts\python.exe scripts\setup_llama_cpp.py
+```
+
+### 4. Linux
+
+Scenarios 1 and 2 work as-is (use `venv/bin/python main.py`). The **automatic**
+GGUF bootstrap targets Windows binaries, so on Linux run your own OpenAI-compatible
+llama.cpp server and disable autostart in `.env`:
+
+```dotenv
+PADDLEOCR_VL_USE_GGUF=true
+LLAMA_SERVER_AUTOSTART=false
+PADDLEOCR_VL_REC_SERVER_URL=http://127.0.0.1:8080/v1
+```
+
+### 5. Offline / air-gapped
+
+1. On an internet-connected machine, run the service once so models are cached under `.paddlex/official_models` (and, for GGUF, run `scripts/setup_llama_cpp.py`).
+2. Copy the project together with the `.paddlex/` folder (and `llama/` + `models/` if using GGUF) to the offline host.
+3. If you store the cache elsewhere, point to it in `.env`:
+
+```dotenv
+PADDLE_PDX_CACHE_HOME=D:/deploy/.paddlex
+```
+
+> Do not commit `.paddlex/`, `outputs/`, `llama/`, or `models/` — they are git-ignored on purpose.
 
 ---
 
@@ -106,94 +251,54 @@ When GGUF is enabled, `main.py` downloads missing `llama/` and `models/` artifac
 
 ### `POST /v1/doc/parse`
 
-Extracts Markdown from an uploaded document (PDF, DOCX, DOC, XLSX, XLSM, XLS, PNG, JPG). The API response body is `text/markdown`; JSON and `both` output modes are not exposed.
+Extracts Markdown from an uploaded document (PDF, DOCX, DOC, XLSX, XLSM, XLS, PNG,
+JPG, BMP, WEBP, TIF). The response body is `text/markdown`.
 
-`.docx` files are parsed natively. Legacy `.doc` files require LibreOffice/soffice on the server so they can be converted to `.docx` before parsing.
-`.xlsx` and `.xlsm` files are parsed natively. Legacy `.xls` files require LibreOffice/soffice so they can be converted to `.xlsx` before parsing.
+`.docx`/`.xlsx`/`.xlsm` are parsed natively. Legacy `.doc`/`.xls` require
+LibreOffice/soffice on the server so they can be converted first.
 
-**Form-Data Parameters:**
-- `file`*(required)*: The document binary.
-- `enable_fallback` *(optional)*: Set to `true`/`false`. Defaults to `true`. When enabled, fallback is used only if the primary OCR engine fails.
+**Form-data parameters**
 
-Saved Markdown artifacts use the uploaded filename stem (for example `VB 6.pdf` -> `VB 6.md`); duplicate names are saved as `VB 6 (2).md`, `VB 6 (3).md`, and so on.
+- `file` *(required)* — the document binary.
+- `enable_fallback` *(optional, default `true`)* — when enabled, the fallback engine runs only if the primary OCR engine fails.
 
-**Example via cURL:**
+Saved artifacts use the uploaded filename stem (e.g. `VB 6.pdf` → `VB 6.md`);
+duplicate names become `VB 6 (2).md`, `VB 6 (3).md`, and so on.
+
+**Example (cURL)**
+
 ```bash
-curl -X 'POST' \
+curl -X POST \
   'http://127.0.0.1:8000/v1/doc/parse' \
   -H 'accept: text/markdown' \
   -H 'Content-Type: multipart/form-data' \
   -F 'file=@sample_invoice.pdf;type=application/pdf'
 ```
 
----
+### `GET /healthz`
 
-## Project Structure
-
-```text
-main.py                         # Root entrypoint
-app/
-  application.py                # FastAPI app factory
-  api/                          # Routing and DI
-  core/                         # App settings and environment bootstraps
-  domain/                       # Schemas (Pydantic models)
-  eval/                         # CER/WER metrics tracking
-  services/
-    parsing/                    # Orchestration and quality assessment
-    engines/
-      base.py                   # Engine interfaces
-      registry.py               # Config-driven engine factory
-      native/                   # PDF/Word/Excel text-layer parsers
-      paddle/                   # PaddleOCR adapters and normalizer
-    output/                     # Markdown artifact writing
-    runtime/                    # llama.cpp bootstrap and server helpers
-scripts/                       # Utility scripts
-tests/                         # Unit and integration tests
-outputs/                       # Git-ignored parsed artifacts
-data_test/                     # Git-ignored local sample documents
-```
-
----
-
-## Offline & Production Deployment
-
-For environments without internet access (Air-Gapped):
-
-1. **Pre-download Models**: Run the application once on an internet-connected machine. This caches models inside the `.paddlex/official_models` folder.
-2. **Transfer**: Copy the code along with the `.paddlex` folder to your offline server.
-3. **Configure Volume**: Set the cache location explicitly if you move it:
-   ```powershell
-   $env:PADDLE_PDX_CACHE_HOME="C:\deploy\.paddlex"
-   ```
-*Pro Tip: Do not commit the `.paddlex` or `outputs/` directories to source control. They are `.gitignore`d for a reason!*
-
----
-
-### Remote VL Recognition / GGUF
-
-The normal GGUF path is a single terminal:
-
-```powershell
-$env:PADDLEOCR_VL_USE_GGUF="true"
-venv\Scripts\python.exe main.py
-```
-
-For advanced setups, set `LLAMA_SERVER_AUTOSTART=false` and run a compatible OpenAI-style server yourself. The app will still use the `PADDLEOCR_VL_REC_*` override variables when `PADDLEOCR_VL_USE_GGUF=true`.
+Liveness probe. Returns `{"status": "ok"}`.
 
 ---
 
 ## Testing & Diagnostics
 
-**Check System Readiness (Python, GPU, Paddle, Model Cache):**
-```powershell
+Check system readiness (Python, GPU, Paddle, model cache):
+
+```bash
 venv\Scripts\python.exe scripts\preflight_runtime.py
 ```
 
-**Run Unit Tests:**
-```powershell
+Run the test suite:
+
+```bash
 venv\Scripts\python.exe -m pytest -q
 ```
 
-.\llama\llama-server.exe -m "H:\Github\cuddly-giggle\models\PaddleOCR-VL-1.6-GGUF.gguf" --mmproj "H:\Github\cuddly-giggle\models\PaddleOCR-VL-1.6-GGUF-mmproj.gguf" --host 127.0.0.1 --port 8080 --ctx-size 4096 --parallel 1 --n-gpu-layers 40 --mmproj-offload --flash-attn on --threads 4 --threads-batch 4 --temp 0
+(On Linux use `venv/bin/python` in place of `venv\Scripts\python.exe`.)
 
+---
 
+## License
+
+See [LICENSE](LICENSE).

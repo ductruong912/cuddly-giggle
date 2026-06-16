@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from app.core.config import Settings
 from app.services.engines.base import ParseEngine
-from app.services.engines.paddle.paddleocr_vl import PaddleOCRVLEngine
-from app.services.engines.paddle.pp_structure_v3 import PPStructureV3Engine
+from app.services.engines.paddle import PaddleOCRVLEngine, PPStructureV3Engine
 
 
 def create_engine(name: str, app_settings: Settings) -> ParseEngine:

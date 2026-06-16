@@ -8,17 +8,15 @@ warnings.filterwarnings("ignore", message="No ccache found")
 
 import uvicorn
 
-from app.api.dependencies import get_orchestrator
-from app.application import app
+from app.api.routes import get_orchestrator
+from app.api.application import app
 from app.core.config import Settings, settings
-from app.services.runtime.llama_bootstrap import (
+from app.services.llama import (
     LlamaBootstrapConfig,
+    LlamaServerConfig,
     bootstrap_llama_cpp,
     is_llama_cpp_ready,
     resolve_latest_llama_cpp_release_urls,
-)
-from app.services.runtime.llama_server import (
-    LlamaServerConfig,
     start_llama_server_if_needed,
     stop_llama_server,
 )
@@ -72,8 +70,8 @@ def configure_gguf_runtime_on_startup(
     return start_server(
         LlamaServerConfig(
             executable_path=llama_dir / "llama-server.exe",
-            model_path=models_dir / "PaddleOCR-VL-1.6-GGUF.gguf",
-            mmproj_path=models_dir / "PaddleOCR-VL-1.6-GGUF-mmproj.gguf",
+            model_path=models_dir / app_settings.llama_cpp_model_file,
+            mmproj_path=models_dir / app_settings.llama_cpp_mmproj_file,
             host=app_settings.llama_server_host,
             port=app_settings.llama_server_port,
             ctx_size=app_settings.llama_server_ctx_size,
