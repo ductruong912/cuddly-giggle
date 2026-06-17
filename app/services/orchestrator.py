@@ -85,7 +85,7 @@ class ParseOrchestrator:
                 stage_start = time.perf_counter()
                 pdf_text = self.pdf_text_engine.parse(input_path, options.lang_hint.value)
                 pdf_text_elapsed = time.perf_counter() - stage_start
-                if is_pdf_text_result_usable(pdf_text, self.settings):
+                if is_pdf_text_result_usable(pdf_text):
                     decision = ParseDecision(reason="PDF text layer parsed without OCR.")
                     response = self._build_response(request_id, pdf_text, options, decision)
                     logger.info(

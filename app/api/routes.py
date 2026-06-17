@@ -8,7 +8,7 @@ import shutil
 import time
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 
 from app.core.config import settings
@@ -53,7 +53,6 @@ SUPPORTED_INPUT_SUFFIXES = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".xlsm", "
 @doc_router.post("/parse", response_class=PlainTextResponse)
 def parse_document(
     file: UploadFile = File(...),
-    enable_fallback: bool = Form(default=settings.default_enable_fallback),
     orchestrator: ParseOrchestrator = Depends(get_orchestrator),
 ) -> PlainTextResponse:
     total_start = time.perf_counter()
@@ -74,7 +73,7 @@ def parse_document(
             shutil.copyfileobj(file.file, f)
         upload_elapsed = time.perf_counter() - stage_start
         options = ParseOptions(
-            enable_fallback=enable_fallback,
+            enable_fallback=settings.default_enable_fallback,
         )
         stage_start = time.perf_counter()
         response = orchestrator.parse(str(temp_path), options)

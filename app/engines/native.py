@@ -14,6 +14,7 @@ from statistics import median
 import subprocess
 import tempfile
 from typing import Any
+import unicodedata
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -23,6 +24,20 @@ from app.engines.base import EngineParseResult, ParseEngine
 
 
 CONVERSION_TIMEOUT_SECONDS = 60
+
+# Native fast-path tuning (fixed constants; previously env-configurable).
+PDF_TEXT_MIN_TOTAL_CHARS = 80
+PDF_TEXT_MIN_CHARS_PER_TEXT_PAGE = 40
+PDF_TEXT_MIN_TEXT_PAGES_RATIO = 1.0
+
+PDF_TEXT_MIN_READABLE_RATIO = 0.70
+
+PDF_TEXT_MAX_CORRUPT_WORD_RATIO = 0.07
+
+PDF_TEXT_MIN_WORDS_FOR_CORRUPT_CHECK = 20
+PDF_TEXT_CONFIDENCE = 0.98
+WORD_TEXT_CONFIDENCE = 0.99
+EXCEL_TEXT_CONFIDENCE = 0.99
 
 
 # =====================================================================================
@@ -84,7 +99,7 @@ class PdfTextEngine(ParseEngine):
                 raw_blocks = text_dict.get("blocks", [])
                 raw_words = _get_page_words(page)
                 blocks = self._extract_page_blocks(raw_blocks, page_index)
-                tables = _extract_tables_from_words(raw_words, page_index, self.settings.pdf_text_confidence)
+                tables = _extract_tables_from_words(raw_words, page_index, PDF_TEXT_CONFIDENCE)
                 page_markdown = _build_layout_markdown(raw_words)
                 if blocks:
                     markdown_parts.append(
@@ -96,7 +111,7 @@ class PdfTextEngine(ParseEngine):
                         blocks=blocks,
                         tables=tables,
                         reading_order=[block.block_id for block in blocks],
-                        confidence=self.settings.pdf_text_confidence if blocks else 0.0,
+                        confidence=PDF_TEXT_CONFIDENCE if blocks else 0.0,
                         source_engine=self.name,
                     )
                 )
@@ -131,7 +146,7 @@ class PdfTextEngine(ParseEngine):
                     type=BlockType.text,
                     content=content,
                     bbox=_bbox_to_polygon(raw_block.get("bbox")),
-                    confidence=self.settings.pdf_text_confidence,
+                    confidence=PDF_TEXT_CONFIDENCE,
                     page_index=page_index,
                     source_engine=self.name,
                     extra={"block_order": block_index},
@@ -267,18 +282,70 @@ def _words_to_segment(words: list[PdfWord]) -> TextSegment:
     )
 
 
-def is_pdf_text_result_usable(result: EngineParseResult, app_settings: Settings = settings) -> bool:
+def is_pdf_text_result_usable(result: EngineParseResult) -> bool:
     if not result.pages:
         return False
 
-    page_char_counts = [_useful_char_count("\n".join(block.content for block in page.blocks)) for page in result.pages]
+    page_texts = ["\n".join(block.content for block in page.blocks) for page in result.pages]
+    page_char_counts = [_useful_char_count(text) for text in page_texts]
     total_chars = sum(page_char_counts)
-    text_pages = sum(1 for count in page_char_counts if count >= app_settings.pdf_text_min_chars_per_text_page)
-    text_page_ratio = text_pages / len(result.pages)
-    return (
-        total_chars >= app_settings.pdf_text_min_total_chars
-        and text_page_ratio >= app_settings.pdf_text_min_text_pages_ratio
-    )
+    if total_chars < PDF_TEXT_MIN_TOTAL_CHARS:
+        return False
+
+    text_pages = sum(1 for count in page_char_counts if count >= PDF_TEXT_MIN_CHARS_PER_TEXT_PAGE)
+    if text_pages / len(result.pages) < PDF_TEXT_MIN_TEXT_PAGES_RATIO:
+        return False
+
+    combined_text = "".join(page_texts)
+    # Reject a present-but-garbled text layer (undecodable glyphs) so it falls to OCR.
+    if _readable_char_ratio(combined_text) < PDF_TEXT_MIN_READABLE_RATIO:
+        return False
+
+    # Reject a text layer that decoded to valid-but-wrong letters (broken font cmap).
+    corrupt_ratio, word_count = _corrupt_word_ratio(combined_text)
+    if word_count >= PDF_TEXT_MIN_WORDS_FOR_CORRUPT_CHECK and corrupt_ratio > PDF_TEXT_MAX_CORRUPT_WORD_RATIO:
+        return False
+
+    return True
+
+
+def _corrupt_word_ratio(text: str) -> tuple[float, int]:
+    """Share of letter-dominant tokens with a digit wedged inside (e.g. "Nguy6n")."""
+    considered = 0
+    corrupted = 0
+    for token in text.split():
+        letters = sum(1 for ch in token if ch.isalpha())
+        if letters < 2:
+            continue
+        considered += 1
+        digits = sum(1 for ch in token if ch.isdigit())
+        if 1 <= digits < letters:
+            corrupted += 1
+    if considered == 0:
+        return 0.0, 0
+    return corrupted / considered, considered
+
+
+def _readable_char_ratio(text: str) -> float:
+    """Fraction of non-space characters that decode to meaningful Unicode."""
+    chars = [ch for ch in text if not ch.isspace()]
+    if not chars:
+        return 0.0
+    readable = sum(1 for ch in chars if _is_readable_char(ch))
+    return readable / len(chars)
+
+
+def _is_readable_char(ch: str) -> bool:
+    code = ord(ch)
+    # Private-use areas and the replacement char are what PyMuPDF emits for glyphs
+    # it cannot map to real Unicode (broken/missing ToUnicode CMap).
+    if ch == "�":
+        return False
+    if 0xE000 <= code <= 0xF8FF or 0xF0000 <= code <= 0xFFFFD or 0x100000 <= code <= 0x10FFFD:
+        return False
+    # Letters, marks (Vietnamese combining diacritics), numbers, punctuation, symbols.
+    # Excludes control/format/surrogate/unassigned/private categories.
+    return unicodedata.category(ch)[0] in {"L", "M", "N", "P", "S"}
 
 
 def _extract_block_text(raw_block: dict[str, Any]) -> str:
@@ -386,7 +453,7 @@ class WordTextEngine(ParseEngine):
                         block_id=block_id,
                         type=BlockType.text,
                         content=text,
-                        confidence=self.settings.word_text_confidence,
+                        confidence=WORD_TEXT_CONFIDENCE,
                         page_index=0,
                         source_engine=self.name,
                     )
@@ -397,7 +464,7 @@ class WordTextEngine(ParseEngine):
                 continue
 
             if child.tag == _w("tbl"):
-                rows, table = _extract_table(child, len(tables), self.settings.word_text_confidence)
+                rows, table = _extract_table(child, len(tables), WORD_TEXT_CONFIDENCE)
                 if table is None:
                     continue
                 table_markdown = _rows_to_markdown(rows)
@@ -408,7 +475,7 @@ class WordTextEngine(ParseEngine):
                         block_id=block_id,
                         type=BlockType.table,
                         content=table_markdown,
-                        confidence=self.settings.word_text_confidence,
+                        confidence=WORD_TEXT_CONFIDENCE,
                         page_index=0,
                         source_engine=self.name,
                         extra={"table_id": table.table_id},
@@ -425,7 +492,7 @@ class WordTextEngine(ParseEngine):
             blocks=blocks,
             tables=tables,
             reading_order=reading_order,
-            confidence=self.settings.word_text_confidence if has_content else 0.0,
+            confidence=WORD_TEXT_CONFIDENCE if has_content else 0.0,
             source_engine=self.name,
         )
         raw = {
@@ -552,7 +619,7 @@ class ExcelTextEngine(ParseEngine):
                 rels_root = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
                 shared_strings = _load_shared_strings(archive)
                 sheet_refs = _extract_sheet_refs(workbook_root, rels_root)
-                pages = [_parse_sheet(archive, sheet_ref, index, shared_strings, self.settings.excel_text_confidence)
+                pages = [_parse_sheet(archive, sheet_ref, index, shared_strings, EXCEL_TEXT_CONFIDENCE)
                         for index, sheet_ref in enumerate(sheet_refs)]
         except KeyError as exc:
             raise RuntimeError(f"Invalid Excel file: missing {exc.args[0]}.") from exc

@@ -258,7 +258,9 @@ LibreOffice/soffice on the server so they can be converted first.
 **Form-data parameters**
 
 - `file` *(required)* — the document binary.
-- `enable_fallback` *(optional, default `true`)* — when enabled, the fallback engine runs only if the primary OCR engine fails.
+
+The fallback engine (run only if the primary OCR engine fails) is controlled
+server-side by `DEFAULT_ENABLE_FALLBACK` (default `true`).
 
 Saved artifacts use the uploaded filename stem (e.g. `VB 6.pdf` → `VB 6.md`);
 duplicate names become `VB 6 (2).md`, `VB 6 (3).md`, and so on.

@@ -91,17 +91,6 @@ class Settings:
 
     # --- PDF text fast-path ---
     pdf_text_parse_enabled: bool           = _get_bool("PDF_TEXT_PARSE_ENABLED", True)
-    pdf_text_min_total_chars: int          = _get_int("PDF_TEXT_MIN_TOTAL_CHARS", 80)
-    pdf_text_min_chars_per_text_page: int  = _get_int("PDF_TEXT_MIN_CHARS_PER_TEXT_PAGE", 40)
-    pdf_text_min_text_pages_ratio: float   = _get_float("PDF_TEXT_MIN_TEXT_PAGES_RATIO", 1.0)
-    pdf_text_confidence: float             = _get_float("PDF_TEXT_CONFIDENCE", 0.98)
-
-
-    # --- Word text fast-path ---
-    word_text_confidence: float = _get_float("WORD_TEXT_CONFIDENCE", 0.99)
-
-    # --- Excel text fast-path ---
-    excel_text_confidence: float = _get_float("EXCEL_TEXT_CONFIDENCE", 0.99)
 
     # --- Normalizer synthetic confidence heuristic ---
     normalizer_confidence_base: float           = _get_float("NORMALIZER_CONFIDENCE_BASE", 0.55)
