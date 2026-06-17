@@ -1,12 +1,22 @@
+# Base API & Web Runtime
 fastapi==0.115.12
 uvicorn[standard]==0.34.2
 pydantic==2.11.4
 python-multipart==0.0.20
 python-dotenv==1.1.0
-numpy==2.2.6
-opencv-python-headless==4.11.0.86
-rapidfuzz==3.13.0
 httpx==0.28.1
+
+# Math & Testing Tools
+numpy==2.2.6
 pytest==8.3.5
+
+# Document & OCR Parsers
+PyMuPDF==1.27.2.3
 paddleocr[doc-parser]==3.6.0
 paddlex[ocr]==3.6.0
+
+# Framework PaddlePaddle GPU tự động nhận diện phiên bản CUDA khi cài đặt
+# Sử dụng: pip install -r requirements.txt --config-settings="--cuda=13.0" (hoặc 12.6)
+--extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu130/
+--extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
+paddlepaddle-gpu==3.3.0

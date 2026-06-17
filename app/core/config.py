@@ -12,12 +12,26 @@ from dotenv import load_dotenv
 load_dotenv(Path.cwd() / ".env", override=False)
 
 
+# ---------------------------------------------------------------------------
+# Environment helpers
+# ---------------------------------------------------------------------------
+
 def _get_float(name: str, default: float) -> float:
     raw = os.getenv(name)
     if raw is None:
         return default
     try:
         return float(raw)
+    except ValueError:
+        return default
+
+
+def _get_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
     except ValueError:
         return default
 
@@ -29,25 +43,74 @@ def _get_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
 @dataclass(frozen=True)
 class Settings:
-    primary_engine: str = os.getenv("OCR_PRIMARY_ENGINE", "paddleocr_vl")
-    fallback_engine: str = os.getenv("OCR_FALLBACK_ENGINE", "pp_structure_v3")
-    default_enable_fallback: bool = _get_bool("DEFAULT_ENABLE_FALLBACK", True)
-    ocr_device: str = os.getenv("OCR_DEVICE", "").strip()
-    ocr_inference_engine: str = os.getenv("OCR_INFERENCE_ENGINE", "").strip()
+
+    # --- OCR engines ---
+    primary_engine: str                = os.getenv("OCR_PRIMARY_ENGINE", "paddleocr_vl")
+    fallback_engine: str               = os.getenv("OCR_FALLBACK_ENGINE", "pp_structure_v3")
+    default_enable_fallback: bool      = True
+    ocr_device: str                    = os.getenv("OCR_DEVICE", "").strip()
+    ocr_inference_engine: str          = os.getenv("OCR_INFERENCE_ENGINE", "").strip()
     paddleocr_vl_pipeline_version: str = os.getenv("PADDLEOCR_VL_PIPELINE_VERSION", "v1.6").strip()
-    warmup_models_on_startup: bool = _get_bool("WARMUP_MODELS_ON_STARTUP", True)
-    qwen_verifier_enabled: bool = _get_bool("QWEN_VERIFIER_ENABLED", False)
-    qwen_verifier_base_url: str = os.getenv("QWEN_VERIFIER_BASE_URL", "")
-    qwen_verifier_model: str = os.getenv("QWEN_VERIFIER_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
-    qwen_verifier_api_key: str = os.getenv("QWEN_VERIFIER_API_KEY", "")
-    confidence_pass_threshold: float = _get_float("CONFIDENCE_PASS_THRESHOLD", 0.84)
-    confidence_borderline_threshold: float = _get_float("CONFIDENCE_BORDERLINE_THRESHOLD", 0.68)
-    quality_fail_threshold: float = _get_float("QUALITY_FAIL_THRESHOLD", 0.62)
-    temp_dir: str = os.getenv("DOC_TEMP_DIR", ".tmp_doc_parse")
-    parse_output_dir: str = os.getenv("PARSE_OUTPUT_DIR", "outputs")
-    quiet_third_party_logs: bool = _get_bool("QUIET_THIRD_PARTY_LOGS", True)
+    paddleocr_vl_rec_backend: str      = os.getenv("PADDLEOCR_VL_REC_BACKEND", "").strip()
+    paddleocr_vl_rec_server_url: str   = os.getenv("PADDLEOCR_VL_REC_SERVER_URL", "").strip()
+    paddleocr_vl_rec_max_concurrency: int = _get_int("PADDLEOCR_VL_REC_MAX_CONCURRENCY", 0)
+    paddleocr_vl_rec_api_model_name: str = os.getenv("PADDLEOCR_VL_REC_API_MODEL_NAME", "").strip()
+    paddleocr_vl_rec_api_key: str      = os.getenv("PADDLEOCR_VL_REC_API_KEY", "").strip()
+    paddleocr_vl_use_gguf: bool        = _get_bool("PADDLEOCR_VL_USE_GGUF", False)
+    warmup_models_on_startup: bool     = _get_bool("WARMUP_MODELS_ON_STARTUP", True)
+
+    # --- llama.cpp / GGUF bootstrap ---
+    auto_download_llama_cpp: bool = _get_bool("AUTO_DOWNLOAD_LLAMA_CPP", False)
+    llama_cpp_dir: str = os.getenv("LLAMA_CPP_DIR", "llama").strip()
+    llama_cpp_models_dir: str = os.getenv("LLAMA_CPP_MODELS_DIR", "models").strip()
+    llama_cpp_model_file: str = os.getenv("LLAMA_CPP_MODEL_FILE", "PaddleOCR-VL-1.6-GGUF.gguf").strip()
+    llama_cpp_mmproj_file: str = os.getenv("LLAMA_CPP_MMPROJ_FILE", "PaddleOCR-VL-1.6-GGUF-mmproj.gguf").strip()
+    llama_cpp_release_url: str = os.getenv("LLAMA_CPP_RELEASE_URL", "").strip()
+    llama_cpp_release_flavor: str = os.getenv("LLAMA_CPP_RELEASE_FLAVOR", "win-cuda-12.4-x64").strip()
+
+    # --- llama.cpp server autostart ---
+    llama_server_autostart: bool = _get_bool("LLAMA_SERVER_AUTOSTART", True)
+    llama_server_host: str = os.getenv("LLAMA_SERVER_HOST", "127.0.0.1").strip()
+    llama_server_port: int = _get_int("LLAMA_SERVER_PORT", 8080)
+    llama_server_ctx_size: int = _get_int("LLAMA_SERVER_CTX_SIZE", 4096)
+    llama_server_parallel: int = _get_int("LLAMA_SERVER_PARALLEL", 1)
+    llama_server_n_gpu_layers: int = _get_int("LLAMA_SERVER_N_GPU_LAYERS", 40)
+    llama_server_mmproj_offload: bool = _get_bool("LLAMA_SERVER_MMPROJ_OFFLOAD", True)
+    llama_server_flash_attn: str = os.getenv("LLAMA_SERVER_FLASH_ATTN", "on").strip()
+    llama_server_threads: int = _get_int("LLAMA_SERVER_THREADS", 4)
+    llama_server_threads_batch: int = _get_int("LLAMA_SERVER_THREADS_BATCH", 4)
+    llama_server_temp: float = _get_float("LLAMA_SERVER_TEMP", 0.0)
+    llama_server_log_verbosity: int = _get_int("LLAMA_SERVER_LOG_VERBOSITY", 1)
+    llama_server_startup_timeout_seconds: float = _get_float("LLAMA_SERVER_STARTUP_TIMEOUT_SECONDS", 120.0)
+
+    # --- PDF text fast-path ---
+    pdf_text_parse_enabled: bool           = _get_bool("PDF_TEXT_PARSE_ENABLED", True)
+
+    # --- Normalizer synthetic confidence heuristic ---
+    normalizer_confidence_base: float           = _get_float("NORMALIZER_CONFIDENCE_BASE", 0.55)
+    normalizer_confidence_content_weight: float = _get_float("NORMALIZER_CONFIDENCE_CONTENT_WEIGHT", 0.35)
+    normalizer_confidence_table_bonus: float    = _get_float("NORMALIZER_CONFIDENCE_TABLE_BONUS", 0.05)
+    normalizer_confidence_cap: float            = _get_float("NORMALIZER_CONFIDENCE_CAP", 0.9)
+
+    # --- PDF rasterization for OCR (render each page to an image, OCR per page) ---
+    pdf_rasterize_enabled: bool          = _get_bool("PDF_RASTERIZE_ENABLED", True)
+    pdf_rasterize_dpi: int               = _get_int("PDF_RASTERIZE_DPI", 300)
+
+    # --- Output filtering ---
+    table_only_output: bool              = _get_bool("TABLE_ONLY_OUTPUT", False)
+
+    # --- Paths & misc ---
+    temp_dir: str                        = os.getenv("DOC_TEMP_DIR", ".tmp_doc_parse")
+    parse_output_dir: str                = os.getenv("PARSE_OUTPUT_DIR", "outputs")
+    quiet_third_party_logs: bool         = _get_bool("QUIET_THIRD_PARTY_LOGS", True)
+
+    # --- PaddleX / model cache ---
     paddlex_cache_home: str = os.getenv(
         "PADDLE_PDX_CACHE_HOME",
         str((Path.cwd() / ".paddlex").resolve()),
@@ -55,35 +118,53 @@ class Settings:
     paddlex_disable_model_source_check: bool = _get_bool("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", True)
 
 
+# ---------------------------------------------------------------------------
+# Module-level initialisation
+# ---------------------------------------------------------------------------
+
 settings = Settings()
-Path(settings.paddlex_cache_home).mkdir(parents=True, exist_ok=True)
-Path(settings.parse_output_dir).mkdir(parents=True, exist_ok=True)
-os.environ.setdefault("PADDLE_PDX_CACHE_HOME", settings.paddlex_cache_home)
-os.environ.setdefault(
-    "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK",
-    "True" if settings.paddlex_disable_model_source_check else "False",
-)
-os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-os.environ.setdefault("GLOG_minloglevel", "2")
-os.environ.setdefault("GLOG_logtostderr", "1")
+
+
+def _init_directories() -> None:
+    Path(settings.paddlex_cache_home).mkdir(parents=True, exist_ok=True)
+    Path(settings.parse_output_dir).mkdir(parents=True, exist_ok=True)
+
+
+def _init_env_defaults() -> None:
+    defaults: dict[str, str] = {
+        "PADDLE_PDX_CACHE_HOME": settings.paddlex_cache_home,
+        "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": (
+            "True" if settings.paddlex_disable_model_source_check else "False"
+        ),
+        "HF_HUB_DISABLE_PROGRESS_BARS": "1",
+        "TOKENIZERS_PARALLELISM": "false",
+        "GLOG_minloglevel": "2",
+        "GLOG_logtostderr": "1",
+    }
+    for key, value in defaults.items():
+        os.environ.setdefault(key, value)
 
 
 def _prepend_windows_cuda_paths() -> None:
     if os.name != "nt":
         return
+
+    # NVIDIA CUDA wheels ship DLLs under nvidia/<component>/bin (cu12 layout) or
+    # nvidia/<component>/bin/x86_64 (cu13 layout). Scan every component and keep
+    # only bin dirs that actually contain DLLs, independent of the CUDA major.
     candidates: list[Path] = []
     for base in site.getsitepackages():
-        root = Path(base) / "nvidia"
-        candidates.extend(
-            [
-                root / "cu13" / "bin",
-                root / "cu13" / "bin" / "x86_64",
-                root / "cudnn" / "bin",
-            ]
-        )
+        nvidia_root = Path(base) / "nvidia"
+        if not nvidia_root.is_dir():
+            continue
+        for component in sorted(nvidia_root.iterdir()):
+            if not component.is_dir():
+                continue
+            for bin_dir in (component / "bin", component / "bin" / "x86_64"):
+                if bin_dir.is_dir() and any(bin_dir.glob("*.dll")):
+                    candidates.append(bin_dir)
 
-    existing = [str(p) for p in candidates if p.exists()]
+    existing = [str(p) for p in candidates]
     if not existing:
         return
 
@@ -94,15 +175,20 @@ def _prepend_windows_cuda_paths() -> None:
         os.environ["PATH"] = ";".join(new_items + path_items)
 
 
+_init_directories()
+_init_env_defaults()
 _prepend_windows_cuda_paths()
 
+
+# ---------------------------------------------------------------------------
+# Logging helpers
+# ---------------------------------------------------------------------------
 
 def configure_third_party_logging() -> None:
     if not settings.quiet_third_party_logs:
         return
     try:
         from paddlex.utils import logging as paddlex_logging  # type: ignore
-
         paddlex_logging.setup_logging("WARNING")
     except Exception:
         pass
@@ -112,8 +198,13 @@ def configure_app_logging() -> None:
     app_logger = logging.getLogger("app")
     app_logger.setLevel(logging.INFO)
     app_logger.propagate = True
-    if any(getattr(handler, "_cuddly_giggle_app_handler", False) for handler in app_logger.handlers):
+
+    already_configured = any(
+        getattr(h, "_cuddly_giggle_app_handler", False) for h in app_logger.handlers
+    )
+    if already_configured:
         return
+
     handler = logging.StreamHandler()
     handler.setLevel(logging.INFO)
     handler.setFormatter(logging.Formatter("INFO:     %(message)s"))

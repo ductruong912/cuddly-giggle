@@ -6,6 +6,7 @@ from html import unescape
 import re
 import uuid
 
+from app.core.config import Settings, settings
 from app.domain.schemas import Block, BlockType, PageParseResult, Point, Table, TableCell
 
 
@@ -133,7 +134,7 @@ def _extract_markdown(raw: dict) -> str | None:
     return None
 
 
-def _extract_raw_tables(raw: dict) -> list[Table]:
+def _extract_raw_tables(raw: dict, page_index: int = 0) -> list[Table]:
     tables: list[Table] = []
     candidates = raw.get("tables") or raw.get("table_res_list") or raw.get("table_results") or []
     if not isinstance(candidates, list):
@@ -142,31 +143,36 @@ def _extract_raw_tables(raw: dict) -> list[Table]:
     for idx, item in enumerate(candidates):
         if not isinstance(item, dict):
             continue
-        cells_raw = item.get("cells", [])
+        cells_raw = item.get("cells")
         cells: list[TableCell] = []
-        if isinstance(cells_raw, list):
+        if isinstance(cells_raw, list) and cells_raw:
             for c in cells_raw:
                 if not isinstance(c, dict):
                     continue
                 cells.append(
                     TableCell(
-                        row=int(c.get("row", 0)),
-                        col=int(c.get("col", 0)),
-                        rowspan=int(c.get("rowspan", 1)),
-                        colspan=int(c.get("colspan", 1)),
+                        row=_safe_int(c.get("row"), 0),
+                        col=_safe_int(c.get("col"), 0),
+                        rowspan=_safe_int(c.get("rowspan"), 1),
+                        colspan=_safe_int(c.get("colspan"), 1),
                         text=str(c.get("text", "")),
                         confidence=_safe_float(c.get("score"), 0.0),
                     )
                 )
         elif isinstance(item.get("html"), str):
-            text = re.sub(r"<[^>]+>", " ", item["html"])
-            text = re.sub(r"\s+", " ", text).strip()
-            cells.append(TableCell(row=0, col=0, text=text, confidence=_safe_float(item.get("score"), 0.0)))
+            # PaddleOCR table_res_list often carries only an HTML string (no cell
+            # list). Parse real cells from it; fall back to a single flattened cell.
+            cells = _parse_table_cells_from_html(item["html"])
+            if not cells:
+                text = re.sub(r"<[^>]+>", " ", item["html"])
+                text = re.sub(r"\s+", " ", text).strip()
+                if text:
+                    cells = [TableCell(row=0, col=0, text=text, confidence=_safe_float(item.get("score"), 0.0))]
 
         tables.append(
             Table(
                 table_id=str(item.get("table_id") or _new_block_id("tbl")),
-                page_index=int(item.get("page_index", 0)),
+                page_index=_safe_int(item.get("page_index"), page_index),
                 cells=cells,
                 confidence=_safe_float(item.get("score"), 0.0),
             )
@@ -176,6 +182,9 @@ def _extract_raw_tables(raw: dict) -> list[Table]:
 
 def _parse_table_cells_from_html(html_text: str) -> list[TableCell]:
     cells: list[TableCell] = []
+    # Track grid positions reserved by rowspans started in earlier rows so a cell
+    # in a later row is not assigned a column already occupied by a spanning cell.
+    occupied: set[tuple[int, int]] = set()
     row_matches = re.findall(r"<tr[^>]*>(.*?)</tr>", html_text, flags=re.IGNORECASE | re.DOTALL)
     for row_idx, row_html in enumerate(row_matches):
         col_idx = 0
@@ -188,11 +197,17 @@ def _parse_table_cells_from_html(html_text: str) -> list[TableCell]:
             m_row = re.search(r"rowspan\s*=\s*['\"]?(\d+)", attrs, flags=re.IGNORECASE)
             m_col = re.search(r"colspan\s*=\s*['\"]?(\d+)", attrs, flags=re.IGNORECASE)
             if m_row:
-                rowspan = _safe_int(m_row.group(1), 1)
+                rowspan = max(_safe_int(m_row.group(1), 1), 1)
             if m_col:
-                colspan = _safe_int(m_col.group(1), 1)
+                colspan = max(_safe_int(m_col.group(1), 1), 1)
+            # Advance past any column reserved by a rowspan from an earlier row.
+            while (row_idx, col_idx) in occupied:
+                col_idx += 1
             cells.append(TableCell(row=row_idx, col=col_idx, rowspan=rowspan, colspan=colspan, text=text))
-            col_idx += max(colspan, 1)
+            for dr in range(rowspan):
+                for dc in range(colspan):
+                    occupied.add((row_idx + dr, col_idx + dc))
+            col_idx += colspan
     return cells
 
 
@@ -300,7 +315,7 @@ def _build_blocks_from_parsing_res_list(
                 source_engine=source_engine,
                 extra={
                     "label": label,
-                    "block_order": _safe_int(block_order, -1) if block_order is not None else -1,
+                    "block_order": _safe_int(block_order, -1) if block_order is not None else None,
                     "group_id": item.get("group_id"),
                 },
             )
@@ -309,14 +324,20 @@ def _build_blocks_from_parsing_res_list(
 
 
 def _reading_order(blocks: list[Block]) -> list[str]:
-    has_explicit_order = any(_safe_int(b.extra.get("block_order"), -1) >= 0 for b in blocks)
+    # Missing/invalid/negative block_order sorts to the BACK (large sentinel), not
+    # the front: a stored -1 or None must not jump an order-less block ahead of 0.
+    def order_of(block: Block) -> int:
+        order = _safe_int(block.extra.get("block_order"), -1)
+        return order if order >= 0 else 10**9
+
+    has_explicit_order = any(order_of(b) < 10**9 for b in blocks)
     if has_explicit_order:
         return [
             b.block_id
             for b in sorted(
                 blocks,
                 key=lambda block: (
-                    _safe_int(block.extra.get("block_order"), 10**9),
+                    order_of(block),
                     _centroid(block.bbox)[1],
                     _centroid(block.bbox)[0],
                 ),
@@ -383,7 +404,60 @@ def _result_to_markdown_text(raw: object) -> str | None:
     return None
 
 
-def normalize_engine_output(raw: object, source_engine: str) -> tuple[list[PageParseResult], str | None, dict]:
+def _starts_with_text_page_marker(line: str) -> bool:
+    return bool(re.match(r"^(?:#{1,6}\s*)?\[Tr\.\s*\d+\s*\]\s*:?", line.strip()))
+
+
+def _is_standalone_text_page_marker(line: str) -> bool:
+    return bool(re.match(r"^(?:#{1,6}\s*)?\[Tr\.\s*\d+\s*\]\s*:?\s*$", line.strip()))
+
+
+def _text_only_markdown_needs_blank_before(line: str, previous_line: str) -> bool:
+    line = line.strip()
+    previous_line = previous_line.strip()
+
+    if _starts_with_text_page_marker(line):
+        return True
+    if _is_standalone_text_page_marker(previous_line):
+        return False
+    if previous_line.startswith("#"):
+        return True
+    if re.match(r"^Ngày\b", line, flags=re.IGNORECASE):
+        return True
+    return line.startswith(("Người dịch:", "Hiệu đính:", "VIỆN ", "VIỆN NGHIÊN"))
+
+
+def _compact_text_only_markdown(markdown: str | None) -> str | None:
+    if markdown is None:
+        return None
+
+    text = markdown.strip()
+    if not text:
+        return None
+
+    # Structured markdown carries meaningful blank lines for tables/code blocks.
+    if any(marker in text for marker in ("<table", "```")) or re.search(r"^\s*\|.*\|\s*$", text, re.MULTILINE):
+        return text
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    compacted = [lines[0]]
+    for line in lines[1:]:
+        previous_line = compacted[-1]
+        if _text_only_markdown_needs_blank_before(line, previous_line):
+            compacted.extend(["", line])
+        else:
+            compacted.append(line)
+    return "\n".join(compacted)
+
+
+def normalize_engine_output(
+    raw: object,
+    source_engine: str,
+    app_settings: Settings = settings,
+) -> tuple[list[PageParseResult], str | None, dict]:
     """
     Convert adapter-specific output into a stable internal page schema.
     """
@@ -417,10 +491,14 @@ def normalize_engine_output(raw: object, source_engine: str) -> tuple[list[PageP
                 markdown_parts.append(md2)
 
     root = normalized_raw.get("res", normalized_raw)
-    fallback_md = _extract_markdown(normalized_raw) or (_extract_markdown(root) if isinstance(root, dict) else None)
-    if fallback_md:
-        markdown_parts.append(fallback_md)
-    markdown = "\n\n".join([part for part in markdown_parts if part.strip()]) or None
+    # Only reach for a fallback markdown when nothing was already extracted above;
+    # otherwise the same top-level markdown gets appended twice and the artifact
+    # ends up duplicated (it's the common single-dict / CLI payload shape).
+    if not markdown_parts:
+        fallback_md = _extract_markdown(normalized_raw) or (_extract_markdown(root) if isinstance(root, dict) else None)
+        if fallback_md:
+            markdown_parts.append(fallback_md)
+    markdown = _compact_text_only_markdown("\n\n".join([part for part in markdown_parts if part.strip()]) or None)
 
     pages: list[PageParseResult] = []
     if isinstance(root, dict) and isinstance(root.get("pages"), list):
@@ -434,12 +512,17 @@ def normalize_engine_output(raw: object, source_engine: str) -> tuple[list[PageP
         if not isinstance(page, dict):
             continue
 
+        # Prefer the engine's real page index when present; fall back to the
+        # positional index. Using the real index keeps page attribution correct
+        # even if an earlier page was dropped/compacted.
+        page_index = _safe_int(page.get("page_index"), idx)
+
         parsing_res_list = page.get("parsing_res_list")
         parsed_blocks: list[Block] = []
         parsed_tables: list[Table] = []
         if isinstance(parsing_res_list, list):
-            parsed_blocks = _build_blocks_from_parsing_res_list(parsing_res_list, idx, source_engine)
-            parsed_tables = _extract_tables_from_parsing_res_list(parsing_res_list, idx)
+            parsed_blocks = _build_blocks_from_parsing_res_list(parsing_res_list, page_index, source_engine)
+            parsed_tables = _extract_tables_from_parsing_res_list(parsing_res_list, page_index)
 
         boxes: list[dict] = []
         layout = page.get("layout_det_res")
@@ -450,8 +533,15 @@ def normalize_engine_output(raw: object, source_engine: str) -> tuple[list[PageP
         if isinstance(page.get("blocks"), list):
             boxes.extend([b for b in page["blocks"] if isinstance(b, dict)])
 
-        blocks = parsed_blocks or _build_blocks_from_layout_boxes(boxes, idx, source_engine)
-        tables = parsed_tables or _extract_raw_tables(page)
+        blocks = parsed_blocks or _build_blocks_from_layout_boxes(boxes, page_index, source_engine)
+        tables = parsed_tables or _extract_raw_tables(page, page_index)
+
+        # Tables exposed only as HTML inside this page's own markdown: parse them
+        # here so they are attributed to THIS page, not dumped onto page 0.
+        if not tables:
+            page_md = _extract_markdown(page)
+            if page_md:
+                tables = _extract_tables_from_markdown(page_md, page_index=page_index)
 
         # No explicit blocks from the engine: create one text block fallback.
         if not blocks and isinstance(page.get("text"), str):
@@ -462,7 +552,7 @@ def normalize_engine_output(raw: object, source_engine: str) -> tuple[list[PageP
                     content=page["text"],
                     bbox=[],
                     confidence=_safe_float(page.get("score"), 0.0),
-                    page_index=idx,
+                    page_index=page_index,
                     source_engine=source_engine,
                 )
             ]
@@ -474,12 +564,21 @@ def normalize_engine_output(raw: object, source_engine: str) -> tuple[list[PageP
             confidence = _avg_positive(block.confidence for block in blocks)
         if confidence == 0.0 and blocks:
             non_empty = sum(1 for block in blocks if (block.content or "").strip())
-            content_ratio = non_empty / max(len(blocks), 1)
-            confidence = min(0.9, 0.55 + 0.35 * content_ratio + (0.05 if tables else 0.0))
+            # Only synthesize a confidence floor when the page actually recognized
+            # text. A page with blocks but zero text stays at 0.0 (low) instead of
+            # being inflated to the base floor.
+            if non_empty:
+                content_ratio = non_empty / len(blocks)
+                confidence = min(
+                    app_settings.normalizer_confidence_cap,
+                    app_settings.normalizer_confidence_base
+                    + app_settings.normalizer_confidence_content_weight * content_ratio
+                    + (app_settings.normalizer_confidence_table_bonus if tables else 0.0),
+                )
 
         pages.append(
             PageParseResult(
-                page_index=idx,
+                page_index=page_index,
                 blocks=blocks,
                 tables=tables,
                 reading_order=_reading_order(blocks),
@@ -488,9 +587,8 @@ def normalize_engine_output(raw: object, source_engine: str) -> tuple[list[PageP
             )
         )
 
-    # Some PaddleOCR-VL variants expose table structure only in markdown html blocks.
-    if markdown and pages and not any(page.tables for page in pages):
-        md_tables = _extract_tables_from_markdown(markdown, page_index=0)
+    if markdown and len(pages) == 1 and not pages[0].tables:
+        md_tables = _extract_tables_from_markdown(markdown, page_index=pages[0].page_index)
         if md_tables:
             pages[0] = pages[0].model_copy(update={"tables": md_tables})
 

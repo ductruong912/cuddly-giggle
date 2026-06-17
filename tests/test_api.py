@@ -1,127 +1,66 @@
+"""API contract for POST /v1/doc/parse, with a stub orchestrator (no real OCR)."""
 from __future__ import annotations
 
-from pathlib import Path
-
+import pytest
 from fastapi.testclient import TestClient
 
-from app.api.dependencies import get_orchestrator
-from app.application import app
-from app.domain.schemas import ParseDecision, ParseResponse, QualityFlags
+import app.api.routes as routes
+from app.api.application import app
+from app.api.routes import get_orchestrator
+from app.domain.schemas import ParseDecision, ParseResponse
 
 
 class StubOrchestrator:
-    def parse(self, input_path: str, options):  # type: ignore[no-untyped-def]
+    def __init__(self, markdown: str | None) -> None:
+        self._markdown = markdown
+
+    def parse(self, input_path, options) -> ParseResponse:
         return ParseResponse(
             request_id="req_test",
-            decision=ParseDecision(status="pass", reason="ok"),
-            pages=[],
-            blocks=[],
-            tables=[],
-            reading_order=[],
-            quality_flags=QualityFlags(),
-            markdown="# Parsed",
-            review_queued=False,
-            review_reason=None,
+            decision=ParseDecision(reason="stubbed"),
+            pages=[], blocks=[], tables=[], reading_order=[],
+            markdown=self._markdown,
         )
 
 
-def test_parse_api_contract(monkeypatch) -> None:
-    app.dependency_overrides[get_orchestrator] = lambda: StubOrchestrator()
-    client = TestClient(app)
+@pytest.fixture
+def client(monkeypatch):
+    # Never touch disk for artifact saving during API tests.
+    monkeypatch.setattr(routes, "save_parse_artifacts", lambda **kwargs: [])
 
-    try:
-        resp = client.post(
-            "/v1/doc/parse",
-            files={"file": ("sample.png", b"not-real-image", "image/png")},
-            data={"lang_hint": "vi", "output_format": "both", "enable_fallback": "true"},
-        )
-    finally:
-        app.dependency_overrides.clear()
+    def _make(markdown="# hello"):
+        app.dependency_overrides[get_orchestrator] = lambda: StubOrchestrator(markdown)
+        return TestClient(app)
+
+    yield _make
+    app.dependency_overrides.clear()
+
+
+def test_healthz_ok():
+    assert TestClient(app).get("/healthz").json() == {"status": "ok"}
+
+
+def test_parse_returns_markdown(client):
+    resp = client("# hello").post(
+        "/v1/doc/parse",
+        files={"file": ("doc.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
     assert resp.status_code == 200
-    body = resp.json()
-    assert "request_id" in body
-    assert body["decision"]["status"] == "pass"
-    assert "pages" in body
+    assert resp.headers["content-type"].startswith("text/markdown")
+    assert resp.text == "# hello"
 
 
-def test_parse_api_auto_save_output(monkeypatch) -> None:
-    app.dependency_overrides[get_orchestrator] = lambda: StubOrchestrator()
-    client = TestClient(app)
-
-    try:
-        resp = client.post(
-            "/v1/doc/parse",
-            files={"file": ("sample.png", b"not-real-image", "image/png")},
-            data={
-                "lang_hint": "vi",
-                "output_format": "both",
-                "enable_fallback": "false",
-                "output_basename": "sample_doc",
-            },
-        )
-    finally:
-        app.dependency_overrides.clear()
-    assert resp.status_code == 200
-    body = resp.json()
-    assert "saved_files" in body
-    assert len(body["saved_files"]) >= 1
-    for p in body["saved_files"]:
-        path_obj = Path(p)
-        assert path_obj.exists()
-        path_obj.unlink(missing_ok=True)
+def test_unsupported_extension_is_rejected(client):
+    resp = client().post(
+        "/v1/doc/parse",
+        files={"file": ("note.txt", b"hello", "text/plain")},
+    )
+    assert resp.status_code == 400
 
 
-def test_parse_api_auto_save_output_markdown_only(monkeypatch) -> None:
-    app.dependency_overrides[get_orchestrator] = lambda: StubOrchestrator()
-    client = TestClient(app)
-
-    try:
-        resp = client.post(
-            "/v1/doc/parse",
-            files={"file": ("sample.png", b"not-real-image", "image/png")},
-            data={
-                "lang_hint": "vi",
-                "output_format": "markdown",
-                "enable_fallback": "false",
-                "output_basename": "sample_doc_md",
-            },
-        )
-    finally:
-        app.dependency_overrides.clear()
-    assert resp.status_code == 200
-    body = resp.json()
-    saved = body["saved_files"]
-    assert len(saved) == 1
-    assert saved[0].endswith(".md")
-    for p in saved:
-        path_obj = Path(p)
-        assert path_obj.exists()
-        path_obj.unlink(missing_ok=True)
-
-
-def test_parse_api_auto_save_output_json_only(monkeypatch) -> None:
-    app.dependency_overrides[get_orchestrator] = lambda: StubOrchestrator()
-    client = TestClient(app)
-
-    try:
-        resp = client.post(
-            "/v1/doc/parse",
-            files={"file": ("sample.png", b"not-real-image", "image/png")},
-            data={
-                "lang_hint": "vi",
-                "output_format": "json",
-                "enable_fallback": "false",
-                "output_basename": "sample_doc_json",
-            },
-        )
-    finally:
-        app.dependency_overrides.clear()
-    assert resp.status_code == 200
-    body = resp.json()
-    saved = body["saved_files"]
-    assert len(saved) == 1
-    assert saved[0].endswith(".json")
-    for p in saved:
-        path_obj = Path(p)
-        assert path_obj.exists()
-        path_obj.unlink(missing_ok=True)
+def test_empty_markdown_is_server_error(client):
+    resp = client(markdown=None).post(
+        "/v1/doc/parse",
+        files={"file": ("doc.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+    assert resp.status_code == 500

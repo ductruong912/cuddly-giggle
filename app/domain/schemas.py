@@ -1,20 +1,13 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 
 class LangHint(str, Enum):
-    vi = "vi"
     auto = "auto"
-
-
-class OutputFormat(str, Enum):
-    json = "json"
-    markdown = "markdown"
-    both = "both"
 
 
 class BlockType(str, Enum):
@@ -65,20 +58,10 @@ class PageParseResult(BaseModel):
     tables: list[Table] = Field(default_factory=list)
     reading_order: list[str] = Field(default_factory=list)
     confidence: float = 0.0
-    quality_score: float = 0.0
     source_engine: str = ""
 
 
-class QualityFlags(BaseModel):
-    skew: bool = False
-    blur: bool = False
-    illumination_issue: bool = False
-    screen_photo: bool = False
-    low_resolution: bool = False
-
-
 class ParseDecision(BaseModel):
-    status: Literal["pass", "borderline", "fail"]
     reason: str
 
 
@@ -89,14 +72,9 @@ class ParseResponse(BaseModel):
     blocks: list[Block]
     tables: list[Table]
     reading_order: list[str]
-    quality_flags: QualityFlags
     markdown: str | None = None
-    review_queued: bool = False
-    review_reason: str | None = None
-    saved_files: list[str] = Field(default_factory=list)
 
 
 class ParseOptions(BaseModel):
     lang_hint: LangHint = LangHint.auto
-    output_format: OutputFormat = OutputFormat.both
     enable_fallback: bool = True

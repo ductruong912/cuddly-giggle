@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from app.eval.metrics import cer, exact_match, mean, table_cell_f1, wer
+from scripts.metrics import cer, exact_match, mean, table_cell_f1, wer
 
 
 def load_json(path: Path) -> dict[str, Any]:

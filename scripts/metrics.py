@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 import math
 import re
 
 
-def _levenshtein(a: str, b: str) -> int:
+def _levenshtein(a: Sequence, b: Sequence) -> int:
     if a == b:
         return 0
     if not a:
@@ -36,7 +38,7 @@ def wer(pred: str, gt: str) -> float:
     pred_words = pred.split()
     if not gt_words:
         return 0.0 if not pred_words else 1.0
-    return _levenshtein(" ".join(pred_words), " ".join(gt_words)) / len(gt_words)
+    return _levenshtein(pred_words, gt_words) / len(gt_words)
 
 
 @dataclass
@@ -57,11 +59,11 @@ def prf(tp: int, fp: int, fn: int) -> PrecisionRecallF1:
 
 
 def table_cell_f1(pred_cells: list[str], gt_cells: list[str]) -> PrecisionRecallF1:
-    pred_set = {normalize_cell_text(v) for v in pred_cells if v.strip()}
-    gt_set = {normalize_cell_text(v) for v in gt_cells if v.strip()}
-    tp = len(pred_set & gt_set)
-    fp = len(pred_set - gt_set)
-    fn = len(gt_set - pred_set)
+    pred_counts = Counter(normalize_cell_text(v) for v in pred_cells if v.strip())
+    gt_counts = Counter(normalize_cell_text(v) for v in gt_cells if v.strip())
+    tp = sum((pred_counts & gt_counts).values())
+    fp = sum((pred_counts - gt_counts).values())
+    fn = sum((gt_counts - pred_counts).values())
     return prf(tp, fp, fn)
 
 

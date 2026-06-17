@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import itertools
 import logging
+from pathlib import Path
+import threading
 import time
 import uuid
 
 from app.core.config import Settings, settings
-from app.domain.schemas import Block, OutputFormat, PageParseResult, ParseDecision, ParseOptions, ParseResponse, Table
-from app.services.engines.base import EngineParseResult, ParseEngine
-from app.services.engines.paddleocr_vl import PaddleOCRVLEngine
-from app.services.engines.pp_structure_v3 import PPStructureV3Engine
-from app.services.merge import merge_results
-from app.services.quality import QualityAssessment, assess_document_quality
-from app.services.qwen_verifier import QwenVerifier
-from app.services.vietnamese_postprocess import postprocess_blocks, postprocess_markdown, postprocess_tables
+from app.domain.schemas import ParseDecision, ParseOptions, ParseResponse
+from app.engines.base import EngineParseResult, ParseEngine
+from app.engines.native import (
+    ExcelTextEngine,
+    PdfTextEngine,
+    WordTextEngine,
+    is_pdf_text_result_usable,
+)
+from app.engines.registry import create_engine
+from app.services.output import filter_tables_markdown
 
 
 logger = logging.getLogger(__name__)
@@ -25,193 +29,162 @@ class ParseOrchestrator:
         app_settings: Settings = settings,
         primary_engine: ParseEngine | None = None,
         fallback_engine: ParseEngine | None = None,
+        pdf_text_engine: ParseEngine | None = None,
+        word_text_engine: ParseEngine | None = None,
+        excel_text_engine: ParseEngine | None = None,
     ) -> None:
         self.settings = app_settings
-        self.primary_engine = primary_engine or PaddleOCRVLEngine(app_settings=self.settings)
-        self.fallback_engine = fallback_engine or PPStructureV3Engine()
-        self.verifier = None
-        if self.settings.qwen_verifier_enabled:
-            self.verifier = QwenVerifier(
-                base_url=self.settings.qwen_verifier_base_url,
-                model=self.settings.qwen_verifier_model,
-                api_key=self.settings.qwen_verifier_api_key,
-            )
+        self.primary_engine = primary_engine or create_engine(self.settings.primary_engine, self.settings)
+        self._fallback_engine = fallback_engine
+        self._fallback_engine_lock = threading.Lock()
+        self.pdf_text_engine = pdf_text_engine or PdfTextEngine(self.settings)
+        self.word_text_engine = word_text_engine or WordTextEngine(self.settings)
+        self.excel_text_engine = excel_text_engine or ExcelTextEngine(self.settings)
 
     def parse(self, input_path: str, options: ParseOptions) -> ParseResponse:
         total_start = time.perf_counter()
         request_id = f"req_{uuid.uuid4().hex[:12]}"
-        quality_elapsed = 0.0
         primary_elapsed = 0.0
         fallback_elapsed = 0.0
-        merge_elapsed = 0.0
-        postprocess_elapsed = 0.0
+        pdf_text_elapsed = 0.0
+        word_text_elapsed = 0.0
+        excel_text_elapsed = 0.0
 
-        stage_start = time.perf_counter()
-        quality = assess_document_quality(input_path)
-        quality_elapsed = time.perf_counter() - stage_start
+        if self._should_try_word_text(input_path):
+            stage_start = time.perf_counter()
+            word_text = self.word_text_engine.parse(input_path, options.lang_hint.value)
+            word_text_elapsed = time.perf_counter() - stage_start
+            decision = self._build_decision()
+            response = self._build_response(request_id, word_text, options, decision)
+            logger.info(
+                "parse timings request_id=%s word_text=%.3fs total=%.3fs word_text_score=%.3f",
+                request_id,
+                word_text_elapsed,
+                time.perf_counter() - total_start,
+                word_text.page_confidence,
+            )
+            return response
 
-        stage_start = time.perf_counter()
-        primary = self.primary_engine.parse(input_path, options.lang_hint.value)
-        primary_elapsed = time.perf_counter() - stage_start
-        primary_score = primary.page_confidence
+        if self._should_try_excel_text(input_path):
+            stage_start = time.perf_counter()
+            excel_text = self.excel_text_engine.parse(input_path, options.lang_hint.value)
+            excel_text_elapsed = time.perf_counter() - stage_start
+            decision = self._build_decision()
+            response = self._build_response(request_id, excel_text, options, decision)
+            logger.info(
+                "parse timings request_id=%s excel_text=%.3fs total=%.3fs excel_text_score=%.3f",
+                request_id,
+                excel_text_elapsed,
+                time.perf_counter() - total_start,
+                excel_text.page_confidence,
+            )
+            return response
 
-        fallback: EngineParseResult | None = None
-        fallback_error: str | None = None
-        if options.enable_fallback and self._needs_fallback(primary_score, quality):
+        if self._should_try_pdf_text(input_path):
             try:
                 stage_start = time.perf_counter()
-                fallback = self.fallback_engine.parse(input_path, options.lang_hint.value)
+                pdf_text = self.pdf_text_engine.parse(input_path, options.lang_hint.value)
+                pdf_text_elapsed = time.perf_counter() - stage_start
+                if is_pdf_text_result_usable(pdf_text):
+                    decision = ParseDecision(reason="PDF text layer parsed without OCR.")
+                    response = self._build_response(request_id, pdf_text, options, decision)
+                    logger.info(
+                        "parse timings request_id=%s pdf_text=%.3fs total=%.3fs pdf_text_score=%.3f",
+                        request_id,
+                        pdf_text_elapsed,
+                        time.perf_counter() - total_start,
+                        pdf_text.page_confidence,
+                    )
+                    return response
+                logger.info("pdf text parser result too sparse; falling back to OCR")
+            except Exception as exc:
+                pdf_text_elapsed = time.perf_counter() - stage_start
+                logger.info("pdf text parser skipped; falling back to OCR: %s", self._compact_error(str(exc)))
+
+        try:
+            stage_start = time.perf_counter()
+            result = self.primary_engine.parse(input_path, options.lang_hint.value)
+            primary_elapsed = time.perf_counter() - stage_start
+            primary_score = result.page_confidence
+            decision = self._build_decision()
+        except Exception as exc:
+            primary_elapsed = time.perf_counter() - stage_start
+            primary_score = 0.0
+            primary_error = self._compact_error(str(exc))
+            if not options.enable_fallback:
+                raise
+            logger.info("primary engine failed; trying fallback: %s", primary_error)
+            try:
+                stage_start = time.perf_counter()
+                result = self._get_fallback_engine().parse(input_path, options.lang_hint.value)
                 fallback_elapsed = time.perf_counter() - stage_start
-            except Exception as exc:  # pragma: no cover - exercised via orchestrator tests
+            except Exception as fallback_exc:
                 fallback_elapsed = time.perf_counter() - stage_start
-                fallback = None
-                fallback_error = self._compact_error(str(exc))
+                fallback_error = self._compact_error(str(fallback_exc))
+                raise RuntimeError(
+                    f"Primary engine failed: {primary_error}; fallback engine failed: {fallback_error}"
+                ) from fallback_exc
+            decision = self._build_decision(f"Parse completed via fallback after primary failed: {primary_error}")
 
-        stage_start = time.perf_counter()
-        merged = merge_results(primary, fallback)
-        merge_elapsed = time.perf_counter() - stage_start
+        response = self._build_response(request_id, result, options, decision)
+        logger.info(
+            "parse timings request_id=%s pdf_text=%.3fs primary=%.3fs fallback=%.3fs "
+            "word_text=%.3fs excel_text=%.3fs total=%.3fs primary_score=%.3f",
+            request_id,
+            pdf_text_elapsed,
+            primary_elapsed,
+            fallback_elapsed,
+            word_text_elapsed,
+            excel_text_elapsed,
+            time.perf_counter() - total_start,
+            primary_score,
+        )
+        return response
 
-        stage_start = time.perf_counter()
-        merged = self._apply_qwen_verification_if_needed(input_path, merged)
-        merged = self._apply_postprocess(merged)
-        postprocess_elapsed = time.perf_counter() - stage_start
+    def _should_try_pdf_text(self, input_path: str) -> bool:
+        return self.settings.pdf_text_parse_enabled and Path(input_path).suffix.lower() == ".pdf"
 
-        decision = self._build_decision(merged.page_confidence, quality)
-        if fallback_error:
-            decision = decision.model_copy(
-                update={
-                    "reason": f"{decision.reason} Fallback skipped: {fallback_error}",
-                }
-            )
-        pages = self._attach_quality_to_pages(merged.pages, quality)
+    def _should_try_word_text(self, input_path: str) -> bool:
+        return Path(input_path).suffix.lower() in {".doc", ".docx"}
+
+    def _should_try_excel_text(self, input_path: str) -> bool:
+        return Path(input_path).suffix.lower() in {".xls", ".xlsx", ".xlsm"}
+
+    def _build_response(
+        self,
+        request_id: str,
+        result: EngineParseResult,
+        options: ParseOptions,
+        decision: ParseDecision,
+    ) -> ParseResponse:
+        pages = result.pages
         blocks = list(itertools.chain.from_iterable(page.blocks for page in pages))
         tables = list(itertools.chain.from_iterable(page.tables for page in pages))
         reading_order = list(itertools.chain.from_iterable(page.reading_order for page in pages))
 
-        markdown = merged.markdown if options.output_format in {OutputFormat.markdown, OutputFormat.both} else None
-        if options.output_format == OutputFormat.json:
-            markdown = None
+        markdown = result.markdown
+        if self.settings.table_only_output:
+            markdown = filter_tables_markdown(markdown)
 
-        review_queued = decision.status == "fail"
-        review_reason = decision.reason if review_queued else None
-
-        response = ParseResponse(
+        return ParseResponse(
             request_id=request_id,
             decision=decision,
             pages=pages,
             blocks=blocks,
             tables=tables,
             reading_order=reading_order,
-            quality_flags=quality.flags,
             markdown=markdown,
-            review_queued=review_queued,
-            review_reason=review_reason,
-        )
-        logger.info(
-            "parse timings request_id=%s quality=%.3fs primary=%.3fs fallback=%.3fs "
-            "merge=%.3fs postprocess=%.3fs total=%.3fs primary_score=%.3f quality_score=%.3f",
-            request_id,
-            quality_elapsed,
-            primary_elapsed,
-            fallback_elapsed,
-            merge_elapsed,
-            postprocess_elapsed,
-            time.perf_counter() - total_start,
-            primary_score,
-            quality.score,
-        )
-        return response
-
-    def _needs_fallback(self, primary_score: float, quality: QualityAssessment) -> bool:
-        if primary_score < self.settings.confidence_pass_threshold:
-            return True
-        if quality.score < self.settings.quality_fail_threshold:
-            return True
-        return False
-
-    def _build_decision(self, score: float, quality: QualityAssessment) -> ParseDecision:
-        if score >= self.settings.confidence_pass_threshold and quality.score >= self.settings.quality_fail_threshold:
-            return ParseDecision(status="pass", reason="High confidence parse result.")
-        if score >= self.settings.confidence_borderline_threshold:
-            return ParseDecision(status="borderline", reason="Moderate confidence; fallback or review recommended.")
-        return ParseDecision(status="fail", reason="Low confidence parse; queued for manual review.")
-
-    def _apply_postprocess(self, result: EngineParseResult) -> EngineParseResult:
-        pages: list[PageParseResult] = []
-        for page in result.pages:
-            processed_blocks = postprocess_blocks(page.blocks)
-            processed_tables = postprocess_tables(page.tables)
-            updated_conf = page.confidence
-            if processed_blocks:
-                scored = [b.confidence for b in processed_blocks if b.confidence > 0.0]
-                if scored:
-                    updated_conf = sum(scored) / len(scored)
-            pages.append(
-                page.model_copy(
-                    update={
-                        "blocks": processed_blocks,
-                        "tables": processed_tables,
-                        "confidence": updated_conf,
-                    }
-                )
-            )
-        return EngineParseResult(
-            engine_name=result.engine_name,
-            pages=pages,
-            markdown=postprocess_markdown(result.markdown),
-            raw=result.raw,
-        )
-
-    def _apply_qwen_verification_if_needed(self, input_path: str, result: EngineParseResult) -> EngineParseResult:
-        if self.verifier is None:
-            return result
-
-        pages = []
-        for page in result.pages:
-            if page.confidence >= self.settings.confidence_borderline_threshold:
-                pages.append(page)
-                continue
-            patch = self.verifier.verify_page(input_path, page)
-            if not patch or "corrections" not in patch:
-                pages.append(page)
-                continue
-            pages.append(self._patch_page(page, patch["corrections"]))
-
-        return EngineParseResult(
-            engine_name=result.engine_name,
-            pages=pages,
-            markdown=result.markdown,
-            raw=result.raw,
         )
 
     @staticmethod
-    def _patch_page(page: PageParseResult, corrections: object) -> PageParseResult:
-        if not isinstance(corrections, list):
-            return page
-        blocks = page.blocks
-        by_id = {b.block_id: b for b in blocks}
-        for corr in corrections:
-            if not isinstance(corr, dict):
-                continue
-            block_id = str(corr.get("block_id", "")).strip()
-            content = str(corr.get("content", "")).strip()
-            conf = corr.get("confidence")
-            if not block_id or not content or block_id not in by_id:
-                continue
-            old = by_id[block_id]
-            new_conf = old.confidence
-            if isinstance(conf, (float, int)):
-                new_conf = max(new_conf, float(conf))
-            by_id[block_id] = old.model_copy(update={"content": content, "confidence": new_conf})
-        new_blocks = [by_id[b.block_id] for b in blocks]
-        new_conf = page.confidence
-        if new_blocks:
-            new_conf = sum(b.confidence for b in new_blocks) / len(new_blocks)
-        return page.model_copy(update={"blocks": new_blocks, "confidence": new_conf})
+    def _build_decision(reason: str = "Parse completed.") -> ParseDecision:
+        return ParseDecision(reason=reason)
 
-    @staticmethod
-    def _attach_quality_to_pages(pages: list[PageParseResult], quality: QualityAssessment) -> list[PageParseResult]:
-        return [page.model_copy(update={"quality_score": quality.score}) for page in pages]
+    def _get_fallback_engine(self) -> ParseEngine:
+        with self._fallback_engine_lock:
+            if self._fallback_engine is None:
+                self._fallback_engine = create_engine(self.settings.fallback_engine, self.settings)
+            return self._fallback_engine
 
     @staticmethod
     def _compact_error(message: str, max_len: int = 220) -> str:

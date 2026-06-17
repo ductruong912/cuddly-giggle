@@ -1,115 +1,100 @@
+"""Orchestrator routing: which engine handles which input, and fallback behaviour.
+
+All engines are fakes injected through the constructor, so no real OCR / GPU runs.
+"""
 from __future__ import annotations
 
-from app.core.config import Settings
-from app.domain.schemas import Block, BlockType, PageParseResult, ParseOptions, Point
-from app.services.engines.base import EngineParseResult, ParseEngine
+import pytest
+
+from app.core.config import settings
+from app.domain.schemas import ParseOptions
 from app.services.orchestrator import ParseOrchestrator
 
 
-class StubEngine(ParseEngine):
-    def __init__(self, name: str, confidence: float) -> None:
-        self.name = name
-        self._confidence = confidence
-
-    def parse(self, input_path: str, lang_hint: str = "auto") -> EngineParseResult:
-        page = PageParseResult(
-            page_index=0,
-            blocks=[
-                Block(
-                    block_id=f"b_{self.name}",
-                    type=BlockType.text,
-                    content="ngay 12-01-2026",
-                    bbox=[Point(x=0, y=0)],
-                    confidence=self._confidence,
-                    page_index=0,
-                    source_engine=self.name,
-                )
-            ],
-            tables=[],
-            reading_order=[f"b_{self.name}"],
-            confidence=self._confidence,
-            source_engine=self.name,
-        )
-        return EngineParseResult(engine_name=self.name, pages=[page], markdown="hello")
+def _orchestrator(**engines):
+    return ParseOrchestrator(app_settings=settings, **engines)
 
 
-class FailingEngine(ParseEngine):
-    name = "failing"
+def test_docx_routes_to_word_engine(make_fake_engine):
+    word = make_fake_engine("word_text")
+    primary = make_fake_engine("primary")
+    orch = _orchestrator(word_text_engine=word, primary_engine=primary)
 
-    def parse(self, input_path: str, lang_hint: str = "auto") -> EngineParseResult:
-        raise RuntimeError("fallback engine crashed")
+    resp = orch.parse("file.docx", ParseOptions())
 
-
-class ZeroScoreBlocksHighPageEngine(ParseEngine):
-    name = "primary_high_page_conf"
-
-    def parse(self, input_path: str, lang_hint: str = "auto") -> EngineParseResult:
-        page = PageParseResult(
-            page_index=0,
-            blocks=[
-                Block(
-                    block_id="b_primary",
-                    type=BlockType.text,
-                    content="Noi dung hop le",
-                    bbox=[Point(x=0, y=0)],
-                    confidence=0.0,
-                    page_index=0,
-                    source_engine=self.name,
-                )
-            ],
-            tables=[],
-            reading_order=["b_primary"],
-            confidence=0.9,
-            source_engine=self.name,
-        )
-        return EngineParseResult(engine_name=self.name, pages=[page], markdown="ok")
+    assert word.called and not primary.called
+    assert resp.markdown == "# markdown"
 
 
-def test_orchestrator_fallback_path() -> None:
-    settings = Settings(
-        confidence_pass_threshold=0.9,
-        confidence_borderline_threshold=0.6,
-        quality_fail_threshold=0.5,
+def test_xlsx_routes_to_excel_engine(make_fake_engine):
+    excel = make_fake_engine("excel_text")
+    primary = make_fake_engine("primary")
+    orch = _orchestrator(excel_text_engine=excel, primary_engine=primary)
+
+    orch.parse("sheet.xlsx", ParseOptions())
+
+    assert excel.called and not primary.called
+
+
+def test_image_routes_to_primary_engine(make_fake_engine):
+    primary = make_fake_engine("primary")
+    word = make_fake_engine("word_text")
+    orch = _orchestrator(primary_engine=primary, word_text_engine=word)
+
+    orch.parse("scan.png", ParseOptions())
+
+    assert primary.called and not word.called
+
+
+def test_pdf_with_usable_text_skips_ocr(make_fake_engine, make_engine_result):
+    pdf_text = make_fake_engine("pdf_text", result=make_engine_result("pdf_text", usable_text=True))
+    primary = make_fake_engine("primary")
+    orch = _orchestrator(pdf_text_engine=pdf_text, primary_engine=primary)
+
+    resp = orch.parse("doc.pdf", ParseOptions())
+
+    assert pdf_text.called and not primary.called
+    assert "PDF text layer" in resp.decision.reason
+
+
+def test_pdf_with_unusable_text_falls_to_ocr(make_fake_engine, make_engine_result):
+    pdf_text = make_fake_engine(
+        "pdf_text", result=make_engine_result("pdf_text", usable_text=False, markdown=None)
     )
-    orchestrator = ParseOrchestrator(
-        app_settings=settings,
-        primary_engine=StubEngine("primary", 0.55),
-        fallback_engine=StubEngine("fallback", 0.8),
-    )
-    response = orchestrator.parse("tests/assets/doc.png", ParseOptions(enable_fallback=True))
-    assert response.decision.status in {"borderline", "pass"}
-    assert len(response.pages) == 1
-    assert response.pages[0].source_engine in {"fallback", "primary+fallback"}
+    primary = make_fake_engine("primary")
+    orch = _orchestrator(pdf_text_engine=pdf_text, primary_engine=primary)
+
+    orch.parse("scanned.pdf", ParseOptions())
+
+    assert pdf_text.called and primary.called
 
 
-def test_orchestrator_fallback_failure_does_not_abort() -> None:
-    settings = Settings(
-        confidence_pass_threshold=0.9,
-        confidence_borderline_threshold=0.6,
-        quality_fail_threshold=0.5,
-    )
-    orchestrator = ParseOrchestrator(
-        app_settings=settings,
-        primary_engine=StubEngine("primary", 0.55),
-        fallback_engine=FailingEngine(),
-    )
-    response = orchestrator.parse("tests/assets/doc.png", ParseOptions(enable_fallback=True))
-    assert len(response.pages) == 1
-    assert response.pages[0].source_engine == "primary"
-    assert "Fallback skipped:" in response.decision.reason
+def test_pdf_text_engine_error_falls_to_ocr(make_fake_engine):
+    pdf_text = make_fake_engine("pdf_text", exc=RuntimeError("PyMuPDF blew up"))
+    primary = make_fake_engine("primary")
+    orch = _orchestrator(pdf_text_engine=pdf_text, primary_engine=primary)
+
+    orch.parse("doc.pdf", ParseOptions())
+
+    assert pdf_text.called and primary.called
 
 
-def test_orchestrator_preserves_page_confidence_when_block_scores_are_zero() -> None:
-    settings = Settings(
-        confidence_pass_threshold=0.84,
-        confidence_borderline_threshold=0.68,
-        quality_fail_threshold=0.5,
-    )
-    orchestrator = ParseOrchestrator(
-        app_settings=settings,
-        primary_engine=ZeroScoreBlocksHighPageEngine(),
-        fallback_engine=FailingEngine(),
-    )
-    response = orchestrator.parse("tests/assets/doc.png", ParseOptions(enable_fallback=True))
-    assert response.decision.status == "pass"
-    assert response.pages[0].confidence >= 0.84
+def test_primary_failure_uses_fallback_when_enabled(make_fake_engine):
+    primary = make_fake_engine("primary", exc=RuntimeError("engine down"))
+    fallback = make_fake_engine("fallback")
+    orch = _orchestrator(primary_engine=primary, fallback_engine=fallback)
+
+    resp = orch.parse("scan.png", ParseOptions(enable_fallback=True))
+
+    assert primary.called and fallback.called
+    assert "fallback" in resp.decision.reason.lower()
+
+
+def test_primary_failure_raises_when_fallback_disabled(make_fake_engine):
+    primary = make_fake_engine("primary", exc=RuntimeError("engine down"))
+    fallback = make_fake_engine("fallback")
+    orch = _orchestrator(primary_engine=primary, fallback_engine=fallback)
+
+    with pytest.raises(RuntimeError):
+        orch.parse("scan.png", ParseOptions(enable_fallback=False))
+    assert not fallback.called
