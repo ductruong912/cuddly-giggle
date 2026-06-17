@@ -25,7 +25,7 @@ logger = logging.getLogger("app")
 
 HF_GGUF_REPO = "https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6-GGUF/resolve/main"
 LLAMA_CPP_LATEST_RELEASE_API = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
-DEFAULT_LLAMA_CPP_FLAVOR = "win-cuda-cu13.3-x64"
+DEFAULT_LLAMA_CPP_FLAVOR = "win-cuda-12.4-x64"
 DEFAULT_MODEL_BYTES = 800 * 1024 * 1024
 DEFAULT_HTTP_TIMEOUT_SECONDS = 60.0
 
@@ -242,10 +242,9 @@ def _configured_release_urls(config: LlamaBootstrapConfig) -> list[str]:
 
 
 def _cuda_runtime_suffix(flavor: str) -> str:
-    marker = "win-cuda-cu"
-    if marker not in flavor:
+    if "win-cuda-" not in flavor:
         return ""
-    return f"cudart-llama-bin-{flavor.replace(marker, 'win-cuda-')}.zip"
+    return f"cudart-llama-bin-{flavor}.zip"
 
 
 # =====================================================================================
@@ -274,8 +273,6 @@ class LlamaServerConfig:
     threads: int = 4
     threads_batch: int = 4
     temp: float = 0.0
-    batch_size: int = 2048
-    ubatch_size: int = 512
     log_verbosity: int = 1
     startup_timeout_seconds: float = 120.0
 
@@ -310,10 +307,6 @@ def build_llama_server_command(config: LlamaServerConfig) -> list[str]:
             str(config.threads_batch),
             "--temp",
             _format_float(config.temp),
-            "--batch-size",
-            str(config.batch_size),
-            "--ubatch-size",
-            str(config.ubatch_size),
             "-lv",
             str(config.log_verbosity),
         ]

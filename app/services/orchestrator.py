@@ -9,14 +9,14 @@ import uuid
 
 from app.core.config import Settings, settings
 from app.domain.schemas import ParseDecision, ParseOptions, ParseResponse
-from app.services.engines.base import EngineParseResult, ParseEngine
-from app.services.engines.native import (
+from app.engines.base import EngineParseResult, ParseEngine
+from app.engines.native import (
     ExcelTextEngine,
     PdfTextEngine,
     WordTextEngine,
     is_pdf_text_result_usable,
 )
-from app.services.engines.registry import create_engine
+from app.engines.registry import create_engine
 from app.services.output import filter_tables_markdown
 
 

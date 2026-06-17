@@ -72,7 +72,7 @@ class Settings:
     llama_cpp_model_file: str = os.getenv("LLAMA_CPP_MODEL_FILE", "PaddleOCR-VL-1.6-GGUF.gguf").strip()
     llama_cpp_mmproj_file: str = os.getenv("LLAMA_CPP_MMPROJ_FILE", "PaddleOCR-VL-1.6-GGUF-mmproj.gguf").strip()
     llama_cpp_release_url: str = os.getenv("LLAMA_CPP_RELEASE_URL", "").strip()
-    llama_cpp_release_flavor: str = os.getenv("LLAMA_CPP_RELEASE_FLAVOR", "win-cuda-cu13.3-x64").strip()
+    llama_cpp_release_flavor: str = os.getenv("LLAMA_CPP_RELEASE_FLAVOR", "win-cuda-12.4-x64").strip()
 
     # --- llama.cpp server autostart ---
     llama_server_autostart: bool = _get_bool("LLAMA_SERVER_AUTOSTART", True)
@@ -86,8 +86,6 @@ class Settings:
     llama_server_threads: int = _get_int("LLAMA_SERVER_THREADS", 4)
     llama_server_threads_batch: int = _get_int("LLAMA_SERVER_THREADS_BATCH", 4)
     llama_server_temp: float = _get_float("LLAMA_SERVER_TEMP", 0.0)
-    llama_server_batch_size: int = _get_int("LLAMA_SERVER_BATCH_SIZE", 2048)
-    llama_server_ubatch_size: int = _get_int("LLAMA_SERVER_UBATCH_SIZE", 512)
     llama_server_log_verbosity: int = _get_int("LLAMA_SERVER_LOG_VERBOSITY", 1)
     llama_server_startup_timeout_seconds: float = _get_float("LLAMA_SERVER_STARTUP_TIMEOUT_SECONDS", 120.0)
 
@@ -162,16 +160,22 @@ def _prepend_windows_cuda_paths() -> None:
     if os.name != "nt":
         return
 
+    # NVIDIA CUDA wheels ship DLLs under nvidia/<component>/bin (cu12 layout) or
+    # nvidia/<component>/bin/x86_64 (cu13 layout). Scan every component and keep
+    # only bin dirs that actually contain DLLs, independent of the CUDA major.
     candidates: list[Path] = []
     for base in site.getsitepackages():
-        root = Path(base) / "nvidia"
-        candidates.extend([
-            root / "cu13" / "bin",
-            root / "cu13" / "bin" / "x86_64",
-            root / "cudnn" / "bin",
-        ])
+        nvidia_root = Path(base) / "nvidia"
+        if not nvidia_root.is_dir():
+            continue
+        for component in sorted(nvidia_root.iterdir()):
+            if not component.is_dir():
+                continue
+            for bin_dir in (component / "bin", component / "bin" / "x86_64"):
+                if bin_dir.is_dir() and any(bin_dir.glob("*.dll")):
+                    candidates.append(bin_dir)
 
-    existing = [str(p) for p in candidates if p.exists()]
+    existing = [str(p) for p in candidates]
     if not existing:
         return
 

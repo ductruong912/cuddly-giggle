@@ -45,8 +45,7 @@ PP-StructureV3) require an NVIDIA GPU.
 ```text
 cuddly-giggle/
 ├── main.py                       # Entrypoint: bootstraps runtime, starts the API
-├── requirements.txt              # Base Python dependencies
-├── requirements-gpu-cu130.txt    # Base deps + PaddlePaddle GPU (CUDA 13.0)
+├── requirements.txt              # Python dependencies (incl. PaddlePaddle GPU)
 ├── .env.example                  # Sample configuration — copy to .env
 ├── app/
 │   ├── api/
@@ -56,16 +55,16 @@ cuddly-giggle/
 │   │   └── config.py             # Settings + environment bootstrap
 │   ├── domain/
 │   │   └── schemas.py            # Pydantic models
-│   └── services/
-│       ├── orchestrator.py       # Per-file-type engine selection + fallback
-│       ├── output.py             # Markdown table filter + artifact writing
-│       ├── llama.py              # llama.cpp bootstrap + server control
-│       └── engines/
-│           ├── base.py           # Engine interface
-│           ├── registry.py       # Config-driven engine factory
-│           ├── native.py         # PDF / Word / Excel text-layer parsers
-│           ├── paddle.py         # PaddleOCR-VL + PP-StructureV3 adapters
-│           └── normalizer.py     # Normalizes engine output to the page schema
+│   ├── services/
+│   │   ├── orchestrator.py       # Per-file-type engine selection + fallback
+│   │   ├── output.py             # Markdown table filter + artifact writing
+│   │   └── llama.py              # llama.cpp bootstrap + server control
+│   └── engines/
+│       ├── base.py               # Engine interface
+│       ├── registry.py           # Config-driven engine factory
+│       ├── native.py             # PDF / Word / Excel text-layer parsers
+│       ├── paddle.py             # PaddleOCR-VL + PP-StructureV3 adapters
+│       └── normalizer.py         # Normalizes engine output to the page schema
 ├── scripts/                      # setup_llama_cpp, preflight_runtime, eval helpers
 ├── tests/                        # pytest suite
 ├── outputs/                      # Saved .md artifacts (git-ignored)
@@ -109,18 +108,17 @@ Activate it:
 
 **3. Install dependencies**
 
-The default target is **CUDA 13.0**:
-
 ```bash
 python -m pip install --upgrade pip
-python -m pip install -r requirements-gpu-cu130.txt
+python -m pip install -r requirements.txt
 ```
 
-For **CUDA 12.6**, install the base requirements and the matching PaddlePaddle wheel:
+`requirements.txt` already includes PaddlePaddle GPU (`paddlepaddle-gpu==3.3.0`) and
+the package indexes for both **CUDA 13.0** and **CUDA 12.6**. To pin a specific CUDA
+build, pass it through pip:
 
 ```bash
-python -m pip install -r requirements.txt
-python -m pip install paddlepaddle-gpu==3.3.0 --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
+python -m pip install -r requirements.txt --config-settings="--cuda=13.0"   # or 12.6
 ```
 
 **4. Create your configuration**
@@ -160,7 +158,7 @@ GGUF / llama.cpp settings (used only when `PADDLEOCR_VL_USE_GGUF=true`):
 | `LLAMA_SERVER_HOST` / `LLAMA_SERVER_PORT` | `127.0.0.1` / `8080` | llama.cpp server binding. |
 | `LLAMA_SERVER_N_GPU_LAYERS` | `40` | Layers offloaded to GPU. Lower this on small-VRAM cards. |
 | `LLAMA_CPP_DIR` / `LLAMA_CPP_MODELS_DIR` | `llama` / `models` | Local folders for binaries and GGUF models. |
-| `LLAMA_CPP_RELEASE_FLAVOR` | `win-cuda-cu13.3-x64` | llama.cpp Windows release flavor to download. |
+| `LLAMA_CPP_RELEASE_FLAVOR` | `win-cuda-12.4-x64` | llama.cpp Windows release flavor to download (e.g. `win-cuda-13.3-x64` for CUDA 13). |
 | `LLAMA_CPP_RELEASE_URL` | *(empty)* | Pin a specific llama.cpp release zip; empty = latest GitHub release. |
 
 See `.env.example` for the complete list (rasterization, native-text thresholds,
@@ -188,7 +186,7 @@ Behavior is controlled entirely through `.env`. Pick the scenario that matches t
 
 ### 1. Standard GPU machine (CUDA 13.0) — default
 
-Install `requirements-gpu-cu130.txt`, then in `.env`:
+Install `requirements.txt`, then in `.env`:
 
 ```dotenv
 OCR_DEVICE=gpu:0
@@ -199,8 +197,8 @@ Run `main.py`. This uses the full PaddleOCR-VL model directly on the GPU.
 
 ### 2. GPU machine with CUDA 12.6
 
-Install the cu126 PaddlePaddle wheel (see [Installation](#installation)). The `.env`
-is the same as scenario 1. Nothing else changes.
+Install with the cu126 build (`--config-settings="--cuda=12.6"`, see
+[Installation](#installation)). The `.env` is the same as scenario 1. Nothing else changes.
 
 ### 3. Low-VRAM GPU — GGUF backend (Windows)
 

@@ -19,7 +19,7 @@ import zipfile
 
 from app.core.config import Settings, settings
 from app.domain.schemas import Block, BlockType, PageParseResult, Point, Table, TableCell
-from app.services.engines.base import EngineParseResult, ParseEngine
+from app.engines.base import EngineParseResult, ParseEngine
 
 
 CONVERSION_TIMEOUT_SECONDS = 60

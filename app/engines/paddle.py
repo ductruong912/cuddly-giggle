@@ -11,8 +11,8 @@ from typing import Any, Callable
 
 from app.core.config import Settings, settings
 from app.domain.schemas import PageParseResult
-from app.services.engines.base import EngineParseResult, ParseEngine
-from app.services.engines.normalizer import normalize_engine_output
+from app.engines.base import EngineParseResult, ParseEngine
+from app.engines.normalizer import normalize_engine_output
 
 
 class PaddlePipelineEngine(ParseEngine):

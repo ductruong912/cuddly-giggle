@@ -47,21 +47,7 @@ def healthz() -> dict[str, str]:
 
 doc_router = APIRouter(prefix="/v1/doc", tags=["documents"])
 
-SUPPORTED_INPUT_SUFFIXES = {
-    ".pdf",
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".xlsm",
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".bmp",
-    ".webp",
-    ".tif",
-    ".tiff",
-}
+SUPPORTED_INPUT_SUFFIXES = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".xlsm", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 
 
 @doc_router.post("/parse", response_class=PlainTextResponse)
