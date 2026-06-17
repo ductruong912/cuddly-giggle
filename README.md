@@ -47,6 +47,9 @@ cuddly-giggle/
 ├── main.py                       # Entrypoint: bootstraps runtime, starts the API
 ├── requirements.txt              # Python dependencies (incl. PaddlePaddle GPU)
 ├── .env.example                  # Sample configuration — copy to .env
+├── Dockerfile                    # App image (CUDA 12.6 + Python 3.11 + LibreOffice)
+├── docker-compose.yml            # Two-container stack: app + llama.cpp server
+├── .env.docker.example           # Optional docker compose overrides — copy to .env
 ├── app/
 │   ├── api/
 │   │   ├── application.py         # FastAPI app factory (ASGI entrypoint)
@@ -245,6 +248,53 @@ PADDLE_PDX_CACHE_HOME=D:/deploy/.paddlex
 
 ---
 
+## Running with Docker
+
+A two-container stack lets another developer run the project without installing Python,
+PaddlePaddle, or LibreOffice by hand:
+
+- **`llama`** — a llama.cpp CUDA server running the PaddleOCR-VL recognition GGUF on GPU.
+- **`app`** — FastAPI + PaddleOCR-VL detection/layout on GPU, talking to `llama` over HTTP.
+
+Both share the single GPU (fits a 6 GB card, same as the bare-metal GGUF setup).
+
+### Host requirements (once per machine)
+
+- An **NVIDIA GPU** plus a driver new enough for **CUDA 12.6** (≥ 555 Linux / ≥ 560 on
+  Windows + WSL2). The host CUDA *toolkit* version is irrelevant — the container ships
+  its own. For an older driver capped at CUDA 11.8, see the override below.
+- **Docker** + **NVIDIA Container Toolkit** (on Windows: Docker Desktop with the WSL2
+  backend and GPU support enabled).
+- The git-ignored **`models/`** (`*.gguf`) and ideally **`.paddlex/`** folders copied
+  next to `docker-compose.yml`. Without `.paddlex/`, the first boot downloads the
+  detection/layout models (needs internet).
+
+### Start
+
+```bash
+docker compose up --build
+```
+
+- API: http://localhost:8000 (Swagger at `/docs`)
+- llama (debug only): http://localhost:8080
+
+### Tuning / overrides
+
+Copy `.env.docker.example` to `.env` only if you need to change a default:
+
+- `LLAMA_N_GPU_LAYERS` — VRAM offload for recognition (20 suits 6 GB; lower if llama OOMs).
+- For an **older driver (CUDA 11.8)**, switch the app image build to the cu118 wheel:
+
+  ```dotenv
+  CUDA_TAG=11.8.0-cudnn8-runtime-ubuntu22.04
+  PADDLE_INDEX=https://www.paddlepaddle.org.cn/packages/stable/cu118/
+  ```
+
+The compose stack sets `PADDLEOCR_VL_USE_GGUF=true`, `LLAMA_SERVER_AUTOSTART=false`, and
+points the app at `http://llama:8080/v1`, so the app never bootstraps llama itself.
+
+---
+
 ## API Usage
 
 ### `POST /v1/doc/parse`
@@ -296,6 +346,9 @@ venv\Scripts\python.exe -m pytest -q
 ```
 
 (On Linux use `venv/bin/python` in place of `venv\Scripts\python.exe`.)
+
+The tests need no GPU, models, or network. Legacy `.doc`/`.xls` and PDF-engine
+tests self-skip when LibreOffice or PyMuPDF is absent.
 
 ---
 

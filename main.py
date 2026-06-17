@@ -57,13 +57,17 @@ def configure_gguf_runtime_on_startup(
     if not app_settings.paddleocr_vl_use_gguf:
         return None
 
+    # Only bootstrap/own a local llama.cpp runtime when we are autostarting it. When
+    # pointed at an external server (e.g. a separate llama container), skip both the
+    # binary download and startup — the app just talks to PADDLEOCR_VL_REC_SERVER_URL.
+    if not app_settings.llama_server_autostart:
+        return None
+
     bootstrap_llama_cpp_on_startup(
         app_settings=app_settings,
         bootstrap=bootstrap,
         resolve_release_urls=resolve_release_urls,
     )
-    if not app_settings.llama_server_autostart:
-        return None
 
     llama_dir = Path(app_settings.llama_cpp_dir).resolve()
     models_dir = Path(app_settings.llama_cpp_models_dir).resolve()
