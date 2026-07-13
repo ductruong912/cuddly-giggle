@@ -12,7 +12,14 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 
 from app.core.config import settings
-from app.domain.schemas import LLMExtractionOCRMetadata, LLMExtractionResponse, ParseOptions
+from app.domain.schemas import (
+    LLMExtractionFromOCRRequest,
+    LLMExtractionOCRMetadata,
+    LLMExtractionResponse,
+    ParseDecision,
+    ParseOptions,
+    ParseResponse,
+)
 from app.services.llm_extraction import (
     LLMExtractionError,
     LLMExtractionInputTooLarge,
@@ -105,6 +112,38 @@ def extract_document(
     finally:
         if temp_path.exists():
             temp_path.unlink(missing_ok=True)
+
+
+@llm_router.post("/extract-from-ocr", response_model=LLMExtractionResponse)
+def extract_from_ocr(
+    payload: LLMExtractionFromOCRRequest,
+    extractor: LLMExtractionService = Depends(get_llm_extractor),
+) -> LLMExtractionResponse:
+    parse_response = ParseResponse(
+        request_id=f"llm_{uuid.uuid4().hex[:12]}",
+        decision=ParseDecision(reason="Provided parsed Markdown."),
+        pages=[],
+        blocks=[],
+        tables=[],
+        reading_order=[],
+        markdown=payload.markdown,
+    )
+    try:
+        data = extractor.extract(parse_response)
+        return LLMExtractionResponse(
+            request_id=parse_response.request_id,
+            ocr=LLMExtractionOCRMetadata(
+                decision=parse_response.decision.reason,
+                page_count=0,
+            ),
+            data=data,
+        )
+    except LLMExtractionInputTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except LLMExtractionUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except LLMExtractionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @doc_router.post("/parse", response_class=PlainTextResponse)

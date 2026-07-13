@@ -89,3 +89,7 @@ class LLMExtractionResponse(BaseModel):
     request_id: str
     ocr: LLMExtractionOCRMetadata
     data: dict[str, Any]
+
+
+class LLMExtractionFromOCRRequest(BaseModel):
+    markdown: str = Field(min_length=1)

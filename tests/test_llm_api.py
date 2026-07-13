@@ -81,6 +81,28 @@ def test_llm_extract_rejects_an_unsupported_file(client):
     assert orchestrator.calls == []
 
 
+def test_llm_extract_from_ocr_uses_the_complete_markdown_body(client):
+    class MarkdownExtractor:
+        def __init__(self) -> None:
+            self.markdown: str | None = None
+
+        def extract(self, response: ParseResponse) -> dict[str, object]:
+            self.markdown = response.markdown
+            return {"po_number": "PO-001", "po_date": "", "items": []}
+
+    http, orchestrator = client
+    extractor = MarkdownExtractor()
+    app.dependency_overrides[get_llm_extractor] = lambda: extractor
+    markdown = "# Parsed PO\n\n| Item | Quantity |\n| --- | --- |\n| TP-1 | 2 |"
+
+    response = http.post("/v1/llm/extract-from-ocr", json={"markdown": markdown})
+
+    assert response.status_code == 200
+    assert extractor.markdown == markdown
+    assert orchestrator.calls == []
+    assert response.json()["data"]["po_number"] == "PO-001"
+
+
 def test_llm_extract_returns_413_for_context_over_limit(client):
     http, _ = client
     app.dependency_overrides[get_llm_extractor] = lambda: TooLargeExtractor()
