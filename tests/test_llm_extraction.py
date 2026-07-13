@@ -7,7 +7,7 @@ import pytest
 
 from app.core.config import Settings
 from app.domain.schemas import ParseDecision, ParseResponse
-from app.prompts.prompt import EXTRACTION_JSON_SCHEMA
+from app.prompts.prompt import EXTRACTION_INSTRUCTIONS, EXTRACTION_JSON_SCHEMA
 from app.services.llm_extraction import (
     LLMExtractionError,
     LLMExtractionInputTooLarge,
@@ -99,6 +99,13 @@ def test_default_schema_models_po_line_items_and_missing_values_as_empty_strings
         "quantity": {"type": "string"},
         "unit_price": {"type": "string"},
     }
+
+
+def test_prompt_handles_split_rows_adjacent_item_codes_and_order_type_suffixes():
+    assert "OI" in EXTRACTION_INSTRUCTIONS
+    assert "dòng tiếp nối" in EXTRACTION_INSTRUCTIONS
+    assert "mã đứng trước" in EXTRACTION_INSTRUCTIONS
+    assert "9032.89.6060" in EXTRACTION_INSTRUCTIONS
 
 
 def test_extract_rejects_empty_ocr_content():
