@@ -74,15 +74,31 @@ def make_parse_response(markdown: str | None) -> ParseResponse:
 
 
 def test_extract_uses_prompt_schema_and_returns_parsed_json():
-    client = FakeOpenAIClient('{"document_type":"invoice","fields":[],"items":[]}')
+    client = FakeOpenAIClient(
+        '{"po_number":"PO-001","po_date":"2026-07-13","items":[]}'
+    )
     service = LLMExtractionService(client=client, app_settings=make_settings())
 
     assert service.extract(make_parse_response("Invoice number: 001")) == {
-        "document_type": "invoice", "fields": [], "items": [],
+        "po_number": "PO-001", "po_date": "2026-07-13", "items": [],
     }
     request = client.responses.calls[0]
     assert request["model"] == "gpt-5-mini"
     assert request["text"]["format"]["schema"] == EXTRACTION_JSON_SCHEMA
+
+
+def test_default_schema_models_po_line_items_and_missing_values_as_empty_strings():
+    properties = EXTRACTION_JSON_SCHEMA["properties"]
+
+    assert set(properties) == {"po_number", "po_date", "items"}
+    assert properties["po_number"] == {"type": "string"}
+    assert properties["po_date"] == {"type": "string"}
+    assert properties["items"]["items"]["properties"] == {
+        "customer_item_code": {"type": "string"},
+        "toto_item_code": {"type": "string"},
+        "quantity": {"type": "string"},
+        "unit_price": {"type": "string"},
+    }
 
 
 def test_extract_rejects_empty_ocr_content():

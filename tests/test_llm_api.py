@@ -25,7 +25,11 @@ class StubOrchestrator:
 class StubExtractor:
     def extract(self, response: ParseResponse) -> dict[str, object]:
         assert response.markdown == "# Invoice 1"
-        return {"document_type": "invoice", "fields": [], "items": []}
+        return {
+            "po_number": "PO-001",
+            "po_date": "2026-07-13",
+            "items": [],
+        }
 
 
 class TooLargeExtractor:
@@ -60,7 +64,7 @@ def test_llm_extract_returns_structured_data(client):
     assert response.json() == {
         "request_id": "req_ocr",
         "ocr": {"decision": "stubbed", "page_count": 0},
-        "data": {"document_type": "invoice", "fields": [], "items": []},
+        "data": {"po_number": "PO-001", "po_date": "2026-07-13", "items": []},
     }
     assert len(orchestrator.calls) == 1
 
