@@ -9,41 +9,42 @@ liệu. Trường không tìm thấy hoặc không chắc chắn phải trả v�
 
 Trích xuất:
 
-* po_number: số PO, không lấy Reference hoặc mã khác. Khi header có dạng
+* so_po: số PO, không lấy Reference hoặc mã khác. Khi header có dạng
   `Order No. - <số PO> <mã loại đơn/hậu tố>`, chỉ lấy số PO; không lấy mã loại
   đơn/hậu tố, tên chi nhánh, hoặc nhãn cột khác đứng sau số PO.
-* po_date: ngày PO, không lấy Delivery Date, Requested Date hoặc Revise Date.
-* items: mỗi dòng hàng hợp lệ là một phần tử riêng, không gộp các dòng trùng mã.
+* ngay_po: ngày PO, không lấy Delivery Date, Requested Date hoặc Revise Date.
+* danh_sach_hang: mỗi dòng hàng hợp lệ là một phần tử riêng, không gộp các dòng
+  trùng mã.
 
 Với mỗi item:
 
-* customer_item_code: chỉ điền khi xác định rõ là mã hàng khách hàng; nếu không
+* ma_hang_khach_hang: chỉ điền khi xác định rõ là mã hàng khách hàng; nếu không
   thì "".
-* toto_item_code: mã hàng TOTO, không lấy mô tả sản phẩm.
-* quantity: số lượng trong cột Quantity hoặc Ordered.
-* unit_price: đơn giá trong cột Unit Price hoặc Unit Cost, không lấy Amount hoặc
+* ma_hang_toto: mã hàng TOTO, không lấy mô tả sản phẩm.
+* so_luong: số lượng trong cột Quantity hoặc Ordered.
+* don_gia: đơn giá trong cột Unit Price hoặc Unit Cost, không lấy Amount hoặc
   Total.
 
 OCR có thể tách một dòng hàng thành nhiều dòng văn bản. Hãy ghép các phần liên
 tiếp khi chúng rõ ràng thuộc cùng một dòng hàng. Đặc biệt, một dòng tiếp nối
 chỉ chứa các mã hàng phải được ghép vào dòng hàng ngay trước đó có mô tả,
-quantity hoặc unit_price, không được bỏ qua hay tạo item mới.
+so_luong hoặc don_gia, không được bỏ qua hay tạo item mới.
 
 Khi một item có hai mã hàng liên tiếp, mã đứng trước thường là
-customer_item_code và mã đứng sau là toto_item_code. Không gán mã đầu tiên làm
-toto_item_code rồi bỏ mã thứ hai. Chỉ dùng quy tắc này khi cả hai mã rõ ràng
+ma_hang_khach_hang và mã đứng sau là ma_hang_toto. Không gán mã đầu tiên làm
+ma_hang_toto rồi bỏ mã thứ hai. Chỉ dùng quy tắc này khi cả hai mã rõ ràng
 thuộc cùng một dòng hàng/ngữ cảnh hàng.
 
-Trong bảng OCR bị lệch cột, xác định quantity từ cột Ordered/Quantity và
-unit_price từ Unit Cost/Unit Price theo header/ngữ cảnh, không dựa đơn thuần vào
-vị trí cột. Mã HS/thuế, Extension, Amount và Total không phải unit_price; nếu
+Trong bảng OCR bị lệch cột, xác định so_luong từ cột Ordered/Quantity và
+don_gia từ Unit Cost/Unit Price theo header/ngữ cảnh, không dựa đơn thuần vào
+vị trí cột. Mã HS/thuế, Extension, Amount và Total không phải don_gia; nếu
 trong cùng ô có mã HS/thuế và một giá trị đơn giá riêng, chỉ lấy giá trị đơn giá
-đó làm unit_price.
+đó làm don_gia.
 
 Không tạo item từ dòng chỉ chứa mô tả, số lượng, đơn giá hoặc số rời rạc. Nếu
 không xác định được mã hàng TOTO thì không tạo item đó.
 
-quantity và unit_price phải là một giá trị số duy nhất. Nếu OCR ghép nhiều số
+so_luong và don_gia phải là một giá trị số duy nhất. Nếu OCR ghép nhiều số
 vào cùng một giá trị và không thể xác định chắc chắn, trả về "".
 
 Giữ nguyên định dạng ngày, số lượng và đơn giá sau khi làm sạch khoảng trắng thừa.
@@ -56,28 +57,28 @@ EXTRACTION_SCHEMA_NAME = "document_extraction"
 EXTRACTION_JSON_SCHEMA = {
     "type": "object",
     "properties": {
-        "po_number": {"type": "string"},
-        "po_date": {"type": "string"},
-        "items": {
+        "so_po": {"type": "string"},
+        "ngay_po": {"type": "string"},
+        "danh_sach_hang": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "customer_item_code": {"type": "string"},
-                    "toto_item_code": {"type": "string"},
-                    "quantity": {"type": "string"},
-                    "unit_price": {"type": "string"},
+                    "ma_hang_khach_hang": {"type": "string"},
+                    "ma_hang_toto": {"type": "string"},
+                    "so_luong": {"type": "string"},
+                    "don_gia": {"type": "string"},
                 },
                 "required": [
-                    "customer_item_code",
-                    "toto_item_code",
-                    "quantity",
-                    "unit_price",
+                    "ma_hang_khach_hang",
+                    "ma_hang_toto",
+                    "so_luong",
+                    "don_gia",
                 ],
                 "additionalProperties": False,
             },
         },
     },
-    "required": ["po_number", "po_date", "items"],
+    "required": ["so_po", "ngay_po", "danh_sach_hang"],
     "additionalProperties": False,
 }

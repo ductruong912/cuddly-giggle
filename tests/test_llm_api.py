@@ -26,9 +26,9 @@ class StubExtractor:
     def extract(self, response: ParseResponse) -> dict[str, object]:
         assert response.markdown == "# Invoice 1"
         return {
-            "po_number": "PO-001",
-            "po_date": "2026-07-13",
-            "items": [],
+            "so_po": "PO-001",
+            "ngay_po": "2026-07-13",
+            "danh_sach_hang": [],
         }
 
 
@@ -64,7 +64,7 @@ def test_llm_extract_returns_structured_data(client):
     assert response.json() == {
         "request_id": "req_ocr",
         "ocr": {"decision": "stubbed", "page_count": 0},
-        "data": {"po_number": "PO-001", "po_date": "2026-07-13", "items": []},
+        "data": {"so_po": "PO-001", "ngay_po": "2026-07-13", "danh_sach_hang": []},
     }
     assert len(orchestrator.calls) == 1
 
@@ -88,7 +88,7 @@ def test_llm_extract_from_ocr_uses_the_complete_uploaded_markdown_file(client):
 
         def extract(self, response: ParseResponse) -> dict[str, object]:
             self.markdown = response.markdown
-            return {"po_number": "PO-001", "po_date": "", "items": []}
+            return {"so_po": "PO-001", "ngay_po": "", "danh_sach_hang": []}
 
     http, orchestrator = client
     extractor = MarkdownExtractor()
@@ -103,7 +103,7 @@ def test_llm_extract_from_ocr_uses_the_complete_uploaded_markdown_file(client):
     assert response.status_code == 200
     assert extractor.markdown == markdown
     assert orchestrator.calls == []
-    assert response.json()["data"]["po_number"] == "PO-001"
+    assert response.json()["data"]["so_po"] == "PO-001"
 
 
 def test_llm_extract_returns_413_for_context_over_limit(client):
