@@ -357,13 +357,12 @@ curl -X POST \
 ### `POST /v1/llm/extract-from-ocr`
 
 Gọi riêng lớp LLM để thử prompt trên toàn bộ nội dung Markdown/HTML đã parse.
-Endpoint nhận trực tiếp nội dung file `.md`, không upload file và không chạy OCR.
+Endpoint nhận trực tiếp file `.md` hoặc `.markdown`, không chạy OCR.
 
 ```bash
 curl -X POST \
   'http://127.0.0.1:8000/v1/llm/extract-from-ocr' \
-  -H 'Content-Type: application/json' \
-  -d '{"markdown":"# Purchase Order\n\nNội dung OCR đã parse"}'
+  -F 'file=@outputs/purchase-order.md;type=text/markdown'
 ```
 
 ---

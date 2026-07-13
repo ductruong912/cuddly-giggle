@@ -81,7 +81,7 @@ def test_llm_extract_rejects_an_unsupported_file(client):
     assert orchestrator.calls == []
 
 
-def test_llm_extract_from_ocr_uses_the_complete_markdown_body(client):
+def test_llm_extract_from_ocr_uses_the_complete_uploaded_markdown_file(client):
     class MarkdownExtractor:
         def __init__(self) -> None:
             self.markdown: str | None = None
@@ -95,7 +95,10 @@ def test_llm_extract_from_ocr_uses_the_complete_markdown_body(client):
     app.dependency_overrides[get_llm_extractor] = lambda: extractor
     markdown = "# Parsed PO\n\n| Item | Quantity |\n| --- | --- |\n| TP-1 | 2 |"
 
-    response = http.post("/v1/llm/extract-from-ocr", json={"markdown": markdown})
+    response = http.post(
+        "/v1/llm/extract-from-ocr",
+        files={"file": ("purchase-order.md", markdown.encode("utf-8"), "text/markdown")},
+    )
 
     assert response.status_code == 200
     assert extractor.markdown == markdown

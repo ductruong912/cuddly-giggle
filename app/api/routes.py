@@ -13,7 +13,6 @@ from fastapi.responses import PlainTextResponse
 
 from app.core.config import settings
 from app.domain.schemas import (
-    LLMExtractionFromOCRRequest,
     LLMExtractionOCRMetadata,
     LLMExtractionResponse,
     ParseDecision,
@@ -116,9 +115,17 @@ def extract_document(
 
 @llm_router.post("/extract-from-ocr", response_model=LLMExtractionResponse)
 def extract_from_ocr(
-    payload: LLMExtractionFromOCRRequest,
+    file: UploadFile = File(...),
     extractor: LLMExtractionService = Depends(get_llm_extractor),
 ) -> LLMExtractionResponse:
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in {".md", ".markdown"}:
+        raise HTTPException(status_code=400, detail="Only Markdown (.md or .markdown) files are supported.")
+    try:
+        markdown = file.file.read().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Markdown file must be UTF-8 encoded.") from exc
+
     parse_response = ParseResponse(
         request_id=f"llm_{uuid.uuid4().hex[:12]}",
         decision=ParseDecision(reason="Provided parsed Markdown."),
@@ -126,7 +133,7 @@ def extract_from_ocr(
         blocks=[],
         tables=[],
         reading_order=[],
-        markdown=payload.markdown,
+        markdown=markdown,
     )
     try:
         data = extractor.extract(parse_response)
