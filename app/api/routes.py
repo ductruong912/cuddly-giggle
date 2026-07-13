@@ -12,7 +12,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 
 from app.core.config import settings
-from app.domain.schemas import ParseOptions
+from app.domain.schemas import LLMExtractionOCRMetadata, LLMExtractionResponse, ParseOptions
+from app.services.llm_extraction import LLMExtractionError, LLMExtractionService
 from app.services.orchestrator import ParseOrchestrator
 from app.services.output import save_parse_artifacts
 
@@ -27,6 +28,11 @@ logger = logging.getLogger(__name__)
 @lru_cache(maxsize=1)
 def get_orchestrator() -> ParseOrchestrator:
     return ParseOrchestrator()
+
+
+@lru_cache(maxsize=1)
+def get_llm_extractor() -> LLMExtractionService:
+    return LLMExtractionService()
 
 
 # =====================================================================================
@@ -46,8 +52,50 @@ def healthz() -> dict[str, str]:
 # =====================================================================================
 
 doc_router = APIRouter(prefix="/v1/doc", tags=["documents"])
+llm_router = APIRouter(prefix="/v1/llm", tags=["llm"])
 
 SUPPORTED_INPUT_SUFFIXES = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".xlsm", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
+
+
+@llm_router.post("/extract", response_model=LLMExtractionResponse)
+def extract_document(
+    file: UploadFile = File(...),
+    orchestrator: ParseOrchestrator = Depends(get_orchestrator),
+    extractor: LLMExtractionService = Depends(get_llm_extractor),
+) -> LLMExtractionResponse:
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in SUPPORTED_INPUT_SUFFIXES:
+        raise HTTPException(status_code=400, detail="Unsupported input type. Use PDF, Word, Excel, or image files.")
+
+    temp_root = Path(settings.temp_dir)
+    temp_root.mkdir(parents=True, exist_ok=True)
+    temp_path = temp_root / f"{uuid.uuid4().hex}{suffix}"
+    try:
+        with temp_path.open("wb") as f:
+            shutil.copyfileobj(file.file, f)
+        response = orchestrator.parse(
+            str(temp_path),
+            ParseOptions(enable_fallback=settings.default_enable_fallback),
+        )
+        data = extractor.extract(response)
+        logger.info("llm extraction complete request_id=%s pages=%s", response.request_id, len(response.pages))
+        return LLMExtractionResponse(
+            request_id=response.request_id,
+            ocr=LLMExtractionOCRMetadata(
+                decision=response.decision.reason,
+                page_count=len(response.pages),
+            ),
+            data=data,
+        )
+    except LLMExtractionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Unexpected extraction error: {exc}") from exc
+    finally:
+        if temp_path.exists():
+            temp_path.unlink(missing_ok=True)
 
 
 @doc_router.post("/parse", response_class=PlainTextResponse)
