@@ -10,8 +10,8 @@ liệu. Trường không tìm thấy hoặc không chắc chắn phải trả v�
 Trích xuất:
 
 * po_number: số PO, không lấy Reference hoặc mã khác. Khi header có dạng
-  `Order No. - <số PO> <mã loại đơn>`, chỉ lấy số PO; không lấy mã loại đơn
-  đứng sau như `OI`, tên chi nhánh, hoặc nhãn cột khác.
+  `Order No. - <số PO> <mã loại đơn/hậu tố>`, chỉ lấy số PO; không lấy mã loại
+  đơn/hậu tố, tên chi nhánh, hoặc nhãn cột khác đứng sau số PO.
 * po_date: ngày PO, không lấy Delivery Date, Requested Date hoặc Revise Date.
 * items: mỗi dòng hàng hợp lệ là một phần tử riêng, không gộp các dòng trùng mã.
 
@@ -36,9 +36,9 @@ thuộc cùng một dòng hàng/ngữ cảnh hàng.
 
 Trong bảng OCR bị lệch cột, xác định quantity từ cột Ordered/Quantity và
 unit_price từ Unit Cost/Unit Price theo header/ngữ cảnh, không dựa đơn thuần vào
-vị trí cột. Mã HS/thuế như `9032.89.6060`, Extension, Amount và Total không
-phải unit_price; nếu trong cùng ô có mã như vậy và một giá trị đơn giá riêng
-như `.1500`, chỉ lấy `.1500` làm unit_price.
+vị trí cột. Mã HS/thuế, Extension, Amount và Total không phải unit_price; nếu
+trong cùng ô có mã HS/thuế và một giá trị đơn giá riêng, chỉ lấy giá trị đơn giá
+đó làm unit_price.
 
 Không tạo item từ dòng chỉ chứa mô tả, số lượng, đơn giá hoặc số rời rạc. Nếu
 không xác định được mã hàng TOTO thì không tạo item đó.

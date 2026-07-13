@@ -102,10 +102,10 @@ def test_default_schema_models_po_line_items_and_missing_values_as_empty_strings
 
 
 def test_prompt_handles_split_rows_adjacent_item_codes_and_order_type_suffixes():
-    assert "OI" in EXTRACTION_INSTRUCTIONS
+    assert "mã loại đơn/hậu tố" in EXTRACTION_INSTRUCTIONS
     assert "dòng tiếp nối" in EXTRACTION_INSTRUCTIONS
     assert "mã đứng trước" in EXTRACTION_INSTRUCTIONS
-    assert "9032.89.6060" in EXTRACTION_INSTRUCTIONS
+    assert "mã HS/thuế" in EXTRACTION_INSTRUCTIONS
 
 
 def test_extract_rejects_empty_ocr_content():
