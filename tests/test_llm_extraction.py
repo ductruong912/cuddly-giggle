@@ -1,0 +1,67 @@
+"""Unit tests for the OpenAI structured-extraction service."""
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from app.core.config import Settings
+from app.domain.schemas import ParseDecision, ParseResponse
+from app.prompts.prompt import EXTRACTION_JSON_SCHEMA
+from app.services.llm_extraction import LLMExtractionError, LLMExtractionService
+
+
+class FakeResponses:
+    def __init__(self, output_text: str) -> None:
+        self.output_text = output_text
+        self.calls: list[dict[str, object]] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(output_text=self.output_text)
+
+
+class FakeOpenAIClient:
+    def __init__(self, output_text: str) -> None:
+        self.responses = FakeResponses(output_text)
+
+
+def make_settings(**overrides: object) -> Settings:
+    defaults: dict[str, object] = {
+        "openai_api_key": "test-key",
+        "openai_model": "gpt-5-mini",
+        "openai_timeout_seconds": 10.0,
+        "openai_max_retries": 0,
+        "llm_max_input_chars": 1_000,
+    }
+    defaults.update(overrides)
+    return Settings(**defaults)
+
+
+def make_parse_response(markdown: str | None) -> ParseResponse:
+    return ParseResponse(
+        request_id="req_test",
+        decision=ParseDecision(reason="stubbed"),
+        pages=[], blocks=[], tables=[], reading_order=[], markdown=markdown,
+    )
+
+
+def test_extract_uses_prompt_schema_and_returns_parsed_json():
+    client = FakeOpenAIClient('{"document_type":"invoice","fields":[],"items":[]}')
+    service = LLMExtractionService(client=client, app_settings=make_settings())
+
+    assert service.extract(make_parse_response("Invoice number: 001")) == {
+        "document_type": "invoice", "fields": [], "items": [],
+    }
+    request = client.responses.calls[0]
+    assert request["model"] == "gpt-5-mini"
+    assert request["text"]["format"]["schema"] == EXTRACTION_JSON_SCHEMA
+
+
+def test_extract_rejects_empty_ocr_content():
+    service = LLMExtractionService(
+        client=FakeOpenAIClient("{}"), app_settings=make_settings(),
+    )
+
+    with pytest.raises(LLMExtractionError, match="OCR produced no usable text"):
+        service.extract(make_parse_response(None))

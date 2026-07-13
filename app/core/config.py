@@ -50,6 +50,13 @@ def _get_bool(name: str, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
 
+    # --- OpenAI structured extraction ---
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "").strip()
+    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-5-mini").strip()
+    openai_timeout_seconds: float = _get_float("OPENAI_TIMEOUT_SECONDS", 60.0)
+    openai_max_retries: int = _get_int("OPENAI_MAX_RETRIES", 2)
+    llm_max_input_chars: int = _get_int("LLM_MAX_INPUT_CHARS", 120_000)
+
     # --- OCR engines ---
     primary_engine: str                = os.getenv("OCR_PRIMARY_ENGINE", "paddleocr_vl")
     fallback_engine: str               = os.getenv("OCR_FALLBACK_ENGINE", "pp_structure_v3")
