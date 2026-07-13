@@ -8,7 +8,12 @@ import pytest
 from app.core.config import Settings
 from app.domain.schemas import ParseDecision, ParseResponse
 from app.prompts.prompt import EXTRACTION_JSON_SCHEMA
-from app.services.llm_extraction import LLMExtractionError, LLMExtractionService
+from app.services.llm_extraction import (
+    LLMExtractionError,
+    LLMExtractionInputTooLarge,
+    LLMExtractionService,
+    LLMExtractionUnavailable,
+)
 
 
 class FakeResponses:
@@ -24,6 +29,28 @@ class FakeResponses:
 class FakeOpenAIClient:
     def __init__(self, output_text: str) -> None:
         self.responses = FakeResponses(output_text)
+
+
+class UnavailableResponses:
+    def create(self, **kwargs):
+        raise TimeoutError("provider timed out")
+
+
+class UnavailableOpenAIClient:
+    responses = UnavailableResponses()
+
+
+class ProviderStatusError(Exception):
+    status_code = 503
+
+
+class ProviderStatusResponses:
+    def create(self, **kwargs):
+        raise ProviderStatusError("upstream unavailable")
+
+
+class ProviderStatusClient:
+    responses = ProviderStatusResponses()
 
 
 def make_settings(**overrides: object) -> Settings:
@@ -65,3 +92,30 @@ def test_extract_rejects_empty_ocr_content():
 
     with pytest.raises(LLMExtractionError, match="OCR produced no usable text"):
         service.extract(make_parse_response(None))
+
+
+def test_extract_rejects_context_over_configured_limit():
+    service = LLMExtractionService(
+        client=FakeOpenAIClient("{}"), app_settings=make_settings(llm_max_input_chars=3),
+    )
+
+    with pytest.raises(LLMExtractionInputTooLarge, match="input limit"):
+        service.extract(make_parse_response("four"))
+
+
+def test_extract_maps_provider_timeout_to_unavailable():
+    service = LLMExtractionService(
+        client=UnavailableOpenAIClient(), app_settings=make_settings(),
+    )
+
+    with pytest.raises(LLMExtractionUnavailable, match="temporarily unavailable"):
+        service.extract(make_parse_response("Invoice 001"))
+
+
+def test_extract_maps_provider_5xx_to_unavailable():
+    service = LLMExtractionService(
+        client=ProviderStatusClient(), app_settings=make_settings(),
+    )
+
+    with pytest.raises(LLMExtractionUnavailable, match="temporarily unavailable"):
+        service.extract(make_parse_response("Invoice 001"))

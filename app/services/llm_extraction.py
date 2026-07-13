@@ -17,6 +17,14 @@ class LLMExtractionError(RuntimeError):
     """The document could not be converted to a usable extraction result."""
 
 
+class LLMExtractionInputTooLarge(LLMExtractionError):
+    """OCR text exceeds the configured model-input limit."""
+
+
+class LLMExtractionUnavailable(LLMExtractionError):
+    """The OpenAI provider could not complete the request."""
+
+
 class LLMExtractionService:
     def __init__(self, client: Any | None = None, app_settings: Settings = settings) -> None:
         self.settings = app_settings
@@ -26,20 +34,29 @@ class LLMExtractionService:
         markdown = (parse_response.markdown or "").strip()
         if not markdown:
             raise LLMExtractionError("OCR produced no usable text")
+        if len(markdown) > self.settings.llm_max_input_chars:
+            raise LLMExtractionInputTooLarge("OCR text exceeds configured input limit")
 
-        response = self.client.responses.create(
-            model=self.settings.openai_model,
-            instructions=EXTRACTION_INSTRUCTIONS,
-            input=f"<document>\n{markdown}\n</document>",
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": EXTRACTION_SCHEMA_NAME,
-                    "strict": True,
-                    "schema": EXTRACTION_JSON_SCHEMA,
-                }
-            },
-        )
+        try:
+            response = self.client.responses.create(
+                model=self.settings.openai_model,
+                instructions=EXTRACTION_INSTRUCTIONS,
+                input=f"<document>\n{markdown}\n</document>",
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": EXTRACTION_SCHEMA_NAME,
+                        "strict": True,
+                        "schema": EXTRACTION_JSON_SCHEMA,
+                    }
+                },
+            )
+        except Exception as exc:
+            if self._is_provider_error(exc):
+                raise LLMExtractionUnavailable(
+                    "OpenAI extraction is temporarily unavailable"
+                ) from exc
+            raise
         try:
             payload = json.loads(response.output_text)
         except (TypeError, json.JSONDecodeError) as exc:
@@ -47,6 +64,18 @@ class LLMExtractionService:
         if not isinstance(payload, dict):
             raise LLMExtractionError("Model returned a non-object structured output")
         return payload
+
+    @staticmethod
+    def _is_provider_error(exc: Exception) -> bool:
+        if isinstance(exc, TimeoutError):
+            return True
+        if getattr(exc, "status_code", 0) >= 500:
+            return True
+        try:
+            from openai import APIConnectionError, APITimeoutError, RateLimitError
+        except ImportError:
+            return False
+        return isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError))
 
     def _create_client(self) -> Any:
         if not self.settings.openai_api_key:

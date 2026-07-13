@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from app.api.application import app
 from app.api.routes import get_llm_extractor, get_orchestrator
 from app.domain.schemas import ParseDecision, ParseResponse
+from app.services.llm_extraction import LLMExtractionInputTooLarge, LLMExtractionUnavailable
 
 
 class StubOrchestrator:
@@ -25,6 +26,16 @@ class StubExtractor:
     def extract(self, response: ParseResponse) -> dict[str, object]:
         assert response.markdown == "# Invoice 1"
         return {"document_type": "invoice", "fields": [], "items": []}
+
+
+class TooLargeExtractor:
+    def extract(self, response: ParseResponse) -> dict[str, object]:
+        raise LLMExtractionInputTooLarge("OCR text exceeds configured input limit")
+
+
+class UnavailableExtractor:
+    def extract(self, response: ParseResponse) -> dict[str, object]:
+        raise LLMExtractionUnavailable("OpenAI extraction is temporarily unavailable")
 
 
 @pytest.fixture
@@ -64,3 +75,27 @@ def test_llm_extract_rejects_an_unsupported_file(client):
 
     assert response.status_code == 400
     assert orchestrator.calls == []
+
+
+def test_llm_extract_returns_413_for_context_over_limit(client):
+    http, _ = client
+    app.dependency_overrides[get_llm_extractor] = lambda: TooLargeExtractor()
+
+    response = http.post(
+        "/v1/llm/extract",
+        files={"file": ("doc.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+
+    assert response.status_code == 413
+
+
+def test_llm_extract_returns_503_for_provider_failure(client):
+    http, _ = client
+    app.dependency_overrides[get_llm_extractor] = lambda: UnavailableExtractor()
+
+    response = http.post(
+        "/v1/llm/extract",
+        files={"file": ("doc.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+
+    assert response.status_code == 503

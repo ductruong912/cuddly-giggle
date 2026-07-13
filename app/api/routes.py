@@ -13,7 +13,12 @@ from fastapi.responses import PlainTextResponse
 
 from app.core.config import settings
 from app.domain.schemas import LLMExtractionOCRMetadata, LLMExtractionResponse, ParseOptions
-from app.services.llm_extraction import LLMExtractionError, LLMExtractionService
+from app.services.llm_extraction import (
+    LLMExtractionError,
+    LLMExtractionInputTooLarge,
+    LLMExtractionService,
+    LLMExtractionUnavailable,
+)
 from app.services.orchestrator import ParseOrchestrator
 from app.services.output import save_parse_artifacts
 
@@ -87,6 +92,10 @@ def extract_document(
             ),
             data=data,
         )
+    except LLMExtractionInputTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except LLMExtractionUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except LLMExtractionError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
