@@ -15,7 +15,7 @@ Vision-Language (VL) OCR, and structural document parsing, and returns clean
 - **Vision-Language OCR** — uses **PaddleOCR-VL** (v1.6) as the primary engine for complex layouts and robust Vietnamese OCR.
 - **Resilient fallback** — cascades to **PP-StructureV3** only when the primary OCR engine fails.
 - **Optional GGUF backend** — can run PaddleOCR-VL recognition through llama.cpp + GGUF for lower-VRAM GPUs.
-- **Auto-artifacts** — saves every result as a `.md` file under `outputs/`.
+- **Auto-artifacts** — saves every result as a `.md` file in a folder named after the uploaded filename.
 - **Offline ready** — model cache can be pre-populated for air-gapped deployments.
 
 ---
@@ -319,8 +319,10 @@ LibreOffice/soffice on the server so they can be converted first.
 The fallback engine (run only if the primary OCR engine fails) is controlled
 server-side by `DEFAULT_ENABLE_FALLBACK` (default `true`).
 
-Saved artifacts use the uploaded filename stem (e.g. `VB 6.pdf` → `VB 6.md`);
-duplicate names become `VB 6 (2).md`, `VB 6 (3).md`, and so on.
+Artifacts are grouped below `PARSE_OUTPUT_DIR` by uploaded filename stem. With
+`PARSE_OUTPUT_DIR=outputs/TOTO`, uploading `512.pdf` writes
+`outputs/TOTO/512/512.md`. Uploading `512.pdf` again replaces only
+`outputs/TOTO/512/`; other filenames' folders are unchanged.
 
 **Example (cURL)**
 
