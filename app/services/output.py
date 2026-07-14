@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 import re
+import shutil
 
 from app.core.config import settings
 from app.domain.schemas import ParseResponse
@@ -85,40 +86,28 @@ def _safe_artifact_stem(name: str) -> str:
     return stem or "document"
 
 
-def _candidate_path(output_dir: Path, stem: str, suffix_number: int) -> Path:
-    if suffix_number == 1:
-        return output_dir / f"{stem}.md"
-    return output_dir / f"{stem} ({suffix_number}).md"
-
-
-def _write_unique_markdown(output_dir: Path, stem: str, markdown: str) -> Path:
-    suffix_number = 1
-    while True:
-        path = _candidate_path(output_dir, stem, suffix_number)
-        try:
-            with path.open("x", encoding="utf-8") as file:
-                file.write(markdown)
-            return path
-        except FileExistsError:
-            suffix_number += 1
+def _replace_artifact_dir(output_dir: Path, stem: str) -> Path:
+    artifact_dir = output_dir / stem
+    if artifact_dir.exists():
+        shutil.rmtree(artifact_dir)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    return artifact_dir
 
 
 def save_parse_artifacts(
     response: ParseResponse,
     input_filename: str,
 ) -> list[str]:
-    output_dir = Path(settings.parse_output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if not response.markdown:
+        # Surface a signal so an empty saved_files is not mistaken for a successful export.
+        logger.warning(
+            "markdown output requested but no markdown was produced for request_id=%s; no .md written",
+            response.request_id,
+        )
+        return []
 
     stem = _safe_artifact_stem(Path(input_filename).stem)
-
-    if response.markdown:
-        md_path = _write_unique_markdown(output_dir, stem, response.markdown)
-        return [str(md_path.resolve())]
-
-    # Surface a signal so an empty saved_files is not mistaken for a successful export.
-    logger.warning(
-        "markdown output requested but no markdown was produced for request_id=%s; no .md written",
-        response.request_id,
-    )
-    return []
+    artifact_dir = _replace_artifact_dir(Path(settings.parse_output_dir), stem)
+    md_path = artifact_dir / f"{stem}.md"
+    md_path.write_text(response.markdown, encoding="utf-8")
+    return [str(md_path.resolve())]
