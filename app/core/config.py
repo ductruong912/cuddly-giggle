@@ -107,7 +107,7 @@ class Settings:
 
     # --- PDF rasterization for OCR (render each page to an image, OCR per page) ---
     pdf_rasterize_enabled: bool          = _get_bool("PDF_RASTERIZE_ENABLED", True)
-    pdf_rasterize_dpi: int               = _get_int("PDF_RASTERIZE_DPI", 300)
+    pdf_rasterize_dpi: int               = _get_int("PDF_RASTERIZE_DPI", 150)
 
     # --- Output filtering ---
     table_only_output: bool              = _get_bool("TABLE_ONLY_OUTPUT", False)
