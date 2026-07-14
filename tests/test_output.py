@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 from app.core.config import settings
 from app.domain.schemas import ParseDecision, ParseResponse
@@ -67,3 +68,25 @@ def test_missing_markdown_does_not_replace_existing_folder(monkeypatch, tmp_path
 
     assert output.save_parse_artifacts(_response(None), "512.pdf") == []
     assert old.read_text(encoding="utf-8") == "old"
+
+
+def test_distinct_raw_stems_with_same_safe_name_keep_separate_artifacts(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        output,
+        "settings",
+        replace(settings, parse_output_dir=str(tmp_path / "TOTO")),
+    )
+
+    first_saved = output.save_parse_artifacts(_response("# first"), "a:b.pdf")
+    second_saved = output.save_parse_artifacts(_response("# second"), "ab.pdf")
+
+    first_path = Path(first_saved[0])
+    second_path = Path(second_saved[0])
+    assert first_path.name == "ab.md"
+    assert second_path.name == "ab.md"
+    assert first_path.parent != second_path.parent
+    assert first_path.read_text(encoding="utf-8") == "# first"
+    assert second_path.read_text(encoding="utf-8") == "# second"

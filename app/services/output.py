@@ -1,8 +1,9 @@
 """Output helpers: markdown table filtering and parse artifact saving."""
 from __future__ import annotations
 
+import hashlib
 import logging
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 
@@ -86,6 +87,18 @@ def _safe_artifact_stem(name: str) -> str:
     return stem or "document"
 
 
+def _raw_upload_stem(input_filename: str) -> str:
+    filename = input_filename.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
+    return PurePosixPath(filename).stem
+
+
+def _artifact_folder_name(raw_stem: str, display_stem: str) -> str:
+    if raw_stem == display_stem:
+        return display_stem
+    digest = hashlib.sha256(raw_stem.encode("utf-8")).hexdigest()
+    return f"{display_stem}-{digest}"
+
+
 def _replace_artifact_dir(output_dir: Path, stem: str) -> Path:
     artifact_dir = output_dir / stem
     if artifact_dir.exists():
@@ -106,8 +119,12 @@ def save_parse_artifacts(
         )
         return []
 
-    stem = _safe_artifact_stem(Path(input_filename).stem)
-    artifact_dir = _replace_artifact_dir(Path(settings.parse_output_dir), stem)
-    md_path = artifact_dir / f"{stem}.md"
+    raw_stem = _raw_upload_stem(input_filename)
+    display_stem = _safe_artifact_stem(raw_stem)
+    artifact_dir = _replace_artifact_dir(
+        Path(settings.parse_output_dir),
+        _artifact_folder_name(raw_stem, display_stem),
+    )
+    md_path = artifact_dir / f"{display_stem}.md"
     md_path.write_text(response.markdown, encoding="utf-8")
     return [str(md_path.resolve())]
