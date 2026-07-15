@@ -136,12 +136,17 @@ class PaddlePipelineEngine(ParseEngine):
         kwargs = self._build_kwargs(pipeline_cls, lang_hint)
         try:
             pipeline = self._get_or_create_pipeline(pipeline_cls, kwargs)
+            
+            predict_kwargs: dict[str, Any] = {}
+            if self.name == "paddleocr_vl":
+                predict_kwargs["max_pixels"] = self.settings.paddleocr_vl_max_pixels
+
             if self.settings.paddleocr_vl_use_gguf:
                 # GGUF backend is remote, so calling predict is thread-safe and doesn't require the GPU process-level lock.
-                output = pipeline.predict(input_path)
+                output = pipeline.predict(input_path, **predict_kwargs)
             else:
                 with self._inference_lock:
-                    output = pipeline.predict(input_path)
+                    output = pipeline.predict(input_path, **predict_kwargs)
             return output, ""
         except Exception as exc:
             return None, f"predict_error: {exc}"
@@ -235,6 +240,9 @@ class PaddleOCRVLEngine(PaddlePipelineEngine):
             kwargs["pipeline_version"] = self.settings.paddleocr_vl_pipeline_version
         if self.settings.paddleocr_vl_use_gguf:
             kwargs.update(self._remote_vl_kwargs())
+        
+        # Override ignore labels (e.g. empty list to keep headers and footers)
+        kwargs["markdown_ignore_labels"] = list(self.settings.paddleocr_vl_markdown_ignore_labels)
         return kwargs
 
     def _extra_cli_args(self) -> list[str]:

@@ -37,20 +37,28 @@ class LLMExtractionService:
         if len(markdown) > self.settings.llm_max_input_chars:
             raise LLMExtractionInputTooLarge("OCR text exceeds configured input limit")
 
+        kwargs = {
+            "model": self.settings.openai_model,
+            "instructions": EXTRACTION_INSTRUCTIONS,
+            "input": f"<document>\n{markdown}\n</document>",
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": EXTRACTION_SCHEMA_NAME,
+                    "strict": True,
+                    "schema": EXTRACTION_JSON_SCHEMA,
+                }
+            },
+        }
+
+        # Reasoning models (like o1, o3, gpt-5) do not support setting temperature or top_p.
+        model_name = self.settings.openai_model.lower()
+        if not any(prefix in model_name for prefix in ("o1", "o3", "gpt-5")):
+            kwargs["temperature"] = 0.0
+            kwargs["top_p"] = 0.0
+
         try:
-            response = self.client.responses.create(
-                model=self.settings.openai_model,
-                instructions=EXTRACTION_INSTRUCTIONS,
-                input=f"<document>\n{markdown}\n</document>",
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": EXTRACTION_SCHEMA_NAME,
-                        "strict": True,
-                        "schema": EXTRACTION_JSON_SCHEMA,
-                    }
-                },
-            )
+            response = self.client.responses.create(**kwargs)
         except Exception as exc:
             if self._is_provider_error(exc):
                 raise LLMExtractionUnavailable(
@@ -72,6 +80,7 @@ class LLMExtractionService:
         if getattr(exc, "status_code", 0) >= 500:
             return True
         try:
+            # pyrefly: ignore [missing-import]
             from openai import APIConnectionError, APITimeoutError, RateLimitError
         except ImportError:
             return False
@@ -81,6 +90,7 @@ class LLMExtractionService:
         if not self.settings.openai_api_key:
             raise LLMExtractionError("OPENAI_API_KEY is not configured")
         try:
+            # pyrefly: ignore [missing-import]
             from openai import OpenAI
         except ImportError as exc:
             raise LLMExtractionError("OpenAI SDK is not installed") from exc

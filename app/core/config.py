@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import site
 
+# pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 
 
@@ -70,6 +71,12 @@ class Settings:
     paddleocr_vl_rec_api_model_name: str = os.getenv("PADDLEOCR_VL_REC_API_MODEL_NAME", "").strip()
     paddleocr_vl_rec_api_key: str      = os.getenv("PADDLEOCR_VL_REC_API_KEY", "").strip()
     paddleocr_vl_use_gguf: bool        = _get_bool("PADDLEOCR_VL_USE_GGUF", False)
+    paddleocr_vl_max_pixels: int       = _get_int("PADDLEOCR_VL_MAX_PIXELS", 1003520)
+    paddleocr_vl_markdown_ignore_labels: tuple[str, ...] = tuple(
+        item.strip()
+        for item in os.getenv("PADDLEOCR_VL_MARKDOWN_IGNORE_LABELS", "").split(",")
+        if item.strip()
+    )
     warmup_models_on_startup: bool     = _get_bool("WARMUP_MODELS_ON_STARTUP", True)
 
     # --- llama.cpp / GGUF bootstrap ---
@@ -107,7 +114,7 @@ class Settings:
 
     # --- PDF rasterization for OCR (render each page to an image, OCR per page) ---
     pdf_rasterize_enabled: bool          = _get_bool("PDF_RASTERIZE_ENABLED", True)
-    pdf_rasterize_dpi: int               = _get_int("PDF_RASTERIZE_DPI", 150)
+    pdf_rasterize_dpi: int               = _get_int("PDF_RASTERIZE_DPI", 200)
 
     # --- Output filtering ---
     table_only_output: bool              = _get_bool("TABLE_ONLY_OUTPUT", False)

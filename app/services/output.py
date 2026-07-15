@@ -128,3 +128,17 @@ def save_parse_artifacts(
     md_path = artifact_dir / f"{display_stem}.md"
     md_path.write_text(response.markdown, encoding="utf-8")
     return [str(md_path.resolve())]
+
+
+def save_extraction_artifacts(
+    data: dict[str, object],
+    input_filename: str,
+) -> list[str]:
+    import json
+    raw_stem = _raw_upload_stem(input_filename)
+    display_stem = _safe_artifact_stem(raw_stem)
+    artifact_dir = Path(settings.parse_output_dir) / _artifact_folder_name(raw_stem, display_stem)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    json_path = artifact_dir / f"{display_stem}.json"
+    json_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return [str(json_path.resolve())]

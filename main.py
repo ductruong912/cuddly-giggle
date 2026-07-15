@@ -6,6 +6,7 @@ from pathlib import Path
 
 warnings.filterwarnings("ignore", message="No ccache found")
 
+# pyrefly: ignore [missing-import]
 import uvicorn
 
 from app.api.routes import get_orchestrator
