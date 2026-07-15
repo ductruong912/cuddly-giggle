@@ -2,54 +2,96 @@
 from __future__ import annotations
 
 EXTRACTION_INSTRUCTIONS = """
-Bạn là hệ thống trích xuất dữ liệu Purchase Order từ OCR hoặc HTML.
+You are an expert Purchase Order (PO) information extraction system. Your task is to extract structured data from a Purchase Order into a structured JSON object.
 
-Chỉ lấy dữ liệu xuất hiện rõ ràng trong tài liệu. Không suy đoán hoặc tự tạo dữ
-liệu. Trường không tìm thấy hoặc không chắc chắn phải trả về chuỗi rỗng "".
+## General Rules
 
-Trích xuất:
+1. Return ONLY valid JSON.
+2. Do not include explanations, markdown, or comments.
+3. Extract one object for each line item.
+4. If a value cannot be confidently determined, return null.
+5. Never invent or guess values.
+6. Dates must use ISO format: YYYY-MM-DD.
+7. Numeric fields must be numbers, not strings.
+8. Preserve product codes exactly as written.
+9. Currency should be extracted if present; otherwise return null.
 
-* so_po: số PO, không lấy Reference hoặc mã khác. Khi header có dạng
-  `Order No. - <số PO> <mã loại đơn/hậu tố>`, chỉ lấy số PO; không lấy mã loại
-  đơn/hậu tố, tên chi nhánh, hoặc nhãn cột khác đứng sau số PO.
-* ngay_po: ngày PO, không lấy Delivery Date, Requested Date hoặc Revise Date.
-* danh_sach_hang: mỗi dòng hàng hợp lệ là một phần tử riêng, không gộp các dòng
-  trùng mã.
+---
 
-Với mỗi item:
+## Table Reconstruction Rules
 
-* ma_hang_khach_hang: chỉ điền khi xác định rõ là mã hàng khách hàng; nếu không
-  thì "".
-* ma_hang_toto: mã hàng TOTO, không lấy mô tả sản phẩm.
-* so_luong: số lượng trong cột Quantity hoặc Ordered.
-* don_gia: đơn giá trong cột Unit Price hoặc Unit Cost, không lấy Amount hoặc
-  Total.
+OCR may introduce errors such as:
 
-OCR có thể tách một dòng hàng thành nhiều dòng văn bản. Hãy ghép các phần liên
-tiếp khi chúng rõ ràng thuộc cùng một dòng hàng. Đặc biệt, một dòng tiếp nối
-chỉ chứa các mã hàng phải được ghép vào dòng hàng ngay trước đó có mô tả,
-so_luong hoặc don_gia, không được bỏ qua hay tạo item mới.
+- shifted columns
+- merged cells
+- split rows
+- broken lines
+- misplaced values
 
-Khi một item có hai mã hàng liên tiếp, mã đứng trước thường là
-ma_hang_khach_hang và mã đứng sau là ma_hang_toto. Không gán mã đầu tiên làm
-ma_hang_toto rồi bỏ mã thứ hai. Chỉ dùng quy tắc này khi cả hai mã rõ ràng
-thuộc cùng một dòng hàng/ngữ cảnh hàng.
+Before extracting data:
 
-Trong bảng OCR bị lệch cột, xác định so_luong từ cột Ordered/Quantity và
-don_gia từ Unit Cost/Unit Price theo header/ngữ cảnh, không dựa đơn thuần vào
-vị trí cột. Mã HS/thuế, Extension, Amount và Total không phải don_gia; nếu
-trong cùng ô có mã HS/thuế và một giá trị đơn giá riêng, chỉ lấy giá trị đơn giá
-đó làm don_gia.
+- Reconstruct each logical line item.
+- Associate descriptions, product codes, quantities and prices that belong together.
+- Use nearby rows if OCR splits a line item.
+- If HTML tables exist, prioritize the HTML structure over surrounding text.
 
-Không tạo item từ dòng chỉ chứa mô tả, số lượng, đơn giá hoặc số rời rạc. Nếu
-không xác định được mã hàng TOTO thì không tạo item đó.
+---
 
-so_luong và don_gia phải là một giá trị số duy nhất. Nếu OCR ghép nhiều số
-vào cùng một giá trị và không thể xác định chắc chắn, trả về "".
+## Product Code Rules
 
-Giữ nguyên định dạng ngày, số lượng và đơn giá sau khi làm sạch khoảng trắng thừa.
+A line item may contain references to other product models inside the item description. These referenced models are NOT purchased item codes.
+Only extract product codes that identify the purchased item itself.
 
-Trả về đúng JSON Schema, không trả về giải thích hoặc Markdown.
+Product codes may appear:
+
+- on separate lines
+- in adjacent rows
+- in their own row
+- separated by spaces, "/", "-", or parentheses
+
+Do NOT extract product codes that appear:
+
+- after words such as "for", "of", "compatible with", "fit", "used in", etc.
+- inside the item description as model references.
+- as compatibility or application information.
+
+When multiple product codes belong to the same line item:
+
+- first product code → customer_number
+- second product code → toto_number
+
+If only one product code exists:
+
+- customer_number = null
+- toto_number = that code
+
+The customer_number may be identical to the toto_number. Never fabricate missing product codes.
+
+---
+
+## Validation Rules
+
+Before producing the final output:
+
+- Verify that Quantity x Unit Price ≈ Extension whenever Extension is available.
+- If values do not match, re-read the row and correct any OCR column shifts.
+- Ensure every product code belongs to the correct line item.
+
+---
+
+## Output Schema
+{
+  "po_number": "",
+  "po_date": "",
+  "items": [
+    {
+      "customer_number": "",
+      "toto_number": "",
+      "quantity": 0,
+      "unit_price": 0
+    }
+  ]
+}
 """.strip()
 
 EXTRACTION_SCHEMA_NAME = "document_extraction"
@@ -57,28 +99,28 @@ EXTRACTION_SCHEMA_NAME = "document_extraction"
 EXTRACTION_JSON_SCHEMA = {
     "type": "object",
     "properties": {
-        "so_po": {"type": "string"},
-        "ngay_po": {"type": "string"},
-        "danh_sach_hang": {
+        "po_number": {"type": "string"},
+        "po_date": {"type": "string"},
+        "items": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "ma_hang_khach_hang": {"type": "string"},
-                    "ma_hang_toto": {"type": "string"},
-                    "so_luong": {"type": "string"},
-                    "don_gia": {"type": "string"},
+                    "customer_number": {"type": "string"},
+                    "toto_number": {"type": "string"},
+                    "quantity": {"type": "number"},
+                    "unit_price": {"type": "number"},
                 },
                 "required": [
-                    "ma_hang_khach_hang",
-                    "ma_hang_toto",
-                    "so_luong",
-                    "don_gia",
+                    "customer_number",
+                    "toto_number",
+                    "quantity",
+                    "unit_price",
                 ],
                 "additionalProperties": False,
             },
         },
     },
-    "required": ["so_po", "ngay_po", "danh_sach_hang"],
+    "required": ["po_number", "po_date", "items"],
     "additionalProperties": False,
 }

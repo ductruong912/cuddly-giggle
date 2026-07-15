@@ -83,6 +83,7 @@ class PaddlePipelineEngine(ParseEngine):
         if not self.settings.pdf_rasterize_enabled or Path(input_path).suffix.lower() != ".pdf":
             return None, noop
         try:
+            # pyrefly: ignore [missing-import]
             import fitz  # PyMuPDF
         except Exception:
             return None, noop  # PyMuPDF missing: keep the original whole-PDF flow.
@@ -135,8 +136,12 @@ class PaddlePipelineEngine(ParseEngine):
         kwargs = self._build_kwargs(pipeline_cls, lang_hint)
         try:
             pipeline = self._get_or_create_pipeline(pipeline_cls, kwargs)
-            with self._inference_lock:
+            if self.settings.paddleocr_vl_use_gguf:
+                # GGUF backend is remote, so calling predict is thread-safe and doesn't require the GPU process-level lock.
                 output = pipeline.predict(input_path)
+            else:
+                with self._inference_lock:
+                    output = pipeline.predict(input_path)
             return output, ""
         except Exception as exc:
             return None, f"predict_error: {exc}"
