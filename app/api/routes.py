@@ -136,9 +136,9 @@ async def extract_document(
                     shutil.copyfileobj(uploaded_file.file, f)
                 logger.info(
                     pipeline_message(
-                        "PHASE 1",
+                        # "PHASE 1",
                         "received file=%s suffix=%s size_bytes=%s",
-                        request_id=request_id,
+                        # request_id=request_id,
                     ),
                     uploaded_file.filename or temp_path.name,
                     suffix,
@@ -304,9 +304,9 @@ def ocr_document(
         upload_elapsed = time.perf_counter() - stage_start
         logger.info(
             pipeline_message(
-                "PHASE 1",
+                # "PHASE 1",
                 "received file=%s suffix=%s size_bytes=%s",
-                request_id=request_id,
+                # request_id=request_id,
             ),
             file.filename or temp_path.name,
             suffix,

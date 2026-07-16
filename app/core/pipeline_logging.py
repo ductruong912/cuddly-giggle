@@ -22,8 +22,16 @@ def current_request_id() -> str | None:
     return _request_id.get()
 
 
-def pipeline_message(prefix: str, message: str, *, request_id: str | None = None) -> str:
-    request_id = request_id or current_request_id()
-    if request_id:
-        return f"{prefix} [{request_id}] {message}"
-    return f"{prefix} {message}"
+def pipeline_message(
+    label_or_message: str,
+    message: str | None = None,
+    *,
+    request_id: str | None = None,
+) -> str:
+    """Return terminal text without internal phase or request identifiers."""
+    del request_id
+    if message is None:
+        return label_or_message
+    if label_or_message.startswith("PHASE "):
+        return message
+    return f"{label_or_message} {message}"
