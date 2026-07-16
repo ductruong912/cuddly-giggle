@@ -15,7 +15,7 @@ Vision-Language (VL) OCR, and structural document parsing, and returns clean
 - **Vision-Language OCR** — uses **PaddleOCR-VL** (v1.6) as the primary engine for complex layouts and robust Vietnamese OCR.
 - **Resilient fallback** — cascades to **PP-StructureV3** only when the primary OCR engine fails.
 - **Optional GGUF backend** — can run PaddleOCR-VL recognition through llama.cpp + GGUF for lower-VRAM GPUs.
-- **Auto-artifacts** — saves every result as a `.md` file under `outputs/`.
+- **Auto-artifacts** — saves every result as a `.md` file in a folder named after the uploaded filename.
 - **Offline ready** — model cache can be pre-populated for air-gapped deployments.
 
 ---
@@ -152,6 +152,13 @@ Most-used settings:
 | `PARSE_OUTPUT_DIR` | `outputs` | Where parsed `.md` files are saved. |
 | `TABLE_ONLY_OUTPUT` | `false` | Keep only tables in the Markdown output. |
 | `PDF_TEXT_PARSE_ENABLED` | `true` | Use the native PDF text fast-path before OCR. |
+| `OPENAI_MODEL` | `gpt-5-mini` | Model used by `/v1/llm/extract`. |
+| `OPENAI_TIMEOUT_SECONDS` | `60` | Timeout for an OpenAI extraction request. |
+| `LLM_MAX_INPUT_CHARS` | `120000` | Maximum OCR Markdown characters submitted to the model. |
+
+`OPENAI_API_KEY` is required only for `/v1/llm/extract`. Keep it in `.env`; do
+not commit it. Change `app/prompts/prompt.py` to customize the extraction
+instructions and strict JSON Schema returned by this endpoint.
 
 GGUF / llama.cpp settings (used only when `PADDLEOCR_VL_USE_GGUF=true`):
 
@@ -312,8 +319,10 @@ LibreOffice/soffice on the server so they can be converted first.
 The fallback engine (run only if the primary OCR engine fails) is controlled
 server-side by `DEFAULT_ENABLE_FALLBACK` (default `true`).
 
-Saved artifacts use the uploaded filename stem (e.g. `VB 6.pdf` → `VB 6.md`);
-duplicate names become `VB 6 (2).md`, `VB 6 (3).md`, and so on.
+Artifacts are grouped below `PARSE_OUTPUT_DIR` by uploaded filename stem. With
+`PARSE_OUTPUT_DIR=outputs/TOTO`, uploading `512.pdf` writes
+`outputs/TOTO/512/512.md`. Uploading `512.pdf` again replaces only
+`outputs/TOTO/512/`; other filenames' folders are unchanged.
 
 **Example (cURL)**
 
@@ -328,6 +337,35 @@ curl -X POST \
 ### `GET /healthz`
 
 Liveness probe. Returns `{"status": "ok"}`.
+
+### `POST /v1/llm/extract`
+
+Uploads a document, runs the same internal OCR orchestrator as the parse API,
+then returns structured JSON produced by GPT-5 mini. It does not call
+`/v1/doc/parse` over HTTP and does not save a Markdown artifact.
+
+The structure under `data` is defined by `app/prompts/prompt.py`; edit that
+file to adapt extraction for invoices, forms, contracts, or another document
+type.
+
+```bash
+curl -X POST \
+  'http://127.0.0.1:8000/v1/llm/extract' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: multipart/form-data' \
+  -F 'file=@sample_invoice.pdf;type=application/pdf'
+```
+
+### `POST /v1/llm/extract-from-ocr`
+
+Gọi riêng lớp LLM để thử prompt trên toàn bộ nội dung Markdown/HTML đã parse.
+Endpoint nhận trực tiếp file `.md` hoặc `.markdown`, không chạy OCR.
+
+```bash
+curl -X POST \
+  'http://127.0.0.1:8000/v1/llm/extract-from-ocr' \
+  -F 'file=@outputs/purchase-order.md;type=text/markdown'
+```
 
 ---
 

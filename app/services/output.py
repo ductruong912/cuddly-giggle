@@ -1,9 +1,11 @@
 """Output helpers: markdown table filtering and parse artifact saving."""
 from __future__ import annotations
 
+import hashlib
 import logging
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
+import shutil
 
 from app.core.config import settings
 from app.domain.schemas import ParseResponse
@@ -85,40 +87,58 @@ def _safe_artifact_stem(name: str) -> str:
     return stem or "document"
 
 
-def _candidate_path(output_dir: Path, stem: str, suffix_number: int) -> Path:
-    if suffix_number == 1:
-        return output_dir / f"{stem}.md"
-    return output_dir / f"{stem} ({suffix_number}).md"
+def _raw_upload_stem(input_filename: str) -> str:
+    filename = input_filename.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
+    return PurePosixPath(filename).stem
 
 
-def _write_unique_markdown(output_dir: Path, stem: str, markdown: str) -> Path:
-    suffix_number = 1
-    while True:
-        path = _candidate_path(output_dir, stem, suffix_number)
-        try:
-            with path.open("x", encoding="utf-8") as file:
-                file.write(markdown)
-            return path
-        except FileExistsError:
-            suffix_number += 1
+def _artifact_folder_name(raw_stem: str, display_stem: str) -> str:
+    if raw_stem == display_stem:
+        return display_stem
+    digest = hashlib.sha256(raw_stem.encode("utf-8")).hexdigest()
+    return f"{display_stem}-{digest}"
+
+
+def _replace_artifact_dir(output_dir: Path, stem: str) -> Path:
+    artifact_dir = output_dir / stem
+    if artifact_dir.exists():
+        shutil.rmtree(artifact_dir)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    return artifact_dir
 
 
 def save_parse_artifacts(
     response: ParseResponse,
     input_filename: str,
 ) -> list[str]:
-    output_dir = Path(settings.parse_output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if not response.markdown:
+        # Surface a signal so an empty saved_files is not mistaken for a successful export.
+        logger.warning(
+            "markdown output requested but no markdown was produced for request_id=%s; no .md written",
+            response.request_id,
+        )
+        return []
 
-    stem = _safe_artifact_stem(Path(input_filename).stem)
-
-    if response.markdown:
-        md_path = _write_unique_markdown(output_dir, stem, response.markdown)
-        return [str(md_path.resolve())]
-
-    # Surface a signal so an empty saved_files is not mistaken for a successful export.
-    logger.warning(
-        "markdown output requested but no markdown was produced for request_id=%s; no .md written",
-        response.request_id,
+    raw_stem = _raw_upload_stem(input_filename)
+    display_stem = _safe_artifact_stem(raw_stem)
+    artifact_dir = _replace_artifact_dir(
+        Path(settings.parse_output_dir),
+        _artifact_folder_name(raw_stem, display_stem),
     )
-    return []
+    md_path = artifact_dir / f"{display_stem}.md"
+    md_path.write_text(response.markdown, encoding="utf-8")
+    return [str(md_path.resolve())]
+
+
+def save_extraction_artifacts(
+    data: dict[str, object],
+    input_filename: str,
+) -> list[str]:
+    import json
+    raw_stem = _raw_upload_stem(input_filename)
+    display_stem = _safe_artifact_stem(raw_stem)
+    artifact_dir = Path(settings.parse_output_dir) / _artifact_folder_name(raw_stem, display_stem)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    json_path = artifact_dir / f"{display_stem}.json"
+    json_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return [str(json_path.resolve())]

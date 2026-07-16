@@ -78,3 +78,14 @@ class ParseResponse(BaseModel):
 class ParseOptions(BaseModel):
     lang_hint: LangHint = LangHint.auto
     enable_fallback: bool = True
+
+
+class LLMExtractionOCRMetadata(BaseModel):
+    decision: str
+    page_count: int
+
+
+class LLMExtractionResponse(BaseModel):
+    request_id: str
+    ocr: LLMExtractionOCRMetadata
+    data: dict[str, Any]

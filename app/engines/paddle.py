@@ -2,17 +2,23 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from typing import Any, Callable
 
 from app.core.config import Settings, settings
+from app.core.pipeline_logging import pipeline_message
 from app.domain.schemas import PageParseResult
 from app.engines.base import EngineParseResult, ParseEngine
 from app.engines.normalizer import normalize_engine_output
+
+
+logger = logging.getLogger(__name__)
 
 
 class PaddlePipelineEngine(ParseEngine):
@@ -58,12 +64,48 @@ class PaddlePipelineEngine(ParseEngine):
         page_images, cleanup = self._rasterize_pdf_pages(input_path)
         try:
             if page_images is None:
-                return self._parse_single(input_path, lang_hint)
-            return self._merge_page_results(
-                [self._parse_single(image_path, lang_hint) for image_path in page_images]
+                return self._parse_with_progress(input_path, lang_hint, page_number=1, page_count=1)
+
+            logger.info(
+                pipeline_message("PHASE 2", "ocr started engine=%s pages=%s"),
+                self.name,
+                len(page_images),
             )
+            results = [
+                self._parse_with_progress(
+                    image_path,
+                    lang_hint,
+                    page_number=page_number,
+                    page_count=len(page_images),
+                )
+                for page_number, image_path in enumerate(page_images, start=1)
+            ]
+            return self._merge_page_results(results)
         finally:
             cleanup()
+
+    def _parse_with_progress(
+        self,
+        input_path: str,
+        lang_hint: str,
+        *,
+        page_number: int,
+        page_count: int,
+    ) -> EngineParseResult:
+        logger.info(
+            pipeline_message("PHASE 2", "ocr page=%s/%s started"),
+            page_number,
+            page_count,
+        )
+        started = time.perf_counter()
+        result = self._parse_single(input_path, lang_hint)
+        logger.info(
+            pipeline_message("PHASE 2", "ocr page=%s/%s completed duration=%.3fs"),
+            page_number,
+            page_count,
+            time.perf_counter() - started,
+        )
+        return result
 
     def _parse_single(self, input_path: str, lang_hint: str) -> EngineParseResult:
         # 1) Prefer official Python API when available.
@@ -83,6 +125,7 @@ class PaddlePipelineEngine(ParseEngine):
         if not self.settings.pdf_rasterize_enabled or Path(input_path).suffix.lower() != ".pdf":
             return None, noop
         try:
+            # pyrefly: ignore [missing-import]
             import fitz  # PyMuPDF
         except Exception:
             return None, noop  # PyMuPDF missing: keep the original whole-PDF flow.
@@ -135,8 +178,17 @@ class PaddlePipelineEngine(ParseEngine):
         kwargs = self._build_kwargs(pipeline_cls, lang_hint)
         try:
             pipeline = self._get_or_create_pipeline(pipeline_cls, kwargs)
-            with self._inference_lock:
-                output = pipeline.predict(input_path)
+            
+            predict_kwargs: dict[str, Any] = {}
+            if self.name == "paddleocr_vl":
+                predict_kwargs["max_pixels"] = self.settings.paddleocr_vl_max_pixels
+
+            if self.settings.paddleocr_vl_use_gguf:
+                # GGUF backend is remote, so calling predict is thread-safe and doesn't require the GPU process-level lock.
+                output = pipeline.predict(input_path, **predict_kwargs)
+            else:
+                with self._inference_lock:
+                    output = pipeline.predict(input_path, **predict_kwargs)
             return output, ""
         except Exception as exc:
             return None, f"predict_error: {exc}"
@@ -230,6 +282,9 @@ class PaddleOCRVLEngine(PaddlePipelineEngine):
             kwargs["pipeline_version"] = self.settings.paddleocr_vl_pipeline_version
         if self.settings.paddleocr_vl_use_gguf:
             kwargs.update(self._remote_vl_kwargs())
+        
+        # Override ignore labels (e.g. empty list to keep headers and footers)
+        kwargs["markdown_ignore_labels"] = list(self.settings.paddleocr_vl_markdown_ignore_labels)
         return kwargs
 
     def _extra_cli_args(self) -> list[str]:

@@ -500,6 +500,13 @@ def normalize_engine_output(
             markdown_parts.append(fallback_md)
     markdown = _compact_text_only_markdown("\n\n".join([part for part in markdown_parts if part.strip()]) or None)
 
+    # import logging
+    # _logger = logging.getLogger("app.ocr.pipeline")
+    # _logger.info("--- OCR Pipeline Execution Verification ---")
+    # _logger.info("Source Engine: %s", source_engine)
+    # if markdown:
+    #     _logger.info("Raw Markdown output size: %s characters", len(markdown))
+
     pages: list[PageParseResult] = []
     if isinstance(root, dict) and isinstance(root.get("pages"), list):
         raw_pages = root["pages"]
@@ -518,6 +525,46 @@ def normalize_engine_output(
         page_index = _safe_int(page.get("page_index"), idx)
 
         parsing_res_list = page.get("parsing_res_list")
+
+        # # Log blocks information to verify detection, size, and downscaling
+        # if isinstance(parsing_res_list, list):
+        #     _logger.info("Page %s: Detected %s layout blocks in parsing_res_list", page_index, len(parsing_res_list))
+        #     for j, block in enumerate(parsing_res_list):
+        #         block_dict = _normalize_parsing_item(block)
+        #         label = block_dict.get("label")
+        #         content = block_dict.get("content") or ""
+        #         bbox = block_dict.get("bbox") or []
+                
+        #         width, height = 0.0, 0.0
+        #         if isinstance(bbox, list):
+        #             if len(bbox) == 4 and all(isinstance(v, (int, float)) for v in bbox):
+        #                 width = abs(bbox[2] - bbox[0])
+        #                 height = abs(bbox[3] - bbox[1])
+        #             elif len(bbox) >= 2:
+        #                 try:
+        #                     xs = [float(p[0] if isinstance(p, (list, tuple)) else p.x) for p in bbox]
+        #                     ys = [float(p[1] if isinstance(p, (list, tuple)) else p.y) for p in bbox]
+        #                     width = max(xs) - min(xs)
+        #                     height = max(ys) - min(ys)
+        #                 except Exception:
+        #                     pass
+                
+        #         max_pixels = app_settings.paddleocr_vl_max_pixels if hasattr(app_settings, "paddleocr_vl_max_pixels") else 1003520
+        #         total_pixels = width * height
+        #         _logger.info(
+        #             "  [Layout Block %s] label='%s' | original_size=%sx%s | total_pixels=%s | max_pixels=%s",
+        #             j, label, int(width), int(height), int(total_pixels), max_pixels
+        #         )
+        #         if total_pixels > max_pixels:
+        #             scale = (max_pixels / total_pixels) ** 0.5
+        #             target_w = int(width * scale)
+        #             target_h = int(height * scale)
+        #             _logger.info("    => DOWNSCALED BEFORE VLM INFERENCE: %sx%s to %sx%s", int(width), int(height), target_w, target_h)
+        #         else:
+        #             _logger.info("    => SENT AT NATIVE RESOLUTION TO VLM")
+                
+        #         _logger.info("    => Recognized text: '%s'", content.strip().replace("\n", " "))
+
         parsed_blocks: list[Block] = []
         parsed_tables: list[Table] = []
         if isinstance(parsing_res_list, list):

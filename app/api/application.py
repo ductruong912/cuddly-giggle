@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# pyrefly: ignore [missing-import]
 from fastapi import FastAPI
 
 from app.api.routes import doc_router, health_router
