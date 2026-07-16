@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from app.core.config import Settings, settings
 from app.domain.schemas import ParseResponse
@@ -57,9 +61,14 @@ class LLMExtractionService:
             kwargs["temperature"] = 0.0
             kwargs["top_p"] = 0.0
 
+        start_time = time.perf_counter()
         try:
             response = self.client.responses.create(**kwargs)
+            elapsed = time.perf_counter() - start_time
+            logger.info("llm api timings request_id=%s duration=%.3fs", parse_response.request_id, elapsed)
         except Exception as exc:
+            elapsed = time.perf_counter() - start_time
+            logger.info("llm api timings request_id=%s duration=%.3fs failed=true", parse_response.request_id, elapsed)
             if self._is_provider_error(exc):
                 raise LLMExtractionUnavailable(
                     "OpenAI extraction is temporarily unavailable"
