@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request
 from fastapi.responses import PlainTextResponse
 
 from app.core.config import settings
+from app.core.pipeline_logging import pipeline_message, request_logging_context
 from app.domain.schemas import (
     LLMExtractionOCRMetadata,
     LLMExtractionResponse,
@@ -76,6 +77,7 @@ async def extract_document(
     orchestrator: ParseOrchestrator = Depends(get_orchestrator),
     extractor: LLMExtractionService = Depends(get_llm_extractor),
 ) -> LLMExtractionResponse:
+    total_start = time.perf_counter()
     content_type = request.headers.get("content-type", "")
 
     # 1. Handle multipart/form-data (File Upload)
@@ -128,20 +130,45 @@ async def extract_document(
             temp_root = Path(settings.temp_dir)
             temp_root.mkdir(parents=True, exist_ok=True)
             temp_path = temp_root / f"{uuid.uuid4().hex}{suffix}"
+            request_id = f"req_{uuid.uuid4().hex[:12]}"
             try:
                 with temp_path.open("wb") as f:
                     shutil.copyfileobj(uploaded_file.file, f)
+                logger.info(
+                    pipeline_message(
+                        "PHASE 1",
+                        "received file=%s suffix=%s size_bytes=%s",
+                        request_id=request_id,
+                    ),
+                    uploaded_file.filename or temp_path.name,
+                    suffix,
+                    temp_path.stat().st_size,
+                )
                 response = orchestrator.parse(
                     str(temp_path),
                     ParseOptions(enable_fallback=settings.default_enable_fallback),
+                    request_id=request_id,
                 )
-                data = extractor.extract(response)
+                with request_logging_context(response.request_id):
+                    data = extractor.extract(response)
                 
                 # Save markdown OCR result and structured JSON output
-                save_parse_artifacts(response, uploaded_file.filename or temp_path.name)
-                save_extraction_artifacts(data, uploaded_file.filename or temp_path.name)
+                saved_markdown = save_parse_artifacts(response, uploaded_file.filename or temp_path.name)
+                saved_json = save_extraction_artifacts(data, uploaded_file.filename or temp_path.name)
 
-                logger.info("llm extraction complete request_id=%s pages=%s", response.request_id, len(response.pages))
+                logger.info(
+                    pipeline_message(
+                        "COMPLETED",
+                        "pages=%s blocks=%s tables=%s total=%.3fs saved_markdown=%s saved_json=%s",
+                        request_id=response.request_id,
+                    ),
+                    len(response.pages),
+                    len(response.blocks),
+                    len(response.tables),
+                    time.perf_counter() - total_start,
+                    ",".join(saved_markdown) or "none",
+                    ",".join(saved_json) or "none",
+                )
                 return LLMExtractionResponse(
                     request_id=response.request_id,
                     ocr=LLMExtractionOCRMetadata(
@@ -159,6 +186,10 @@ async def extract_document(
             except RuntimeError as exc:
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
             except Exception as exc:
+                logger.error(
+                    pipeline_message("FAILED", "unexpected extraction request error", request_id=request_id),
+                    exc_info=True,
+                )
                 raise HTTPException(status_code=500, detail=f"Unexpected extraction error: {exc}") from exc
             finally:
                 if temp_path.exists():
@@ -257,6 +288,7 @@ def ocr_document(
     upload_elapsed = 0.0
     parse_elapsed = 0.0
     save_elapsed = 0.0
+    request_id = f"req_{uuid.uuid4().hex[:12]}"
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in SUPPORTED_INPUT_SUFFIXES:
         raise HTTPException(status_code=400, detail="Unsupported input type. Use PDF, Word, Excel, or image files.")
@@ -270,11 +302,21 @@ def ocr_document(
         with temp_path.open("wb") as f:
             shutil.copyfileobj(file.file, f)
         upload_elapsed = time.perf_counter() - stage_start
+        logger.info(
+            pipeline_message(
+                "PHASE 1",
+                "received file=%s suffix=%s size_bytes=%s",
+                request_id=request_id,
+            ),
+            file.filename or temp_path.name,
+            suffix,
+            temp_path.stat().st_size,
+        )
         options = ParseOptions(
             enable_fallback=settings.default_enable_fallback,
         )
         stage_start = time.perf_counter()
-        response = orchestrator.parse(str(temp_path), options)
+        response = orchestrator.parse(str(temp_path), options, request_id=request_id)
         parse_elapsed = time.perf_counter() - stage_start
         stage_start = time.perf_counter()
         saved_files = save_parse_artifacts(
@@ -285,13 +327,20 @@ def ocr_document(
         if not response.markdown:
             raise HTTPException(status_code=500, detail="No markdown output produced.")
         logger.info(
-            "api timings request_id=%s upload=%.3fs parse=%.3fs save=%.3fs total=%.3fs saved_files=%s",
-            response.request_id,
+            pipeline_message(
+                "COMPLETED",
+                "pages=%s blocks=%s tables=%s markdown_chars=%s upload=%.3fs parse=%.3fs save=%.3fs total=%.3fs saved_markdown=%s",
+                request_id=response.request_id,
+            ),
+            len(response.pages),
+            len(response.blocks),
+            len(response.tables),
+            len(response.markdown or ""),
             upload_elapsed,
             parse_elapsed,
             save_elapsed,
             time.perf_counter() - total_start,
-            saved_files,
+            ",".join(saved_files) or "none",
         )
         return PlainTextResponse(response.markdown, media_type="text/markdown")
     except HTTPException:
@@ -299,6 +348,10 @@ def ocr_document(
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
+        logger.error(
+            pipeline_message("FAILED", "unexpected OCR request error", request_id=request_id),
+            exc_info=True,
+        )
         raise HTTPException(status_code=500, detail=f"Unexpected parsing error: {exc}") from exc
     finally:
         if temp_path.exists():

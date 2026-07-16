@@ -45,3 +45,5 @@ data_test/
 .paddleocr/
 llama/
 models/
+tests/
+docs/

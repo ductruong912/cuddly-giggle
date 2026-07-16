@@ -9,6 +9,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from app.core.config import Settings, settings
+from app.core.pipeline_logging import pipeline_message
 from app.domain.schemas import ParseResponse
 from app.prompts.prompt import (
     EXTRACTION_INSTRUCTIONS,
@@ -62,13 +63,22 @@ class LLMExtractionService:
             kwargs["top_p"] = 0.0
 
         start_time = time.perf_counter()
+        logger.info(
+            pipeline_message("PHASE 3", "llm started model=%s input_chars=%s"),
+            self.settings.openai_model,
+            len(markdown),
+        )
         try:
             response = self.client.responses.create(**kwargs)
             elapsed = time.perf_counter() - start_time
-            logger.info("llm api timings request_id=%s duration=%.3fs", parse_response.request_id, elapsed)
+            logger.info(pipeline_message("PHASE 3", "llm completed duration=%.3fs"), elapsed)
         except Exception as exc:
             elapsed = time.perf_counter() - start_time
-            logger.info("llm api timings request_id=%s duration=%.3fs failed=true", parse_response.request_id, elapsed)
+            logger.error(
+                pipeline_message("PHASE 3", "llm failed duration=%.3fs"),
+                elapsed,
+                exc_info=True,
+            )
             if self._is_provider_error(exc):
                 raise LLMExtractionUnavailable(
                     "OpenAI extraction is temporarily unavailable"

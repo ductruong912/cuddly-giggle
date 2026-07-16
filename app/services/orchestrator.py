@@ -8,6 +8,7 @@ import time
 import uuid
 
 from app.core.config import Settings, settings
+from app.core.pipeline_logging import pipeline_message, request_logging_context
 from app.domain.schemas import ParseDecision, ParseOptions, ParseResponse
 from app.engines.base import EngineParseResult, ParseEngine
 from app.engines.native import (
@@ -41,9 +42,19 @@ class ParseOrchestrator:
         self.word_text_engine = word_text_engine or WordTextEngine(self.settings)
         self.excel_text_engine = excel_text_engine or ExcelTextEngine(self.settings)
 
-    def parse(self, input_path: str, options: ParseOptions) -> ParseResponse:
+    def parse(
+        self,
+        input_path: str,
+        options: ParseOptions,
+        *,
+        request_id: str | None = None,
+    ) -> ParseResponse:
+        resolved_request_id = request_id or f"req_{uuid.uuid4().hex[:12]}"
+        with request_logging_context(resolved_request_id):
+            return self._parse(input_path, options, resolved_request_id)
+
+    def _parse(self, input_path: str, options: ParseOptions, request_id: str) -> ParseResponse:
         total_start = time.perf_counter()
-        request_id = f"req_{uuid.uuid4().hex[:12]}"
         primary_elapsed = 0.0
         fallback_elapsed = 0.0
         pdf_text_elapsed = 0.0
@@ -51,6 +62,7 @@ class ParseOrchestrator:
         excel_text_elapsed = 0.0
 
         if self._should_try_word_text(input_path):
+            logger.info(pipeline_message("PHASE 1", "route=word_text"))
             stage_start = time.perf_counter()
             word_text = self.word_text_engine.parse(input_path, options.lang_hint.value)
             word_text_elapsed = time.perf_counter() - stage_start
@@ -66,6 +78,7 @@ class ParseOrchestrator:
             return response
 
         if self._should_try_excel_text(input_path):
+            logger.info(pipeline_message("PHASE 1", "route=excel_text"))
             stage_start = time.perf_counter()
             excel_text = self.excel_text_engine.parse(input_path, options.lang_hint.value)
             excel_text_elapsed = time.perf_counter() - stage_start
@@ -81,6 +94,7 @@ class ParseOrchestrator:
             return response
 
         if self._should_try_pdf_text(input_path):
+            logger.info(pipeline_message("PHASE 1", "route=pdf_text"))
             try:
                 stage_start = time.perf_counter()
                 pdf_text = self.pdf_text_engine.parse(input_path, options.lang_hint.value)
@@ -96,12 +110,16 @@ class ParseOrchestrator:
                         pdf_text.page_confidence,
                     )
                     return response
-                logger.info("pdf text parser result too sparse; falling back to OCR")
+                logger.info(pipeline_message("PHASE 1", "pdf_text result=too_sparse; route=ocr"))
             except Exception as exc:
                 pdf_text_elapsed = time.perf_counter() - stage_start
-                logger.info("pdf text parser skipped; falling back to OCR: %s", self._compact_error(str(exc)))
+                logger.warning(
+                    pipeline_message("PHASE 1", "pdf_text failed; route=ocr error=%s"),
+                    self._compact_error(str(exc)),
+                )
 
         try:
+            logger.info(pipeline_message("PHASE 1", "route=ocr engine=%s"), self.primary_engine.name)
             stage_start = time.perf_counter()
             result = self.primary_engine.parse(input_path, options.lang_hint.value)
             primary_elapsed = time.perf_counter() - stage_start
@@ -113,14 +131,20 @@ class ParseOrchestrator:
             primary_error = self._compact_error(str(exc))
             if not options.enable_fallback:
                 raise
-            logger.info("primary engine failed; trying fallback: %s", primary_error)
+            logger.warning(
+                pipeline_message("PHASE 2", "primary engine=%s failed; trying fallback error=%s"),
+                self.primary_engine.name,
+                primary_error,
+            )
             try:
+                logger.info(pipeline_message("PHASE 2", "fallback started engine=%s"), self.settings.fallback_engine)
                 stage_start = time.perf_counter()
                 result = self._get_fallback_engine().parse(input_path, options.lang_hint.value)
                 fallback_elapsed = time.perf_counter() - stage_start
             except Exception as fallback_exc:
                 fallback_elapsed = time.perf_counter() - stage_start
                 fallback_error = self._compact_error(str(fallback_exc))
+                logger.error(pipeline_message("PHASE 2", "fallback engine failed error=%s"), fallback_error, exc_info=True)
                 raise RuntimeError(
                     f"Primary engine failed: {primary_error}; fallback engine failed: {fallback_error}"
                 ) from fallback_exc
@@ -128,16 +152,16 @@ class ParseOrchestrator:
 
         response = self._build_response(request_id, result, options, decision)
         logger.info(
-            "parse timings request_id=%s pdf_text=%.3fs primary=%.3fs fallback=%.3fs "
-            "word_text=%.3fs excel_text=%.3fs total=%.3fs primary_score=%.3f",
-            request_id,
-            pdf_text_elapsed,
-            primary_elapsed,
-            fallback_elapsed,
-            word_text_elapsed,
-            excel_text_elapsed,
+            pipeline_message(
+                "PHASE 2",
+                "ocr completed pages=%s blocks=%s tables=%s markdown_chars=%s duration=%.3fs total=%.3fs",
+            ),
+            len(response.pages),
+            len(response.blocks),
+            len(response.tables),
+            len(response.markdown or ""),
+            primary_elapsed + fallback_elapsed,
             time.perf_counter() - total_start,
-            primary_score,
         )
         return response
 

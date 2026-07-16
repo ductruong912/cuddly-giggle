@@ -221,6 +221,6 @@ def configure_app_logging() -> None:
 
     handler = logging.StreamHandler()
     handler.setLevel(logging.INFO)
-    handler.setFormatter(logging.Formatter("INFO:     %(message)s"))
+    handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
     handler._cuddly_giggle_app_handler = True  # type: ignore[attr-defined]
     app_logger.addHandler(handler)
