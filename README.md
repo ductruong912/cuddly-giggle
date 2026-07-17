@@ -49,7 +49,6 @@ cuddly-giggle/
 ├── .env.example                  # Sample configuration — copy to .env
 ├── Dockerfile                    # App image (CUDA 12.6 + Python 3.11 + LibreOffice)
 ├── docker-compose.yml            # Two-container stack: app + llama.cpp server
-├── .env.docker.example           # Optional docker compose overrides — copy to .env
 ├── app/
 │   ├── api/
 │   │   ├── application.py         # FastAPI app factory (ASGI entrypoint)
@@ -287,7 +286,7 @@ docker compose up --build
 
 ### Tuning / overrides
 
-Copy `.env.docker.example` to `.env` only if you need to change a default:
+Copy `.env.example` to `.env` only if you need to change a default:
 
 - `LLAMA_N_GPU_LAYERS` — VRAM offload for recognition (20 suits 6 GB; lower if llama OOMs).
 - For an **older driver (CUDA 11.8)**, switch the app image build to the cu118 wheel:
