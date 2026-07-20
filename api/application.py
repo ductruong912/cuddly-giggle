@@ -3,8 +3,8 @@ from __future__ import annotations
 # pyrefly: ignore [missing-import]
 from fastapi import FastAPI
 
-from app.api.routes import doc_router, health_router
-from app.core.config import configure_app_logging, configure_third_party_logging
+from api.routes import doc_router, health_router
+from config.config import configure_app_logging, configure_third_party_logging
 
 
 def create_app() -> FastAPI:

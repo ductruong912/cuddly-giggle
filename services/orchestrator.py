@@ -7,18 +7,18 @@ import threading
 import time
 import uuid
 
-from app.core.config import Settings, settings
-from app.core.pipeline_logging import pipeline_message, request_logging_context
-from app.domain.schemas import ParseDecision, ParseOptions, ParseResponse
-from app.engines.base import EngineParseResult, ParseEngine
-from app.engines.native import (
+from config.config import Settings, settings
+from config.pipeline_logging import pipeline_message, request_logging_context
+from core.domain.schemas import ParseDecision, ParseOptions, ParseResponse
+from core.engines.base import EngineParseResult, ParseEngine
+from core.engines.native import (
     ExcelTextEngine,
     PdfTextEngine,
     WordTextEngine,
     is_pdf_text_result_usable,
 )
-from app.engines.registry import create_engine
-from app.services.output import filter_tables_markdown
+from core.engines.registry import create_engine
+from services.output import filter_tables_markdown
 
 
 logger = logging.getLogger(__name__)

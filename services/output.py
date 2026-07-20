@@ -7,8 +7,8 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 
-from app.core.config import settings
-from app.domain.schemas import ParseResponse
+from config.config import settings
+from core.domain.schemas import ParseResponse
 
 
 logger = logging.getLogger(__name__)

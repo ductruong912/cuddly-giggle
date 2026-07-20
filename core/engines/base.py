@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.domain.schemas import PageParseResult
+from core.domain.schemas import PageParseResult
 
 
 @dataclass

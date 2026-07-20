@@ -16,7 +16,7 @@ if str(REPO_ROOT) not in sys.path:
 
 try:
     # Importing app config applies default env bootstrap used by the service.
-    from app.core.config import settings as app_settings
+    from config.config import settings as app_settings
 except Exception:
     app_settings = None
 
@@ -77,7 +77,7 @@ def build_preflight_payload() -> dict[str, Any]:
     model_root = paddlex_cache_path / "official_models"
     llama_dir = _repo_relative_path(getattr(app_settings, "llama_cpp_dir", "llama"))
     models_dir = _repo_relative_path(getattr(app_settings, "llama_cpp_models_dir", "models"))
-    from app.services.llama import default_model_artifacts, is_artifact_ready, is_llama_cpp_ready
+    from services.llama import default_model_artifacts, is_artifact_ready, is_llama_cpp_ready
 
     packages = {
         "paddle": _find_spec("paddle"),

@@ -5,11 +5,11 @@ import itertools
 import logging
 import uuid
 
-from app.core.config import Settings, settings
-from app.domain.schemas import ParseDecision, ParseResponse
-from app.engines.base import ParseEngine
-from app.engines.fast_datalab import DataLabFastEngine
-from app.engines.fast_paddle import PaddleOCRFastEngine
+from config.config import Settings, settings
+from core.domain.schemas import ParseDecision, ParseResponse
+from core.engines.base import ParseEngine
+from core.engines.fast_datalab import DataLabFastEngine
+from core.engines.fast_paddle import PaddleOCRFastEngine
 
 
 logger = logging.getLogger(__name__)

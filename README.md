@@ -134,29 +134,32 @@ Copy the sample and edit values as needed:
 - Windows (PowerShell): `Copy-Item .env.example .env`
 - Linux/macOS: `cp .env.example .env`
 
-### Windows manual setup / recovery
+### Model setup (required before running OCR)
 
-The application downloads its dependencies and models automatically on first
-use. If that initial setup is interrupted or fails, use the Windows recovery
-entrypoint from the project root:
-
-```bash
-venv\Scripts\python.exe scripts\setup_runtime.py --all
-```
-
-Run only the failed part when needed:
+The service never downloads models or llama.cpp binaries. Download only the
+profile you plan to serve, before starting the API:
 
 ```bash
-venv\Scripts\python.exe scripts\setup_runtime.py --dependencies
-venv\Scripts\python.exe scripts\setup_runtime.py --ocr-models
+venv\Scripts\python.exe scripts\setup_models.py --fast-onnx
+venv\Scripts\python.exe scripts\setup_models.py --paddleocr-vl
+venv\Scripts\python.exe scripts\setup_models.py --pp-structure-v3
 venv\Scripts\python.exe scripts\setup_runtime.py --llama
 ```
 
-`--dependencies` reinstalls `requirements.txt` (and accepts `--cuda`, for
-example `--dependencies --cuda 12.6`); `--ocr-models` warms the configured
-OCR pipelines and downloads their missing models; and `--llama` runs
-`setup_llama_cpp.py` to prepare llama.cpp and its GGUF files. To inspect the
-current runtime without changing it, use the read-only check mode:
+`--fast-onnx` downloads `PP-OCRv6_medium_det_onnx` and
+`PP-OCRv6_small_rec_onnx` for the CPU-oriented `/v1/doc/extract-fast` route.
+`--paddleocr-vl` and `--pp-structure-v3` prepare their respective PaddleOCR
+pipelines. `--llama` downloads llama.cpp and the two PaddleOCR-VL GGUF files;
+it is needed only when `PADDLEOCR_VL_USE_GGUF=true`.
+
+The compatibility setup script can still prepare the configured primary and
+fallback OCR pipelines:
+
+```bash
+venv\Scripts\python.exe scripts\setup_runtime.py --ocr-models
+```
+
+To inspect the current runtime without changing it, use the read-only check mode:
 
 ```bash
 venv\Scripts\python.exe scripts\setup_runtime.py --check
@@ -167,55 +170,6 @@ and the OCR model cache readiness.
 
 ---
 
-## Configuration
-
-All configuration lives in the **`.env`** file (loaded automatically on startup).
-Edit `.env` to change behavior — there is no need to export shell variables.
-
-Most-used settings:
-
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `HOST` / `PORT` | `127.0.0.1` / `8000` | API server binding. |
-| `OCR_PRIMARY_ENGINE` | `paddleocr_vl` | Primary engine (`paddleocr_vl` or `pp_structure_v3`). |
-| `OCR_FALLBACK_ENGINE` | `pp_structure_v3` | Used only if the primary OCR engine fails. |
-| `OCR_DEVICE` | `gpu:0` | GPU selector for the OCR engines (e.g. `gpu:0`). |
-| `WARMUP_MODELS_ON_STARTUP` | `true` | Initialize the Fast OCR model before serving and warm the VL model on first VL use. |
-| `FAST_OCR_DEVICE` | `cpu` | Device used by `/v1/doc/extract-fast`. |
-| `FAST_OCR_INFERENCE_ENGINE` | `onnxruntime` | CPU inference backend for Fast OCR. Uses the official ONNX variants of the configured PP-OCR models. |
-| `FAST_OCR_CPU_THREADS` | `4` | CPU threads for the Paddle backend; ONNX Runtime uses its runtime default. |
-| `FAST_OCR_RECOGNITION_BATCH_SIZE` | `8` | Number of detected text crops recognized per batch. |
-| `FAST_OCR_ENABLE_MKLDNN` | `false` | Enable oneDNN/MKL-DNN only on a verified compatible Paddle runtime. PaddlePaddle 3.3.0 has a known CPU oneDNN regression. |
-| `PADDLEOCR_VL_USE_GGUF` | `false` | `true` runs PaddleOCR-VL recognition via llama.cpp + GGUF. |
-| `PADDLE_PDX_CACHE_HOME` | `.paddlex` | Where downloaded OCR models are cached. |
-| `PARSE_OUTPUT_DIR` | `outputs` | Where parsed `.md` files are saved. |
-| `TABLE_ONLY_OUTPUT` | `false` | Keep only tables in the Markdown output. |
-| `PDF_TEXT_PARSE_ENABLED` | `true` | Use the native PDF text fast-path before OCR. |
-| `OPENAI_MODEL` | `gpt-5-mini` | Model used by `/v1/llm/extract`. |
-| `OPENAI_TIMEOUT_SECONDS` | `60` | Timeout for an OpenAI extraction request. |
-| `LLM_MAX_INPUT_CHARS` | `120000` | Maximum OCR Markdown characters submitted to the model. |
-| `LLM_REASONING_EFFORT` | `low` | GPT-5 effort (`minimal`, `low`, `medium`, `high`). `low` preserved the approved PO output while reducing latency in the representative benchmark. |
-
-`OPENAI_API_KEY` is required only for `/v1/llm/extract`. Keep it in `.env`; do
-not commit it. Change `app/prompts/prompt.py` to customize the extraction
-instructions and strict JSON Schema returned by this endpoint.
-
-GGUF / llama.cpp settings (used only when `PADDLEOCR_VL_USE_GGUF=true`):
-
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `LLAMA_SERVER_AUTOSTART` | `true` | Auto-start `llama-server` from `main.py` (Windows). |
-| `LLAMA_SERVER_HOST` / `LLAMA_SERVER_PORT` | `127.0.0.1` / `8080` | llama.cpp server binding. |
-| `LLAMA_SERVER_N_GPU_LAYERS` | `40` | Layers offloaded to GPU. Lower this on small-VRAM cards. |
-| `LLAMA_CPP_DIR` / `LLAMA_CPP_MODELS_DIR` | `llama` / `models` | Local folders for binaries and GGUF models. |
-| `LLAMA_CPP_RELEASE_FLAVOR` | `win-cuda-12.4-x64` | llama.cpp Windows release flavor to download (e.g. `win-cuda-13.3-x64` for CUDA 13). |
-| `LLAMA_CPP_RELEASE_URL` | *(empty)* | Pin a specific llama.cpp release zip; empty = latest GitHub release. |
-
-See `.env.example` for the complete list (rasterization, native-text thresholds,
-confidence heuristics, logging, etc.).
-
----
-
 ## Running the Service
 
 After editing `.env`, start the server:
@@ -223,8 +177,9 @@ After editing `.env`, start the server:
 - Windows (PowerShell): `venv\Scripts\python.exe main.py`
 - Linux/macOS: `venv/bin/python main.py`
 
-On first start the app downloads the required OCR models into `.paddlex/official_models`
-and warms them up on the GPU. Then open the interactive docs:
+After the required profile has been prepared, start the app. It loads models
+only when the corresponding endpoint first needs them; it does not download
+missing artifacts. Then open the interactive docs:
 
 > **Swagger UI**: http://127.0.0.1:8000/docs
 
@@ -261,24 +216,13 @@ LLAMA_SERVER_AUTOSTART=true
 LLAMA_SERVER_N_GPU_LAYERS=20
 ```
 
-Run `main.py`. It downloads any missing `llama/` binaries and `models/` GGUF files,
-starts `llama-server.exe`, points PaddleOCR-VL at `http://127.0.0.1:8080/v1`, then
-starts the API. To pre-download the llama.cpp/GGUF artifacts beforehand:
+Run `scripts/setup_runtime.py --llama` first, then `main.py` starts
+`llama-server.exe`, points PaddleOCR-VL at `http://127.0.0.1:8080/v1`, then
+starts the API. The service will report an error if the required llama.cpp/GGUF
+artifacts are absent:
 
 ```bash
 venv\Scripts\python.exe scripts\setup_llama_cpp.py
-```
-
-### 4. Linux
-
-Scenarios 1 and 2 work as-is (use `venv/bin/python main.py`). The **automatic**
-GGUF bootstrap targets Windows binaries, so on Linux run your own OpenAI-compatible
-llama.cpp server and disable autostart in `.env`:
-
-```dotenv
-PADDLEOCR_VL_USE_GGUF=true
-LLAMA_SERVER_AUTOSTART=false
-PADDLEOCR_VL_REC_SERVER_URL=http://127.0.0.1:8080/v1
 ```
 
 ### 5. Offline / air-gapped
@@ -364,16 +308,6 @@ Artifacts are grouped below `PARSE_OUTPUT_DIR` by uploaded filename stem. With
 `outputs/TOTO/512/512.md`. Uploading `512.pdf` again replaces only
 `outputs/TOTO/512/`; other filenames' folders are unchanged.
 
-**Example (cURL)**
-
-```bash
-curl -X POST \
-  'http://127.0.0.1:8000/v1/doc/parse' \
-  -H 'accept: text/markdown' \
-  -H 'Content-Type: multipart/form-data' \
-  -F 'file=@sample_invoice.pdf;type=application/pdf'
-```
-
 ### `GET /healthz`
 
 Liveness probe. Returns `{"status": "ok"}`.
@@ -387,14 +321,6 @@ then returns structured JSON produced by GPT-5 mini. It does not call
 The structure under `data` is defined by `app/prompts/prompt.py`; edit that
 file to adapt extraction for invoices, forms, contracts, or another document
 type.
-
-```bash
-curl -X POST \
-  'http://127.0.0.1:8000/v1/llm/extract' \
-  -H 'accept: application/json' \
-  -H 'Content-Type: multipart/form-data' \
-  -F 'file=@sample_invoice.pdf;type=application/pdf'
-```
 
 ### `POST /v1/doc/extract-fast`
 
@@ -410,21 +336,10 @@ the required ONNX models to `PADDLE_PDX_CACHE_HOME`. `onnxruntime` is installed
 from `requirements.txt`; install the PaddlePaddle CPU runtime separately only
 when using Paddle-backed endpoints or the `paddle_static` fallback.
 
-```bash
-curl -X POST http://127.0.0.1:8000/v1/doc/extract-fast \
-  -F "file=@scan.pdf"
-```
-
 ### `POST /v1/llm/extract-from-ocr`
 
 Gọi riêng lớp LLM để thử prompt trên toàn bộ nội dung Markdown/HTML đã parse.
 Endpoint nhận trực tiếp file `.md` hoặc `.markdown`, không chạy OCR.
-
-```bash
-curl -X POST \
-  'http://127.0.0.1:8000/v1/llm/extract-from-ocr' \
-  -F 'file=@outputs/purchase-order.md;type=text/markdown'
-```
 
 ---
 

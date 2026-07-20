@@ -6,9 +6,9 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from app.core.config import Settings, settings
-from app.domain.schemas import Block, BlockType, PageParseResult
-from app.engines.base import EngineParseResult, ParseEngine
+from config.config import Settings, settings
+from core.domain.schemas import Block, BlockType, PageParseResult
+from core.engines.base import EngineParseResult, ParseEngine
 
 
 class DataLabFastEngine(ParseEngine):

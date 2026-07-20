@@ -10,10 +10,10 @@ logger = logging.getLogger(__name__)
 
 _GPT5_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
 
-from app.core.config import Settings, settings
-from app.core.pipeline_logging import pipeline_message
-from app.domain.schemas import ParseResponse
-from app.prompts.prompt import (
+from config.config import Settings, settings
+from config.pipeline_logging import pipeline_message
+from core.domain.schemas import ParseResponse
+from core.prompts.prompt import (
     EXTRACTION_INSTRUCTIONS,
     EXTRACTION_JSON_SCHEMA,
     EXTRACTION_SCHEMA_NAME,

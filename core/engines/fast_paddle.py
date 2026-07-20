@@ -4,14 +4,16 @@ from __future__ import annotations
 from collections.abc import Iterable
 import json
 import logging
+import os
 from pathlib import Path
 import threading
 import time
 from typing import Any
 
-from app.core.config import Settings, settings
-from app.engines.base import EngineParseResult
-from app.engines.normalizer import normalize_engine_output
+from config.config import Settings, settings
+from core.engines.base import EngineParseResult
+from core.engines.normalizer import normalize_engine_output
+from services.model_assets import require_model_profile
 
 
 logger = logging.getLogger(__name__)
@@ -142,6 +144,8 @@ class PaddleOCRFastEngine:
             return document.page_count
 
     def _get_or_create_pipeline(self) -> Any:
+        if os.getenv("CUDDLY_GIGGLE_MODEL_SETUP") != "1":
+            require_model_profile(self.settings, "fast-onnx")
         with self._pipeline_lock:
             if self._pipeline is None:
                 initialization_start = time.perf_counter()

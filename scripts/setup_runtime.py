@@ -7,6 +7,7 @@ without downloading models or requiring a GPU.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import platform
 import subprocess
@@ -112,31 +113,43 @@ def warmup_ocr_models(
     runtimes during tests while the normal CLI path uses the app's registry.
     """
     if app_settings is None:
-        from app.core.config import settings
+        from config.config import settings
 
         app_settings = settings
     if engine_factory is None:
-        from app.engines.registry import create_engine
+        from core.engines.registry import create_engine
 
         engine_factory = create_engine
 
-    warmed_names: set[str] = set()
-    for engine_name in (
-        getattr(app_settings, "primary_engine"),
-        getattr(app_settings, "fallback_engine"),
-    ):
-        normalized_name = (engine_name or "").strip().lower()
-        if normalized_name in warmed_names:
-            continue
-        warmed_names.add(normalized_name)
+    from services.model_assets import write_model_profile
 
-        engine = engine_factory(engine_name, app_settings)
-        warmup = getattr(engine, "warmup", None)
-        if not callable(warmup):
-            raise RuntimeError(
-                f"Configured OCR engine {engine_name!r} does not support warmup."
-            )
-        warmup()
+    previous_setup_mode = os.environ.get("CUDDLY_GIGGLE_MODEL_SETUP")
+    os.environ["CUDDLY_GIGGLE_MODEL_SETUP"] = "1"
+    try:
+        warmed_names: set[str] = set()
+        for engine_name in (
+            getattr(app_settings, "primary_engine"),
+            getattr(app_settings, "fallback_engine"),
+        ):
+            normalized_name = (engine_name or "").strip().lower()
+            if normalized_name in warmed_names:
+                continue
+            warmed_names.add(normalized_name)
+
+            engine = engine_factory(engine_name, app_settings)
+            warmup = getattr(engine, "warmup", None)
+            if not callable(warmup):
+                raise RuntimeError(
+                    f"Configured OCR engine {engine_name!r} does not support warmup."
+                )
+            warmup()
+            if hasattr(app_settings, "paddlex_cache_home"):
+                write_model_profile(app_settings, normalized_name.replace("_", "-"))
+    finally:
+        if previous_setup_mode is None:
+            os.environ.pop("CUDDLY_GIGGLE_MODEL_SETUP", None)
+        else:
+            os.environ["CUDDLY_GIGGLE_MODEL_SETUP"] = previous_setup_mode
     verify_warmed_ocr_models(app_settings)
 
 

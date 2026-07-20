@@ -9,10 +9,10 @@ warnings.filterwarnings("ignore", message="No ccache found")
 # pyrefly: ignore [missing-import]
 import uvicorn
 
-from app.api.routes import get_fast_orchestrator, get_orchestrator
-from app.api.application import app
-from app.core.config import Settings, settings
-from app.services.llama import (
+from api.routes import get_fast_orchestrator, get_orchestrator
+from api.application import app
+from config.config import Settings, settings
+from services.llama import (
     LlamaBootstrapConfig,
     LlamaServerConfig,
     bootstrap_llama_cpp,
@@ -21,7 +21,7 @@ from app.services.llama import (
     start_llama_server_if_needed,
     stop_llama_server,
 )
-from app.services.vl_runtime import VLRuntimeManager
+from services.vl_runtime import VLRuntimeManager
 
 
 def bootstrap_llama_cpp_on_startup(
@@ -30,7 +30,7 @@ def bootstrap_llama_cpp_on_startup(
     bootstrap=bootstrap_llama_cpp,
     resolve_release_urls=resolve_latest_llama_cpp_release_urls,
 ) -> None:
-    if not app_settings.auto_download_llama_cpp and not app_settings.paddleocr_vl_use_gguf:
+    if not app_settings.auto_download_llama_cpp:
         return
 
     llama_dir = Path(app_settings.llama_cpp_dir).resolve()
@@ -61,15 +61,9 @@ def configure_gguf_runtime_on_startup(
 
     # Only bootstrap/own a local llama.cpp runtime when we are autostarting it. When
     # pointed at an external server (e.g. a separate llama container), skip both the
-    # binary download and startup — the app just talks to PADDLEOCR_VL_REC_SERVER_URL.
+    # binary download and startup â€” the app just talks to PADDLEOCR_VL_REC_SERVER_URL.
     if not app_settings.llama_server_autostart:
         return None
-
-    bootstrap_llama_cpp_on_startup(
-        app_settings=app_settings,
-        bootstrap=bootstrap,
-        resolve_release_urls=resolve_release_urls,
-    )
 
     llama_dir = Path(app_settings.llama_cpp_dir).resolve()
     models_dir = Path(app_settings.llama_cpp_models_dir).resolve()

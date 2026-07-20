@@ -14,25 +14,25 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request
 from fastapi.responses import PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 
-from app.core.config import settings
-from app.core.pipeline_logging import pipeline_message, request_logging_context
-from app.domain.schemas import (
+from config.config import settings
+from config.pipeline_logging import pipeline_message, request_logging_context
+from core.domain.schemas import (
     LLMExtractionOCRMetadata,
     LLMExtractionResponse,
     ParseDecision,
     ParseOptions,
     ParseResponse,
 )
-from app.services.llm_extraction import (
+from services.llm_extraction import (
     LLMExtractionError,
     LLMExtractionInputTooLarge,
     LLMExtractionService,
     LLMExtractionUnavailable,
 )
-from app.services.orchestrator import ParseOrchestrator
-from app.services.fast_orchestrator import FastParseOrchestrator
-from app.services.output import save_parse_artifacts, save_extraction_artifacts
-from app.services.vl_runtime import VLRuntimeManager
+from services.orchestrator import ParseOrchestrator
+from services.fast_orchestrator import FastParseOrchestrator
+from services.output import save_parse_artifacts, save_extraction_artifacts
+from services.vl_runtime import VLRuntimeManager
 
 
 logger = logging.getLogger(__name__)

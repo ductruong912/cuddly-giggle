@@ -10,7 +10,7 @@ import site
 from dotenv import load_dotenv
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(Path.cwd() / ".env", override=False)
 
 
@@ -104,7 +104,7 @@ class Settings:
     fast_ocr_datalab_fallback: bool = _get_bool("FAST_OCR_DATALAB_FALLBACK", True)
     fast_ocr_datalab_timeout_seconds: float = _get_float("FAST_OCR_DATALAB_TIMEOUT_SECONDS", 120.0)
     datalab_api_key: str = os.getenv("DATALAB_API_KEY", "").strip()
-    warmup_models_on_startup: bool     = _get_bool("WARMUP_MODELS_ON_STARTUP", True)
+    warmup_models_on_startup: bool     = _get_bool("WARMUP_MODELS_ON_STARTUP", False)
 
     # --- llama.cpp / GGUF bootstrap ---
     auto_download_llama_cpp: bool = _get_bool("AUTO_DOWNLOAD_LLAMA_CPP", False)
@@ -245,18 +245,19 @@ def configure_third_party_logging() -> None:
 
 
 def configure_app_logging() -> None:
-    app_logger = logging.getLogger("app")
-    app_logger.setLevel(logging.INFO)
-    app_logger.propagate = True
+    for logger_name in ("app", "api", "config", "core", "services"):
+        app_logger = logging.getLogger(logger_name)
+        app_logger.setLevel(logging.INFO)
+        app_logger.propagate = True
 
-    already_configured = any(
-        getattr(h, "_cuddly_giggle_app_handler", False) for h in app_logger.handlers
-    )
-    if already_configured:
-        return
+        already_configured = any(
+            getattr(h, "_cuddly_giggle_app_handler", False) for h in app_logger.handlers
+        )
+        if already_configured:
+            continue
 
-    handler = logging.StreamHandler()
-    handler.setLevel(logging.INFO)
-    handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
-    handler._cuddly_giggle_app_handler = True  # type: ignore[attr-defined]
-    app_logger.addHandler(handler)
+        handler = logging.StreamHandler()
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+        handler._cuddly_giggle_app_handler = True  # type: ignore[attr-defined]
+        app_logger.addHandler(handler)

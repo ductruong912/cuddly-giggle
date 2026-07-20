@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -11,11 +12,12 @@ import threading
 import time
 from typing import Any, Callable
 
-from app.core.config import Settings, settings
-from app.core.pipeline_logging import pipeline_message
-from app.domain.schemas import PageParseResult
-from app.engines.base import EngineParseResult, ParseEngine
-from app.engines.normalizer import normalize_engine_output
+from config.config import Settings, settings
+from config.pipeline_logging import pipeline_message
+from core.domain.schemas import PageParseResult
+from core.engines.base import EngineParseResult, ParseEngine
+from core.engines.normalizer import normalize_engine_output
+from services.model_assets import require_model_profile
 
 
 logger = logging.getLogger(__name__)
@@ -259,6 +261,8 @@ class PaddlePipelineEngine(ParseEngine):
         return kwargs
 
     def _get_or_create_pipeline(self, pipeline_cls: type, kwargs: dict[str, Any]):  # type: ignore[no-untyped-def]
+        if os.getenv("CUDDLY_GIGGLE_MODEL_SETUP") != "1":
+            require_model_profile(self.settings, self.name.replace("_", "-"))
         key = tuple(sorted((str(k), str(v)) for k, v in kwargs.items()))
         with self._pipeline_lock:
             if self._pipeline is None or self._pipeline_key != key:
