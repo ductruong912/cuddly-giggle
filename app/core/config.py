@@ -57,6 +57,7 @@ class Settings:
     openai_timeout_seconds: float = _get_float("OPENAI_TIMEOUT_SECONDS", 60.0)
     openai_max_retries: int = _get_int("OPENAI_MAX_RETRIES", 2)
     llm_max_input_chars: int = _get_int("LLM_MAX_INPUT_CHARS", 120_000)
+    llm_reasoning_effort: str = os.getenv("LLM_REASONING_EFFORT", "low").strip().lower()
 
     # --- OCR engines ---
     primary_engine: str                = os.getenv("OCR_PRIMARY_ENGINE", "paddleocr_vl")
@@ -77,6 +78,26 @@ class Settings:
         for item in os.getenv("PADDLEOCR_VL_MARKDOWN_IGNORE_LABELS", "").split(",")
         if item.strip()
     )
+    fast_ocr_device: str = os.getenv("FAST_OCR_DEVICE", "cpu").strip() or "cpu"
+    fast_ocr_detection_model_name: str = os.getenv(
+        "FAST_OCR_DETECTION_MODEL_NAME", "PP-OCRv6_medium_det"
+    ).strip()
+    fast_ocr_recognition_model_name: str = os.getenv(
+        "FAST_OCR_RECOGNITION_MODEL_NAME", "PP-OCRv6_small_rec"
+    ).strip()
+    fast_ocr_recognition_batch_size: int = _get_int("FAST_OCR_RECOGNITION_BATCH_SIZE", 8)
+    fast_ocr_cpu_threads: int = _get_int("FAST_OCR_CPU_THREADS", 4)
+    fast_ocr_inference_engine: str = os.getenv(
+        "FAST_OCR_INFERENCE_ENGINE", "onnxruntime"
+    ).strip() or "onnxruntime"
+    fast_ocr_enable_mkldnn: bool = _get_bool("FAST_OCR_ENABLE_MKLDNN", False)
+    fast_ocr_provider: str = os.getenv("FAST_OCR_PROVIDER", "local").strip().lower() or "local"
+    fast_ocr_datalab_mode: str = (
+        os.getenv("FAST_OCR_DATALAB_MODE", "balanced").strip().lower() or "balanced"
+    )
+    fast_ocr_datalab_fallback: bool = _get_bool("FAST_OCR_DATALAB_FALLBACK", True)
+    fast_ocr_datalab_timeout_seconds: float = _get_float("FAST_OCR_DATALAB_TIMEOUT_SECONDS", 120.0)
+    datalab_api_key: str = os.getenv("DATALAB_API_KEY", "").strip()
     warmup_models_on_startup: bool     = _get_bool("WARMUP_MODELS_ON_STARTUP", True)
 
     # --- llama.cpp / GGUF bootstrap ---
@@ -130,6 +151,18 @@ class Settings:
         str((Path.cwd() / ".paddlex").resolve()),
     )
     paddlex_disable_model_source_check: bool = _get_bool("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", True)
+
+    def __post_init__(self) -> None:
+        if self.fast_ocr_provider not in {"local", "datalab"}:
+            raise ValueError(
+                "FAST_OCR_PROVIDER must be one of: local, datalab"
+            )
+        if self.fast_ocr_datalab_mode not in {"fast", "balanced", "accurate"}:
+            raise ValueError(
+                "FAST_OCR_DATALAB_MODE must be one of: fast, balanced, accurate"
+            )
+        if self.fast_ocr_datalab_timeout_seconds <= 0:
+            raise ValueError("FAST_OCR_DATALAB_TIMEOUT_SECONDS must be greater than zero")
 
 
 # ---------------------------------------------------------------------------

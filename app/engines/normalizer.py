@@ -405,11 +405,15 @@ def _result_to_markdown_text(raw: object) -> str | None:
 
 
 def _starts_with_text_page_marker(line: str) -> bool:
-    return bool(re.match(r"^(?:#{1,6}\s*)?\[Tr\.\s*\d+\s*\]\s*:?", line.strip()))
+    return bool(
+        re.match(r"^(?:#{1,6}\s*)?\[(?:Tr\.|Page)\s*\d+\s*\]\s*:?", line.strip())
+    )
 
 
 def _is_standalone_text_page_marker(line: str) -> bool:
-    return bool(re.match(r"^(?:#{1,6}\s*)?\[Tr\.\s*\d+\s*\]\s*:?\s*$", line.strip()))
+    return bool(
+        re.match(r"^(?:#{1,6}\s*)?\[(?:Tr\.|Page)\s*\d+\s*\]\s*:?\s*$", line.strip())
+    )
 
 
 def _text_only_markdown_needs_blank_before(line: str, previous_line: str) -> bool:

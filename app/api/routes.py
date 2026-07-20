@@ -12,6 +12,7 @@ import uuid
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request
 # pyrefly: ignore [missing-import]
 from fastapi.responses import PlainTextResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
 from app.core.pipeline_logging import pipeline_message, request_logging_context
@@ -29,7 +30,9 @@ from app.services.llm_extraction import (
     LLMExtractionUnavailable,
 )
 from app.services.orchestrator import ParseOrchestrator
+from app.services.fast_orchestrator import FastParseOrchestrator
 from app.services.output import save_parse_artifacts, save_extraction_artifacts
+from app.services.vl_runtime import VLRuntimeManager
 
 
 logger = logging.getLogger(__name__)
@@ -45,8 +48,27 @@ def get_orchestrator() -> ParseOrchestrator:
 
 
 @lru_cache(maxsize=1)
+def get_fast_orchestrator() -> FastParseOrchestrator:
+    return FastParseOrchestrator()
+
+
+@lru_cache(maxsize=1)
 def get_llm_extractor() -> LLMExtractionService:
     return LLMExtractionService()
+
+
+def get_vl_runtime_manager(request: Request) -> VLRuntimeManager:
+    manager = getattr(request.app.state, "vl_runtime_manager", None)
+    if manager is None:
+        raise RuntimeError("VL runtime manager is not configured")
+    return manager
+
+
+def ensure_vl_runtime(manager: VLRuntimeManager = Depends(get_vl_runtime_manager)) -> None:
+    try:
+        manager.ensure_ready()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"VL OCR runtime is unavailable: {exc}") from exc
 
 
 # =====================================================================================
@@ -68,6 +90,7 @@ def healthz() -> dict[str, str]:
 doc_router = APIRouter(prefix="/v1/doc", tags=["documents"])
 
 SUPPORTED_INPUT_SUFFIXES = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".xlsm", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
+FAST_OCR_INPUT_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 
 
 @doc_router.post("/extract", response_model=LLMExtractionResponse)
@@ -76,6 +99,7 @@ async def extract_document(
     file: UploadFile | None = File(None),
     orchestrator: ParseOrchestrator = Depends(get_orchestrator),
     extractor: LLMExtractionService = Depends(get_llm_extractor),
+    _: None = Depends(ensure_vl_runtime),
 ) -> LLMExtractionResponse:
     total_start = time.perf_counter()
     content_type = request.headers.get("content-type", "")
@@ -279,10 +303,120 @@ async def extract_document(
         )
 
 
+@doc_router.post("/extract-fast", response_model=LLMExtractionResponse)
+async def extract_fast_document(
+    request: Request,
+    file: UploadFile | None = File(None),
+    orchestrator: FastParseOrchestrator = Depends(get_fast_orchestrator),
+    extractor: LLMExtractionService = Depends(get_llm_extractor),
+) -> LLMExtractionResponse:
+    total_start = time.perf_counter()
+    upload_elapsed = 0.0
+    ocr_elapsed = 0.0
+    llm_elapsed = 0.0
+    save_elapsed = 0.0
+    if "multipart/form-data" not in request.headers.get("content-type", ""):
+        raise HTTPException(status_code=415, detail="Fast OCR requires a multipart/form-data file upload.")
+
+    uploaded_file = file
+    if uploaded_file is None:
+        form = await request.form()
+        uploaded_file = form.get("file")
+    if not uploaded_file or not (hasattr(uploaded_file, "filename") and hasattr(uploaded_file, "file")):
+        raise HTTPException(status_code=400, detail="Missing 'file' field in multipart/form-data upload.")
+
+    suffix = Path(uploaded_file.filename or "").suffix.lower()
+    if suffix not in FAST_OCR_INPUT_SUFFIXES:
+        raise HTTPException(status_code=400, detail="Fast OCR supports PDF and image files only.")
+
+    temp_root = Path(settings.temp_dir)
+    temp_root.mkdir(parents=True, exist_ok=True)
+    temp_path = temp_root / f"{uuid.uuid4().hex}{suffix}"
+    request_id = f"req_{uuid.uuid4().hex[:12]}"
+    try:
+        stage_start = time.perf_counter()
+        with temp_path.open("wb") as staged_file:
+            shutil.copyfileobj(uploaded_file.file, staged_file)
+        upload_elapsed = time.perf_counter() - stage_start
+        logger.info(
+            pipeline_message("received fast-ocr file=%s suffix=%s size_bytes=%s"),
+            uploaded_file.filename or temp_path.name,
+            suffix,
+            temp_path.stat().st_size,
+        )
+        stage_start = time.perf_counter()
+        response = await run_in_threadpool(
+            orchestrator.parse,
+            str(temp_path),
+            request_id=request_id,
+        )
+        ocr_elapsed = time.perf_counter() - stage_start
+        stage_start = time.perf_counter()
+        with request_logging_context(response.request_id):
+            data = extractor.extract(response)
+        llm_elapsed = time.perf_counter() - stage_start
+        stage_start = time.perf_counter()
+        saved_markdown = save_parse_artifacts(response, uploaded_file.filename or temp_path.name)
+        saved_json = save_extraction_artifacts(data, uploaded_file.filename or temp_path.name)
+        save_elapsed = time.perf_counter() - stage_start
+        engine_metadata = response.engine_metadata or {}
+        provider = str(engine_metadata.get("provider") or ("datalab" if response.engine_name == "datalab" else "local"))
+        fallback = bool(engine_metadata.get("fallback", False))
+        datalab_runtime = engine_metadata.get("runtime", "n/a")
+        cost_breakdown = engine_metadata.get("cost_breakdown")
+        datalab_cost = (
+            cost_breakdown.get("final_cost_cents", "n/a")
+            if isinstance(cost_breakdown, dict)
+            else "n/a"
+        )
+        logger.info(
+            pipeline_message(
+                "COMPLETED fast-ocr pages=%s markdown_chars=%s provider=%s fallback=%s datalab_runtime=%ss datalab_cost_cents=%s upload=%.3fs ocr=%.3fs llm=%.3fs save=%.3fs total=%.3fs saved_markdown=%s saved_json=%s",
+                request_id=response.request_id,
+            ),
+            len(response.pages),
+            len(response.markdown or ""),
+            provider,
+            str(fallback).lower(),
+            datalab_runtime,
+            datalab_cost,
+            upload_elapsed,
+            ocr_elapsed,
+            llm_elapsed,
+            save_elapsed,
+            time.perf_counter() - total_start,
+            ",".join(saved_markdown) or "none",
+            ",".join(saved_json) or "none",
+        )
+        return LLMExtractionResponse(
+            request_id=response.request_id,
+            ocr=LLMExtractionOCRMetadata(
+                decision=response.decision.reason,
+                page_count=len(response.pages),
+            ),
+            data=data,
+        )
+    except LLMExtractionInputTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except LLMExtractionUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except LLMExtractionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(pipeline_message("FAILED fast-ocr extraction request error", request_id=request_id), exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected fast OCR extraction error: {exc}") from exc
+    finally:
+        if temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+
+
 @doc_router.post("/ocr", response_class=PlainTextResponse)
 def ocr_document(
     file: UploadFile = File(...),
     orchestrator: ParseOrchestrator = Depends(get_orchestrator),
+    _: None = Depends(ensure_vl_runtime),
 ) -> PlainTextResponse:
     total_start = time.perf_counter()
     upload_elapsed = 0.0

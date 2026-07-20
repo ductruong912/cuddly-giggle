@@ -47,3 +47,4 @@ llama/
 models/
 tests/
 docs/
+.superpowers/

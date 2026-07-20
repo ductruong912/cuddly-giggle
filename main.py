@@ -9,7 +9,7 @@ warnings.filterwarnings("ignore", message="No ccache found")
 # pyrefly: ignore [missing-import]
 import uvicorn
 
-from app.api.routes import get_orchestrator
+from app.api.routes import get_fast_orchestrator, get_orchestrator
 from app.api.application import app
 from app.core.config import Settings, settings
 from app.services.llama import (
@@ -21,6 +21,7 @@ from app.services.llama import (
     start_llama_server_if_needed,
     stop_llama_server,
 )
+from app.services.vl_runtime import VLRuntimeManager
 
 
 def bootstrap_llama_cpp_on_startup(
@@ -103,6 +104,27 @@ def warmup_models_on_startup() -> None:
     warmup()
 
 
+def warmup_fast_ocr_on_startup(
+    *,
+    app_settings: Settings = settings,
+    orchestrator_factory=get_fast_orchestrator,
+) -> None:
+    if not app_settings.warmup_models_on_startup:
+        return
+    orchestrator = orchestrator_factory()
+    warmup_orchestrator = getattr(orchestrator, "warmup", None)
+    if callable(warmup_orchestrator):
+        warmup_orchestrator()
+        return
+    engine = orchestrator.engine
+    warmup = getattr(engine, "warmup", None)
+    if not callable(warmup):
+        raise RuntimeError(
+            f"Fast OCR engine {engine.__class__.__name__} does not support warmup."
+        )
+    warmup()
+
+
 def silence_known_warnings() -> None:
     warnings.filterwarnings("ignore", message=r"'llama-cpp-server' does not support")
 
@@ -111,12 +133,17 @@ def main() -> None:
     silence_known_warnings()
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "8000"))
-    llama_process = configure_gguf_runtime_on_startup()
+    warmup_fast_ocr_on_startup()
+    runtime_manager = VLRuntimeManager(
+        configure_runtime=configure_gguf_runtime_on_startup,
+        warmup=warmup_models_on_startup,
+        stop_runtime=stop_llama_server,
+    )
+    app.state.vl_runtime_manager = runtime_manager
     try:
-        warmup_models_on_startup()
         uvicorn.run(app, host=host, port=port, reload=False)
     finally:
-        stop_llama_server(llama_process)
+        runtime_manager.shutdown()
 
 
 if __name__ == "__main__":

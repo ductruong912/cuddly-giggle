@@ -266,6 +266,13 @@ class PaddlePipelineEngine(ParseEngine):
                 self._pipeline_key = key
         return self._pipeline
 
+    def warmup(self, pipeline_cls: type | None = None) -> None:
+        """Create and cache the configured pipeline without parsing a document."""
+        if pipeline_cls is None:
+            pipeline_cls = self._load_pipeline_cls()
+        kwargs = self._build_kwargs(pipeline_cls, "auto")
+        self._get_or_create_pipeline(pipeline_cls, kwargs)
+
 
 class PaddleOCRVLEngine(PaddlePipelineEngine):
     name = "paddleocr_vl"
@@ -315,13 +322,6 @@ class PaddleOCRVLEngine(PaddlePipelineEngine):
             f"pipeline_version={self.settings.paddleocr_vl_pipeline_version or 'default'}; "
             f"python_api_error={py_error or 'n/a'}; cli_error={cli_error or 'n/a'}"
         )
-
-    def warmup(self, pipeline_cls: type | None = None) -> None:
-        if pipeline_cls is None:
-            pipeline_cls = self._load_pipeline_cls()
-        kwargs = self._build_kwargs(pipeline_cls, "auto")
-        self._get_or_create_pipeline(pipeline_cls, kwargs)
-
 
 class PPStructureV3Engine(PaddlePipelineEngine):
     name = "pp_structure_v3"

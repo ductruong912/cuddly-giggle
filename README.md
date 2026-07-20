@@ -68,7 +68,10 @@ cuddly-giggle/
 │       ├── native.py             # PDF / Word / Excel text-layer parsers
 │       ├── paddle.py             # PaddleOCR-VL + PP-StructureV3 adapters
 │       └── normalizer.py         # Normalizes engine output to the page schema
-├── scripts/                      # setup_llama_cpp, preflight_runtime, eval helpers
+├── scripts/                      # Windows manual setup/recovery and runtime diagnostics
+│   ├── setup_runtime.py          # Windows recovery entrypoint for dependencies and model downloads
+│   ├── setup_llama_cpp.py        # llama.cpp binaries and GGUF model setup
+│   └── preflight_runtime.py      # Read-only runtime readiness check
 ├── tests/                        # pytest suite
 ├── outputs/                      # Saved .md artifacts (git-ignored)
 └── data_test/                    # Local sample documents (git-ignored)
@@ -131,6 +134,37 @@ Copy the sample and edit values as needed:
 - Windows (PowerShell): `Copy-Item .env.example .env`
 - Linux/macOS: `cp .env.example .env`
 
+### Windows manual setup / recovery
+
+The application downloads its dependencies and models automatically on first
+use. If that initial setup is interrupted or fails, use the Windows recovery
+entrypoint from the project root:
+
+```bash
+venv\Scripts\python.exe scripts\setup_runtime.py --all
+```
+
+Run only the failed part when needed:
+
+```bash
+venv\Scripts\python.exe scripts\setup_runtime.py --dependencies
+venv\Scripts\python.exe scripts\setup_runtime.py --ocr-models
+venv\Scripts\python.exe scripts\setup_runtime.py --llama
+```
+
+`--dependencies` reinstalls `requirements.txt` (and accepts `--cuda`, for
+example `--dependencies --cuda 12.6`); `--ocr-models` warms the configured
+OCR pipelines and downloads their missing models; and `--llama` runs
+`setup_llama_cpp.py` to prepare llama.cpp and its GGUF files. To inspect the
+current runtime without changing it, use the read-only check mode:
+
+```bash
+venv\Scripts\python.exe scripts\setup_runtime.py --check
+```
+
+This delegates to `preflight_runtime.py`, which verifies Python, GPU, Paddle,
+and the OCR model cache readiness.
+
 ---
 
 ## Configuration
@@ -146,7 +180,12 @@ Most-used settings:
 | `OCR_PRIMARY_ENGINE` | `paddleocr_vl` | Primary engine (`paddleocr_vl` or `pp_structure_v3`). |
 | `OCR_FALLBACK_ENGINE` | `pp_structure_v3` | Used only if the primary OCR engine fails. |
 | `OCR_DEVICE` | `gpu:0` | GPU selector for the OCR engines (e.g. `gpu:0`). |
-| `WARMUP_MODELS_ON_STARTUP` | `true` | Load OCR models into GPU memory at boot (faster first request). |
+| `WARMUP_MODELS_ON_STARTUP` | `true` | Initialize the Fast OCR model before serving and warm the VL model on first VL use. |
+| `FAST_OCR_DEVICE` | `cpu` | Device used by `/v1/doc/extract-fast`. |
+| `FAST_OCR_INFERENCE_ENGINE` | `onnxruntime` | CPU inference backend for Fast OCR. Uses the official ONNX variants of the configured PP-OCR models. |
+| `FAST_OCR_CPU_THREADS` | `4` | CPU threads for the Paddle backend; ONNX Runtime uses its runtime default. |
+| `FAST_OCR_RECOGNITION_BATCH_SIZE` | `8` | Number of detected text crops recognized per batch. |
+| `FAST_OCR_ENABLE_MKLDNN` | `false` | Enable oneDNN/MKL-DNN only on a verified compatible Paddle runtime. PaddlePaddle 3.3.0 has a known CPU oneDNN regression. |
 | `PADDLEOCR_VL_USE_GGUF` | `false` | `true` runs PaddleOCR-VL recognition via llama.cpp + GGUF. |
 | `PADDLE_PDX_CACHE_HOME` | `.paddlex` | Where downloaded OCR models are cached. |
 | `PARSE_OUTPUT_DIR` | `outputs` | Where parsed `.md` files are saved. |
@@ -155,6 +194,7 @@ Most-used settings:
 | `OPENAI_MODEL` | `gpt-5-mini` | Model used by `/v1/llm/extract`. |
 | `OPENAI_TIMEOUT_SECONDS` | `60` | Timeout for an OpenAI extraction request. |
 | `LLM_MAX_INPUT_CHARS` | `120000` | Maximum OCR Markdown characters submitted to the model. |
+| `LLM_REASONING_EFFORT` | `low` | GPT-5 effort (`minimal`, `low`, `medium`, `high`). `low` preserved the approved PO output while reducing latency in the representative benchmark. |
 
 `OPENAI_API_KEY` is required only for `/v1/llm/extract`. Keep it in `.env`; do
 not commit it. Change `app/prompts/prompt.py` to customize the extraction
@@ -223,7 +263,7 @@ LLAMA_SERVER_N_GPU_LAYERS=20
 
 Run `main.py`. It downloads any missing `llama/` binaries and `models/` GGUF files,
 starts `llama-server.exe`, points PaddleOCR-VL at `http://127.0.0.1:8080/v1`, then
-starts the API. To pre-download the artifacts beforehand:
+starts the API. To pre-download the llama.cpp/GGUF artifacts beforehand:
 
 ```bash
 venv\Scripts\python.exe scripts\setup_llama_cpp.py
@@ -243,7 +283,7 @@ PADDLEOCR_VL_REC_SERVER_URL=http://127.0.0.1:8080/v1
 
 ### 5. Offline / air-gapped
 
-1. On an internet-connected machine, run the service once so models are cached under `.paddlex/official_models` (and, for GGUF, run `scripts/setup_llama_cpp.py`).
+1. On an internet-connected Windows machine, run the service once so models are cached under `.paddlex/official_models`; for GGUF, run `venv\Scripts\python.exe scripts\setup_runtime.py --llama` (or `scripts/setup_llama_cpp.py`).
 2. Copy the project together with the `.paddlex/` folder (and `llama/` + `models/` if using GGUF) to the offline host.
 3. If you store the cache elsewhere, point to it in `.env`:
 
@@ -356,6 +396,25 @@ curl -X POST \
   -F 'file=@sample_invoice.pdf;type=application/pdf'
 ```
 
+### `POST /v1/doc/extract-fast`
+
+CPU-oriented extraction for scanned PDF and image uploads (`PNG`, `JPG`, `BMP`,
+`WEBP`, `TIF`). It uses `PP-OCRv6_medium_det` with `PP-OCRv6_small_rec` via
+the official ONNX Runtime model variants and recognition batch size eight. The
+endpoint is intended for faster CPU processing; unlike PaddleOCR-VL it does not
+reconstruct document layout, tables, or formulas.
+
+It returns the same JSON schema as `POST /v1/doc/extract`: OCR metadata under
+`ocr` and structured LLM output under `data`. On first use, PaddleOCR downloads
+the required ONNX models to `PADDLE_PDX_CACHE_HOME`. `onnxruntime` is installed
+from `requirements.txt`; install the PaddlePaddle CPU runtime separately only
+when using Paddle-backed endpoints or the `paddle_static` fallback.
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/doc/extract-fast \
+  -F "file=@scan.pdf"
+```
+
 ### `POST /v1/llm/extract-from-ocr`
 
 Gọi riêng lớp LLM để thử prompt trên toàn bộ nội dung Markdown/HTML đã parse.
@@ -371,11 +430,15 @@ curl -X POST \
 
 ## Testing & Diagnostics
 
-Check system readiness (Python, GPU, Paddle, model cache):
+Check system readiness (Python, GPU, Paddle, model cache) without changing
+anything:
 
 ```bash
-venv\Scripts\python.exe scripts\preflight_runtime.py
+venv\Scripts\python.exe scripts\setup_runtime.py --check
 ```
+
+`setup_runtime.py --check` delegates to the read-only
+`preflight_runtime.py`; you can also run that diagnostic directly.
 
 Run the test suite:
 

@@ -73,6 +73,8 @@ class ParseResponse(BaseModel):
     tables: list[Table]
     reading_order: list[str]
     markdown: str | None = None
+    engine_name: str = ""
+    engine_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ParseOptions(BaseModel):
