@@ -12,15 +12,11 @@ openai>=1.0.0
 numpy==2.2.6
 pytest==8.3.5
 
-# Document & OCR Parsers
+# Document & OCR Parsers (shared CPU/GPU packages)
 PyMuPDF==1.27.2.3
 paddleocr[doc-parser]==3.7.0
 paddlex[ocr]==3.7.0
 onnxruntime==1.23.2
 
-# Framework PaddlePaddle GPU tự động nhận diện phiên bản CUDA khi cài đặt
-# Sử dụng: pip install -r requirements.txt --config-settings="--cuda=12.6" (hoặc 12.6)
-# --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
-# paddlepaddle-gpu==3.3.0
-# CPU-only deployment: install PaddlePaddle after this file only when another
-# endpoint needs the Paddle runtime. Fast OCR uses ONNX Runtime by default.
+# Install the CPU or CUDA PaddlePaddle runtime separately. See README.md for
+# profile-specific commands.
