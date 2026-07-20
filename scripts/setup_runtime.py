@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 SETUP_STEPS = ("dependencies", "ocr-models", "llama")
 CHECK_STEP = "check"
+PRODUCT_NAME = "Cuddly Giggle OCR"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -39,10 +40,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dependencies", action="store_true", help="Install Python dependencies.")
     parser.add_argument("--ocr-models", action="store_true", help="Download OCR models.")
     parser.add_argument("--llama", action="store_true", help="Set up the Llama runtime.")
-    parser.add_argument(
-        "--cuda",
-        help="Pass a CUDA variant to pip when installing dependencies (for example: cu126).",
-    )
+    parser.add_argument("--cuda", help=argparse.SUPPRESS)
     return parser
 
 
@@ -53,8 +51,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         parser.error("setup_runtime.py supports Windows only")
     if args.check and any(getattr(args, name.replace("-", "_")) for name in SETUP_STEPS):
         parser.error("--check cannot be combined with setup flags")
-    if args.cuda is not None and not (args.dependencies or args.all):
-        parser.error("--cuda requires --dependencies or --all")
+    if args.cuda is not None:
+        parser.error("--cuda is no longer supported; install the Paddle CUDA wheel separately.")
     return args
 
 
@@ -69,6 +67,8 @@ def selected_steps(args: argparse.Namespace) -> list[str]:
 def run_steps(
     step_names: Sequence[str],
     runners: Mapping[str, Callable[[], object]],
+    *,
+    stop_on_failure: bool = False,
 ) -> list[StepResult]:
     results: list[StepResult] = []
     for name in step_names:
@@ -76,13 +76,15 @@ def run_steps(
             outcome = runners[name]()
         except Exception as exc:
             results.append(StepResult(name, False, str(exc)))
+            if stop_on_failure:
+                break
         else:
             message = str(outcome) if outcome is not None else "completed"
             results.append(StepResult(name, True, message))
     return results
 
 
-def install_dependencies(cuda: str | None = None) -> None:
+def install_dependencies() -> None:
     """Install project dependencies with the interpreter running this command."""
     if platform.system() == "Windows" and sys.prefix == sys.base_prefix:
         raise RuntimeError(
@@ -97,8 +99,6 @@ def install_dependencies(cuda: str | None = None) -> None:
         "-r",
         str(REPO_ROOT / "requirements.txt"),
     ]
-    if cuda:
-        command.append(f"--config-settings=--cuda={cuda}")
     subprocess.run(command, check=True)
 
 
@@ -137,6 +137,16 @@ def warmup_ocr_models(
                 f"Configured OCR engine {engine_name!r} does not support warmup."
             )
         warmup()
+    verify_warmed_ocr_models(app_settings)
+
+
+def verify_warmed_ocr_models(app_settings: object) -> None:
+    cache_home = getattr(app_settings, "paddlex_cache_home", None)
+    if not cache_home:
+        return
+    model_root = Path(cache_home) / "official_models"
+    if not model_root.is_dir() or not any(model_root.iterdir()):
+        raise RuntimeError("OCR model cache is empty after warmup; retry --ocr-models.")
 
 
 def prepare_llama() -> object:
@@ -150,22 +160,22 @@ def run_preflight() -> None:
     """Run the existing read-only runtime diagnostic."""
     from scripts.preflight_runtime import main as preflight
 
-    preflight()
+    result = preflight()
+    if result not in (None, 0):
+        raise RuntimeError("Runtime check failed; run --check to see missing components.")
 
 
-def _default_runners(cuda: str | None) -> dict[str, Callable[[], object]]:
+def _default_runners() -> dict[str, Callable[[], object]]:
     return {
-        "dependencies": lambda: install_dependencies(cuda=cuda),
+        "dependencies": install_dependencies,
         "ocr-models": warmup_ocr_models,
         "llama": prepare_llama,
         CHECK_STEP: run_preflight,
     }
 
 
-def _retry_command(step_name: str, cuda: str | None) -> str:
+def _retry_command(step_name: str) -> str:
     command = [sys.executable, str(Path(__file__).resolve()), f"--{step_name}"]
-    if step_name == "dependencies" and cuda:
-        command.extend(["--cuda", cuda])
     return subprocess.list2cmdline(command)
 
 
@@ -182,14 +192,17 @@ def main(
     active_runners = (
         runners
         if runners is not None
-        else _default_runners(args.cuda)
+        else _default_runners()
     )
-    results = run_steps(step_names, active_runners)
+    results = run_steps(step_names, active_runners, stop_on_failure=args.all)
     for result in results:
         status = "OK" if result.ok else "FAILED"
-        print(f"[{status}] {result.name}: {result.message}")
+        print(f"{PRODUCT_NAME} [{status}] {result.name}: {result.message}")
         if not result.ok:
-            print(f"Retry: {_retry_command(result.name, args.cuda)}")
+            print(f"Retry: {_retry_command(result.name)}")
+    if len(results) < len(step_names):
+        skipped = ", ".join(step_names[len(results):])
+        print(f"{PRODUCT_NAME} [SKIPPED] {skipped}: a prerequisite step failed.")
     return 0 if all(result.ok for result in results) else 1
 
 

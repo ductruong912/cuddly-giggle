@@ -10,7 +10,13 @@ import site
 from dotenv import load_dotenv
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(Path.cwd() / ".env", override=False)
+
+
+def _repo_path_from_env(name: str, default: str) -> str:
+    value = Path(os.getenv(name, default).strip() or default)
+    return str(value if value.is_absolute() else (REPO_ROOT / value).resolve())
 
 
 # ---------------------------------------------------------------------------
@@ -146,10 +152,7 @@ class Settings:
     quiet_third_party_logs: bool         = _get_bool("QUIET_THIRD_PARTY_LOGS", True)
 
     # --- PaddleX / model cache ---
-    paddlex_cache_home: str = os.getenv(
-        "PADDLE_PDX_CACHE_HOME",
-        str((Path.cwd() / ".paddlex").resolve()),
-    )
+    paddlex_cache_home: str = _repo_path_from_env("PADDLE_PDX_CACHE_HOME", ".paddlex")
     paddlex_disable_model_source_check: bool = _get_bool("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", True)
 
     def __post_init__(self) -> None:
