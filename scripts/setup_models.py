@@ -17,7 +17,7 @@ from core.engines.registry import create_engine  # noqa: E402
 from services.model_assets import write_model_profile  # noqa: E402
 
 
-_PROFILES = ("fast-onnx", "paddleocr-vl", "pp-structure-v3")
+_PROFILES = ("fast-onnx", "paddleocr-vl")
 
 
 def _warm(profile: str) -> None:
@@ -33,7 +33,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fast-onnx", action="store_true", help="Download Fast OCR ONNX models.")
     parser.add_argument("--paddleocr-vl", action="store_true", help="Download PaddleOCR-VL models.")
-    parser.add_argument("--pp-structure-v3", action="store_true", help="Download PP-StructureV3 models.")
     args = parser.parse_args(argv)
     selected = [profile for profile in _PROFILES if getattr(args, profile.replace("-", "_"))]
     if not selected:

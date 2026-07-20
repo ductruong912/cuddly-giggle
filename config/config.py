@@ -67,8 +67,6 @@ class Settings:
 
     # --- OCR engines ---
     primary_engine: str                = os.getenv("OCR_PRIMARY_ENGINE", "paddleocr_vl")
-    fallback_engine: str               = os.getenv("OCR_FALLBACK_ENGINE", "pp_structure_v3")
-    default_enable_fallback: bool      = True
     ocr_device: str                    = os.getenv("OCR_DEVICE", "").strip()
     ocr_inference_engine: str          = os.getenv("OCR_INFERENCE_ENGINE", "").strip()
     paddleocr_vl_pipeline_version: str = os.getenv("PADDLEOCR_VL_PIPELINE_VERSION", "v1.6").strip()

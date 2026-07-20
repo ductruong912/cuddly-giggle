@@ -5,14 +5,14 @@ FastAPI service for extracting Vietnamese documents into Markdown or structured 
 ## Highlights
 
 - Uses native text extraction for digital PDF, DOCX, XLSX, and XLSM files.
-- Uses PaddleOCR-VL with PP-StructureV3 fallback for scans and complex layouts.
+- Uses PaddleOCR-VL for scans and complex layouts.
 - Provides a faster CPU OCR route for PDF and image files.
 - Saves generated Markdown and extraction artifacts in `outputs/`.
 
 ## Requirements
 
 - Python 3.9–3.11
-- NVIDIA GPU and CUDA for PaddleOCR-VL / PP-StructureV3 OCR
+- NVIDIA GPU and CUDA for PaddleOCR-VL OCR
 - Optional: LibreOffice for legacy `.doc` and `.xls` files
 
 Native text extraction and the fast CPU OCR route can run without a GPU.
@@ -68,7 +68,6 @@ python scripts/setup_models.py --fast-onnx
 # Native NVIDIA GPU: full PaddleOCR stack (recommended when VRAM is sufficient)
 python -m pip install "paddlepaddle-gpu==3.3.0" -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
 python scripts/setup_models.py --paddleocr-vl
-python scripts/setup_models.py --pp-structure-v3
 ```
 
 For a low-VRAM NVIDIA GPU, use the GGUF + llama.cpp backend instead. It still

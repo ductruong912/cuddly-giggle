@@ -107,7 +107,7 @@ def warmup_ocr_models(
     app_settings: object | None = None,
     engine_factory: Callable[[str, object], object] | None = None,
 ) -> None:
-    """Warm the configured primary and fallback OCR engine pipelines.
+    """Warm the configured primary OCR engine pipeline.
 
     The optional arguments keep this adapter independent from concrete OCR
     runtimes during tests while the normal CLI path uses the app's registry.
@@ -126,25 +126,17 @@ def warmup_ocr_models(
     previous_setup_mode = os.environ.get("CUDDLY_GIGGLE_MODEL_SETUP")
     os.environ["CUDDLY_GIGGLE_MODEL_SETUP"] = "1"
     try:
-        warmed_names: set[str] = set()
-        for engine_name in (
-            getattr(app_settings, "primary_engine"),
-            getattr(app_settings, "fallback_engine"),
-        ):
-            normalized_name = (engine_name or "").strip().lower()
-            if normalized_name in warmed_names:
-                continue
-            warmed_names.add(normalized_name)
-
-            engine = engine_factory(engine_name, app_settings)
-            warmup = getattr(engine, "warmup", None)
-            if not callable(warmup):
-                raise RuntimeError(
-                    f"Configured OCR engine {engine_name!r} does not support warmup."
-                )
-            warmup()
-            if hasattr(app_settings, "paddlex_cache_home"):
-                write_model_profile(app_settings, normalized_name.replace("_", "-"))
+        engine_name = getattr(app_settings, "primary_engine")
+        normalized_name = (engine_name or "").strip().lower()
+        engine = engine_factory(engine_name, app_settings)
+        warmup = getattr(engine, "warmup", None)
+        if not callable(warmup):
+            raise RuntimeError(
+                f"Configured OCR engine {engine_name!r} does not support warmup."
+            )
+        warmup()
+        if hasattr(app_settings, "paddlex_cache_home"):
+            write_model_profile(app_settings, normalized_name.replace("_", "-"))
     finally:
         if previous_setup_mode is None:
             os.environ.pop("CUDDLY_GIGGLE_MODEL_SETUP", None)

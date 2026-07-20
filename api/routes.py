@@ -170,7 +170,7 @@ async def extract_document(
                 )
                 response = orchestrator.parse(
                     str(temp_path),
-                    ParseOptions(enable_fallback=settings.default_enable_fallback),
+                    ParseOptions(),
                     request_id=request_id,
                 )
                 with request_logging_context(response.request_id):
@@ -446,9 +446,7 @@ def ocr_document(
             suffix,
             temp_path.stat().st_size,
         )
-        options = ParseOptions(
-            enable_fallback=settings.default_enable_fallback,
-        )
+        options = ParseOptions()
         stage_start = time.perf_counter()
         response = orchestrator.parse(str(temp_path), options, request_id=request_id)
         parse_elapsed = time.perf_counter() - stage_start

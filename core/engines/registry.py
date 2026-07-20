@@ -2,21 +2,18 @@ from __future__ import annotations
 
 from config.config import Settings
 from core.engines.base import ParseEngine
-from core.engines.paddle import PaddleOCRVLEngine, PPStructureV3Engine
+from core.engines.paddle import PaddleOCRVLEngine
 
 
 def create_engine(name: str, app_settings: Settings) -> ParseEngine:
     """Instantiate a parse engine by its configured name.
 
-    Keeps engine selection driven by OCR_PRIMARY_ENGINE / OCR_FALLBACK_ENGINE
-    instead of hardcoding concrete classes in the orchestrator.
+    Keeps primary OCR engine selection driven by OCR_PRIMARY_ENGINE.
     """
     key = (name or "").strip().lower()
     if key == PaddleOCRVLEngine.name:
         return PaddleOCRVLEngine(app_settings=app_settings)
-    if key == PPStructureV3Engine.name:
-        return PPStructureV3Engine(app_settings=app_settings)
     raise ValueError(
         f"Unknown OCR engine '{name}'. Supported engines: "
-        f"{PaddleOCRVLEngine.name}, {PPStructureV3Engine.name}."
+        f"{PaddleOCRVLEngine.name}."
     )
