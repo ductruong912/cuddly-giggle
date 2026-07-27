@@ -16,7 +16,7 @@ from core.engines.native import (
     WordTextEngine,
     is_pdf_text_result_usable,
 )
-from core.engines.registry import create_engine
+from services.local_ocr_selector import LocalOCRSelector
 from services.output import filter_tables_markdown
 
 
@@ -33,7 +33,7 @@ class ParseOrchestrator:
         excel_text_engine: ParseEngine | None = None,
     ) -> None:
         self.settings = app_settings
-        self.primary_engine = primary_engine or create_engine(self.settings.primary_engine, self.settings)
+        self.primary_engine = primary_engine or LocalOCRSelector(self.settings).select()
         self.pdf_text_engine = pdf_text_engine or PdfTextEngine(self.settings)
         self.word_text_engine = word_text_engine or WordTextEngine(self.settings)
         self.excel_text_engine = excel_text_engine or ExcelTextEngine(self.settings)
