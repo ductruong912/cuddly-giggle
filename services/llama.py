@@ -64,10 +64,24 @@ class LlamaBootstrapResult:
 
 
 class HttpDownloader:
-    def __init__(self, timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS) -> None:
+    def __init__(self, timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS, attempts: int = 3) -> None:
         self.timeout_seconds = timeout_seconds
+        self.attempts = max(1, attempts)
 
     def download_file(self, url: str, destination: Path) -> None:
+        last_error: Exception | None = None
+        for attempt in range(self.attempts):
+            try:
+                self._download_file_once(url, destination)
+                return
+            except (OSError, httpx.HTTPError) as exc:
+                last_error = exc
+                if attempt + 1 < self.attempts:
+                    logger.warning("Download attempt %s/%s failed for %s: %s", attempt + 1, self.attempts, url, exc)
+        assert last_error is not None
+        raise last_error
+
+    def _download_file_once(self, url: str, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         tmp_path: Path | None = None
         try:
@@ -90,7 +104,7 @@ class HttpDownloader:
             raise
 
     def download_and_extract_zip(self, url: str, destination_dir: Path) -> None:
-        destination_dir.mkdir(parents=True, exist_ok=True)
+        destination_dir.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=destination_dir.parent) as tmp_dir_name:
             tmp_dir = Path(tmp_dir_name)
             archive_path = tmp_dir / "llama.cpp.zip"
@@ -99,7 +113,7 @@ class HttpDownloader:
             self.download_file(url, archive_path)
             with zipfile.ZipFile(archive_path) as archive:
                 archive.extractall(extract_dir)
-            _copy_extracted_files(extract_dir, destination_dir)
+            _install_extracted_files(extract_dir, destination_dir, tmp_dir)
 
     def get_json(self, url: str) -> dict[str, object]:
         response = httpx.get(url, follow_redirects=True, timeout=self.timeout_seconds)
@@ -213,6 +227,8 @@ def bootstrap_llama_cpp(
             continue
         logger.info("Downloading model artifact %s", artifact.path.name)
         downloader.download_file(artifact.url, artifact.path)
+        if not is_artifact_ready(artifact.path, artifact.min_bytes):
+            raise RuntimeError(f"Downloaded model {artifact.path.name} is too small or incomplete.")
         downloaded_models.append(artifact.path.name)
 
     return LlamaBootstrapResult(
@@ -223,12 +239,30 @@ def bootstrap_llama_cpp(
     )
 
 
-def _copy_extracted_files(source_dir: Path, destination_dir: Path) -> None:
+def _install_extracted_files(source_dir: Path, destination_dir: Path, staging_root: Path) -> None:
+    missing = [name for name in REQUIRED_LLAMA_FILES if not any(path.name == name for path in source_dir.rglob(name))]
+    if missing:
+        raise RuntimeError(f"llama.cpp archive did not provide required files: {', '.join(missing)}")
+    staged_dir = staging_root / "installed"
+    if destination_dir.exists():
+        shutil.copytree(destination_dir, staged_dir)
+    else:
+        staged_dir.mkdir()
     for path in source_dir.rglob("*"):
         if not path.is_file():
             continue
-        target = destination_dir / path.name
+        target = staged_dir / path.name
         shutil.copy2(path, target)
+    backup_dir = staging_root / "previous"
+    if destination_dir.exists():
+        os.replace(destination_dir, backup_dir)
+    try:
+        os.replace(staged_dir, destination_dir)
+    except Exception:
+        if backup_dir.exists():
+            os.replace(backup_dir, destination_dir)
+        raise
+    shutil.rmtree(backup_dir, ignore_errors=True)
 
 
 def _configured_release_urls(config: LlamaBootstrapConfig) -> list[str]:

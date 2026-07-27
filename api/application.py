@@ -3,16 +3,19 @@ from __future__ import annotations
 # pyrefly: ignore [missing-import]
 from fastapi import FastAPI
 
-from app.api.routes import doc_router, health_router
-from app.core.config import configure_app_logging, configure_third_party_logging
+from api.routes import doc_router, health_router, ocr_router
+from config.config import configure_app_logging, configure_third_party_logging
+from services.local_ocr_selector import log_gpu_availability
 
 
 def create_app() -> FastAPI:
     configure_app_logging()
     configure_third_party_logging()
+    log_gpu_availability()
     application = FastAPI(title="Vietnamese Document OCR & Extraction API", version="0.1.0")
     application.include_router(health_router)
     application.include_router(doc_router)
+    application.include_router(ocr_router)
     return application
 
 

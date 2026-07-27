@@ -9,10 +9,10 @@ warnings.filterwarnings("ignore", message="No ccache found")
 # pyrefly: ignore [missing-import]
 import uvicorn
 
-from app.api.routes import get_orchestrator
-from app.api.application import app
-from app.core.config import Settings, settings
-from app.services.llama import (
+from api.routes import get_orchestrator
+from api.application import app
+from config.config import Settings, settings
+from services.llama import (
     LlamaBootstrapConfig,
     LlamaServerConfig,
     bootstrap_llama_cpp,
@@ -21,6 +21,7 @@ from app.services.llama import (
     start_llama_server_if_needed,
     stop_llama_server,
 )
+from services.vl_runtime import VLRuntimeManager
 
 
 def bootstrap_llama_cpp_on_startup(
@@ -29,7 +30,7 @@ def bootstrap_llama_cpp_on_startup(
     bootstrap=bootstrap_llama_cpp,
     resolve_release_urls=resolve_latest_llama_cpp_release_urls,
 ) -> None:
-    if not app_settings.auto_download_llama_cpp and not app_settings.paddleocr_vl_use_gguf:
+    if not app_settings.auto_download_llama_cpp:
         return
 
     llama_dir = Path(app_settings.llama_cpp_dir).resolve()
@@ -60,15 +61,9 @@ def configure_gguf_runtime_on_startup(
 
     # Only bootstrap/own a local llama.cpp runtime when we are autostarting it. When
     # pointed at an external server (e.g. a separate llama container), skip both the
-    # binary download and startup — the app just talks to PADDLEOCR_VL_REC_SERVER_URL.
+    # binary download and startup â€” the app just talks to PADDLEOCR_VL_REC_SERVER_URL.
     if not app_settings.llama_server_autostart:
         return None
-
-    bootstrap_llama_cpp_on_startup(
-        app_settings=app_settings,
-        bootstrap=bootstrap,
-        resolve_release_urls=resolve_release_urls,
-    )
 
     llama_dir = Path(app_settings.llama_cpp_dir).resolve()
     models_dir = Path(app_settings.llama_cpp_models_dir).resolve()
@@ -111,12 +106,16 @@ def main() -> None:
     silence_known_warnings()
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "8000"))
-    llama_process = configure_gguf_runtime_on_startup()
+    runtime_manager = VLRuntimeManager(
+        configure_runtime=configure_gguf_runtime_on_startup,
+        warmup=warmup_models_on_startup,
+        stop_runtime=stop_llama_server,
+    )
+    app.state.vl_runtime_manager = runtime_manager
     try:
-        warmup_models_on_startup()
         uvicorn.run(app, host=host, port=port, reload=False)
     finally:
-        stop_llama_server(llama_process)
+        runtime_manager.shutdown()
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -11,11 +12,12 @@ import threading
 import time
 from typing import Any, Callable
 
-from app.core.config import Settings, settings
-from app.core.pipeline_logging import pipeline_message
-from app.domain.schemas import PageParseResult
-from app.engines.base import EngineParseResult, ParseEngine
-from app.engines.normalizer import normalize_engine_output
+from config.config import Settings, settings
+from config.pipeline_logging import pipeline_message
+from core.domain.schemas import PageParseResult
+from core.engines.base import EngineParseResult, ParseEngine
+from core.engines.normalizer import normalize_engine_output
+from services.model_assets import require_model_profile
 
 
 logger = logging.getLogger(__name__)
@@ -259,12 +261,21 @@ class PaddlePipelineEngine(ParseEngine):
         return kwargs
 
     def _get_or_create_pipeline(self, pipeline_cls: type, kwargs: dict[str, Any]):  # type: ignore[no-untyped-def]
+        if os.getenv("CUDDLY_GIGGLE_MODEL_SETUP") != "1":
+            require_model_profile(self.settings, self.name.replace("_", "-"))
         key = tuple(sorted((str(k), str(v)) for k, v in kwargs.items()))
         with self._pipeline_lock:
             if self._pipeline is None or self._pipeline_key != key:
                 self._pipeline = pipeline_cls(**kwargs)
                 self._pipeline_key = key
         return self._pipeline
+
+    def warmup(self, pipeline_cls: type | None = None) -> None:
+        """Create and cache the configured pipeline without parsing a document."""
+        if pipeline_cls is None:
+            pipeline_cls = self._load_pipeline_cls()
+        kwargs = self._build_kwargs(pipeline_cls, "auto")
+        self._get_or_create_pipeline(pipeline_cls, kwargs)
 
 
 class PaddleOCRVLEngine(PaddlePipelineEngine):
@@ -313,28 +324,5 @@ class PaddleOCRVLEngine(PaddlePipelineEngine):
             "PaddleOCR-VL is unavailable. Install paddleocr[doc-parser] and paddlepaddle-gpu, "
             "or ensure `paddleocr` CLI exists in PATH. "
             f"pipeline_version={self.settings.paddleocr_vl_pipeline_version or 'default'}; "
-            f"python_api_error={py_error or 'n/a'}; cli_error={cli_error or 'n/a'}"
-        )
-
-    def warmup(self, pipeline_cls: type | None = None) -> None:
-        if pipeline_cls is None:
-            pipeline_cls = self._load_pipeline_cls()
-        kwargs = self._build_kwargs(pipeline_cls, "auto")
-        self._get_or_create_pipeline(pipeline_cls, kwargs)
-
-
-class PPStructureV3Engine(PaddlePipelineEngine):
-    name = "pp_structure_v3"
-    cli_subcommand = "pp_structurev3"
-
-    def _load_pipeline_cls(self) -> type:
-        from paddleocr import PPStructureV3  # type: ignore
-
-        return PPStructureV3
-
-    def _unavailable_message(self, py_error: str, cli_error: str) -> str:
-        return (
-            "PP-StructureV3 is unavailable. Install paddleocr and paddlepaddle-gpu, "
-            "or ensure `paddleocr` CLI exists in PATH. "
             f"python_api_error={py_error or 'n/a'}; cli_error={cli_error or 'n/a'}"
         )

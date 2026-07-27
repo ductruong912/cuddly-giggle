@@ -18,9 +18,9 @@ import unicodedata
 import xml.etree.ElementTree as ET
 import zipfile
 
-from app.core.config import Settings, settings
-from app.domain.schemas import Block, BlockType, PageParseResult, Point, Table, TableCell
-from app.engines.base import EngineParseResult, ParseEngine
+from config.config import Settings, settings
+from core.domain.schemas import Block, BlockType, PageParseResult, Point, Table, TableCell
+from core.engines.base import EngineParseResult, ParseEngine
 
 
 CONVERSION_TIMEOUT_SECONDS = 60
@@ -44,8 +44,8 @@ EXCEL_TEXT_CONFIDENCE = 0.99
 # PDF
 # =====================================================================================
 
-_TCVN3_CHARS = "µ¸¶·¹¨»¾¼½Æ©ÇÊÈÉË®ÌÐÎÏÑªÒÕÓÔÖ×ÝØÜÞßãáâä«åèæçé¬êíëìîïóñòô­õøö÷ùúýûüþ¡¢§£¤¥¦"
-_UNICODE_CHARS = "àáảãạăằắẳẵặâầấẩẫậđèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵĂÂĐÊÔƠƯ"
+_TCVN3_CHARS = "ÂµÂ¸Â¶Â·Â¹Â¨Â»Â¾Â¼Â½Ã†Â©Ã‡ÃŠÃˆÃ‰Ã‹Â®ÃŒÃÃŽÃÃ‘ÂªÃ’Ã•Ã“Ã”Ã–Ã—ÃÃ˜ÃœÃžÃŸÃ£Ã¡Ã¢Ã¤Â«Ã¥Ã¨Ã¦Ã§Ã©Â¬ÃªÃ­Ã«Ã¬Ã®Ã¯Ã³Ã±Ã²Ã´Â­ÃµÃ¸Ã¶Ã·Ã¹ÃºÃ½Ã»Ã¼Ã¾Â¡Â¢Â§Â£Â¤Â¥Â¦"
+_UNICODE_CHARS = "Ã Ã¡áº£Ã£áº¡Äƒáº±áº¯áº³áºµáº·Ã¢áº§áº¥áº©áº«áº­Ä‘Ã¨Ã©áº»áº½áº¹Ãªá»áº¿á»ƒá»…á»‡Ã¬Ã­á»‰Ä©á»‹Ã²Ã³á»Ãµá»Ã´á»“á»‘á»•á»—á»™Æ¡á»á»›á»Ÿá»¡á»£Ã¹Ãºá»§Å©á»¥Æ°á»«á»©á»­á»¯á»±á»³Ã½á»·á»¹á»µÄ‚Ã‚ÄÃŠÃ”Æ Æ¯"
 _TCVN3_TRANSLATION = str.maketrans(dict(zip(_TCVN3_CHARS, _UNICODE_CHARS)))
 _TCVN3_MARKERS = frozenset(_TCVN3_CHARS)
 
@@ -339,7 +339,7 @@ def _is_readable_char(ch: str) -> bool:
     code = ord(ch)
     # Private-use areas and the replacement char are what PyMuPDF emits for glyphs
     # it cannot map to real Unicode (broken/missing ToUnicode CMap).
-    if ch == "�":
+    if ch == "ï¿½":
         return False
     if 0xE000 <= code <= 0xF8FF or 0xF0000 <= code <= 0xFFFFD or 0x100000 <= code <= 0x10FFFD:
         return False

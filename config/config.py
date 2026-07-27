@@ -10,7 +10,13 @@ import site
 from dotenv import load_dotenv
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(Path.cwd() / ".env", override=False)
+
+
+def _repo_path_from_env(name: str, default: str) -> str:
+    value = Path(os.getenv(name, default).strip() or default)
+    return str(value if value.is_absolute() else (REPO_ROOT / value).resolve())
 
 
 # ---------------------------------------------------------------------------
@@ -57,11 +63,10 @@ class Settings:
     openai_timeout_seconds: float = _get_float("OPENAI_TIMEOUT_SECONDS", 60.0)
     openai_max_retries: int = _get_int("OPENAI_MAX_RETRIES", 2)
     llm_max_input_chars: int = _get_int("LLM_MAX_INPUT_CHARS", 120_000)
+    llm_reasoning_effort: str = os.getenv("LLM_REASONING_EFFORT", "low").strip().lower()
 
     # --- OCR engines ---
     primary_engine: str                = os.getenv("OCR_PRIMARY_ENGINE", "paddleocr_vl")
-    fallback_engine: str               = os.getenv("OCR_FALLBACK_ENGINE", "pp_structure_v3")
-    default_enable_fallback: bool      = True
     ocr_device: str                    = os.getenv("OCR_DEVICE", "").strip()
     ocr_inference_engine: str          = os.getenv("OCR_INFERENCE_ENGINE", "").strip()
     paddleocr_vl_pipeline_version: str = os.getenv("PADDLEOCR_VL_PIPELINE_VERSION", "v1.6").strip()
@@ -77,7 +82,25 @@ class Settings:
         for item in os.getenv("PADDLEOCR_VL_MARKDOWN_IGNORE_LABELS", "").split(",")
         if item.strip()
     )
-    warmup_models_on_startup: bool     = _get_bool("WARMUP_MODELS_ON_STARTUP", True)
+    fast_ocr_device: str = os.getenv("FAST_OCR_DEVICE", "cpu").strip() or "cpu"
+    fast_ocr_detection_model_name: str = os.getenv(
+        "FAST_OCR_DETECTION_MODEL_NAME", "PP-OCRv6_medium_det"
+    ).strip()
+    fast_ocr_recognition_model_name: str = os.getenv(
+        "FAST_OCR_RECOGNITION_MODEL_NAME", "PP-OCRv6_small_rec"
+    ).strip()
+    fast_ocr_recognition_batch_size: int = _get_int("FAST_OCR_RECOGNITION_BATCH_SIZE", 8)
+    fast_ocr_cpu_threads: int = _get_int("FAST_OCR_CPU_THREADS", 4)
+    fast_ocr_inference_engine: str = os.getenv(
+        "FAST_OCR_INFERENCE_ENGINE", "onnxruntime"
+    ).strip() or "onnxruntime"
+    fast_ocr_enable_mkldnn: bool = _get_bool("FAST_OCR_ENABLE_MKLDNN", False)
+    fast_ocr_datalab_mode: str = (
+        os.getenv("FAST_OCR_DATALAB_MODE", "balanced").strip().lower() or "balanced"
+    )
+    fast_ocr_datalab_timeout_seconds: float = _get_float("FAST_OCR_DATALAB_TIMEOUT_SECONDS", 120.0)
+    datalab_api_key: str = os.getenv("DATALAB_API_KEY", "").strip()
+    warmup_models_on_startup: bool     = _get_bool("WARMUP_MODELS_ON_STARTUP", False)
 
     # --- llama.cpp / GGUF bootstrap ---
     auto_download_llama_cpp: bool = _get_bool("AUTO_DOWNLOAD_LLAMA_CPP", False)
@@ -125,11 +148,16 @@ class Settings:
     quiet_third_party_logs: bool         = _get_bool("QUIET_THIRD_PARTY_LOGS", True)
 
     # --- PaddleX / model cache ---
-    paddlex_cache_home: str = os.getenv(
-        "PADDLE_PDX_CACHE_HOME",
-        str((Path.cwd() / ".paddlex").resolve()),
-    )
+    paddlex_cache_home: str = _repo_path_from_env("PADDLE_PDX_CACHE_HOME", ".paddlex")
     paddlex_disable_model_source_check: bool = _get_bool("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", True)
+
+    def __post_init__(self) -> None:
+        if self.fast_ocr_datalab_mode not in {"fast", "balanced", "accurate"}:
+            raise ValueError(
+                "FAST_OCR_DATALAB_MODE must be one of: fast, balanced, accurate"
+            )
+        if self.fast_ocr_datalab_timeout_seconds <= 0:
+            raise ValueError("FAST_OCR_DATALAB_TIMEOUT_SECONDS must be greater than zero")
 
 
 # ---------------------------------------------------------------------------
@@ -209,18 +237,19 @@ def configure_third_party_logging() -> None:
 
 
 def configure_app_logging() -> None:
-    app_logger = logging.getLogger("app")
-    app_logger.setLevel(logging.INFO)
-    app_logger.propagate = True
+    for logger_name in ("app", "api", "config", "core", "services"):
+        app_logger = logging.getLogger(logger_name)
+        app_logger.setLevel(logging.INFO)
+        app_logger.propagate = True
 
-    already_configured = any(
-        getattr(h, "_cuddly_giggle_app_handler", False) for h in app_logger.handlers
-    )
-    if already_configured:
-        return
+        already_configured = any(
+            getattr(h, "_cuddly_giggle_app_handler", False) for h in app_logger.handlers
+        )
+        if already_configured:
+            continue
 
-    handler = logging.StreamHandler()
-    handler.setLevel(logging.INFO)
-    handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
-    handler._cuddly_giggle_app_handler = True  # type: ignore[attr-defined]
-    app_logger.addHandler(handler)
+        handler = logging.StreamHandler()
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+        handler._cuddly_giggle_app_handler = True  # type: ignore[attr-defined]
+        app_logger.addHandler(handler)

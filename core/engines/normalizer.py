@@ -6,8 +6,8 @@ from html import unescape
 import re
 import uuid
 
-from app.core.config import Settings, settings
-from app.domain.schemas import Block, BlockType, PageParseResult, Point, Table, TableCell
+from config.config import Settings, settings
+from core.domain.schemas import Block, BlockType, PageParseResult, Point, Table, TableCell
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
@@ -405,11 +405,15 @@ def _result_to_markdown_text(raw: object) -> str | None:
 
 
 def _starts_with_text_page_marker(line: str) -> bool:
-    return bool(re.match(r"^(?:#{1,6}\s*)?\[Tr\.\s*\d+\s*\]\s*:?", line.strip()))
+    return bool(
+        re.match(r"^(?:#{1,6}\s*)?\[(?:Tr\.|Page)\s*\d+\s*\]\s*:?", line.strip())
+    )
 
 
 def _is_standalone_text_page_marker(line: str) -> bool:
-    return bool(re.match(r"^(?:#{1,6}\s*)?\[Tr\.\s*\d+\s*\]\s*:?\s*$", line.strip()))
+    return bool(
+        re.match(r"^(?:#{1,6}\s*)?\[(?:Tr\.|Page)\s*\d+\s*\]\s*:?\s*$", line.strip())
+    )
 
 
 def _text_only_markdown_needs_blank_before(line: str, previous_line: str) -> bool:
@@ -422,9 +426,9 @@ def _text_only_markdown_needs_blank_before(line: str, previous_line: str) -> boo
         return False
     if previous_line.startswith("#"):
         return True
-    if re.match(r"^Ngày\b", line, flags=re.IGNORECASE):
+    if re.match(r"^NgÃ y\b", line, flags=re.IGNORECASE):
         return True
-    return line.startswith(("Người dịch:", "Hiệu đính:", "VIỆN ", "VIỆN NGHIÊN"))
+    return line.startswith(("NgÆ°á»i dá»‹ch:", "Hiá»‡u Ä‘Ã­nh:", "VIá»†N ", "VIá»†N NGHIÃŠN"))
 
 
 def _compact_text_only_markdown(markdown: str | None) -> str | None:
