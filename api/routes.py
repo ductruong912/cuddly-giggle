@@ -11,7 +11,6 @@ import uuid
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request
 # pyrefly: ignore [missing-import]
-from fastapi.responses import PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 
 from config.config import settings
@@ -30,9 +29,8 @@ from services.llm_extraction import (
     LLMExtractionUnavailable,
 )
 from services.orchestrator import ParseOrchestrator
-from services.fast_orchestrator import FastParseOrchestrator
+from services.online_orchestrator import OnlineParseOrchestrator
 from services.output import save_parse_artifacts, save_extraction_artifacts
-from services.vl_runtime import VLRuntimeManager
 
 
 logger = logging.getLogger(__name__)
@@ -48,27 +46,13 @@ def get_orchestrator() -> ParseOrchestrator:
 
 
 @lru_cache(maxsize=1)
-def get_fast_orchestrator() -> FastParseOrchestrator:
-    return FastParseOrchestrator()
+def get_online_orchestrator() -> OnlineParseOrchestrator:
+    return OnlineParseOrchestrator()
 
 
 @lru_cache(maxsize=1)
 def get_llm_extractor() -> LLMExtractionService:
     return LLMExtractionService()
-
-
-def get_vl_runtime_manager(request: Request) -> VLRuntimeManager:
-    manager = getattr(request.app.state, "vl_runtime_manager", None)
-    if manager is None:
-        raise RuntimeError("VL runtime manager is not configured")
-    return manager
-
-
-def ensure_vl_runtime(manager: VLRuntimeManager = Depends(get_vl_runtime_manager)) -> None:
-    try:
-        manager.ensure_ready()
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"VL OCR runtime is unavailable: {exc}") from exc
 
 
 # =====================================================================================
@@ -87,19 +71,18 @@ def healthz() -> dict[str, str]:
 # Documents
 # =====================================================================================
 
-doc_router = APIRouter(prefix="/v1/doc", tags=["documents"])
+doc_router = APIRouter(prefix="/v1/extract", tags=["documents"])
 
 SUPPORTED_INPUT_SUFFIXES = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".xlsm", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 FAST_OCR_INPUT_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 
 
-@doc_router.post("/extract", response_model=LLMExtractionResponse)
-async def extract_document(
+@doc_router.post("/local", response_model=LLMExtractionResponse)
+async def extract_local_document(
     request: Request,
     file: UploadFile | None = File(None),
     orchestrator: ParseOrchestrator = Depends(get_orchestrator),
     extractor: LLMExtractionService = Depends(get_llm_extractor),
-    _: None = Depends(ensure_vl_runtime),
 ) -> LLMExtractionResponse:
     total_start = time.perf_counter()
     content_type = request.headers.get("content-type", "")
@@ -303,11 +286,11 @@ async def extract_document(
         )
 
 
-@doc_router.post("/extract-fast", response_model=LLMExtractionResponse)
-async def extract_fast_document(
+@doc_router.post("/online", response_model=LLMExtractionResponse)
+async def extract_online_document(
     request: Request,
     file: UploadFile | None = File(None),
-    orchestrator: FastParseOrchestrator = Depends(get_fast_orchestrator),
+    orchestrator: OnlineParseOrchestrator = Depends(get_online_orchestrator),
     extractor: LLMExtractionService = Depends(get_llm_extractor),
 ) -> LLMExtractionResponse:
     total_start = time.perf_counter()
@@ -316,7 +299,7 @@ async def extract_fast_document(
     llm_elapsed = 0.0
     save_elapsed = 0.0
     if "multipart/form-data" not in request.headers.get("content-type", ""):
-        raise HTTPException(status_code=415, detail="Fast OCR requires a multipart/form-data file upload.")
+        raise HTTPException(status_code=415, detail="Online OCR requires a multipart/form-data file upload.")
 
     uploaded_file = file
     if uploaded_file is None:
@@ -327,7 +310,7 @@ async def extract_fast_document(
 
     suffix = Path(uploaded_file.filename or "").suffix.lower()
     if suffix not in FAST_OCR_INPUT_SUFFIXES:
-        raise HTTPException(status_code=400, detail="Fast OCR supports PDF and image files only.")
+        raise HTTPException(status_code=400, detail="Online OCR supports PDF and image files only.")
 
     temp_root = Path(settings.temp_dir)
     temp_root.mkdir(parents=True, exist_ok=True)
@@ -339,7 +322,7 @@ async def extract_fast_document(
             shutil.copyfileobj(uploaded_file.file, staged_file)
         upload_elapsed = time.perf_counter() - stage_start
         logger.info(
-            pipeline_message("received fast-ocr file=%s suffix=%s size_bytes=%s"),
+            pipeline_message("received online-ocr file=%s suffix=%s size_bytes=%s"),
             uploaded_file.filename or temp_path.name,
             suffix,
             temp_path.stat().st_size,
@@ -361,7 +344,6 @@ async def extract_fast_document(
         save_elapsed = time.perf_counter() - stage_start
         engine_metadata = response.engine_metadata or {}
         provider = str(engine_metadata.get("provider") or ("datalab" if response.engine_name == "datalab" else "local"))
-        fallback = bool(engine_metadata.get("fallback", False))
         datalab_runtime = engine_metadata.get("runtime", "n/a")
         cost_breakdown = engine_metadata.get("cost_breakdown")
         datalab_cost = (
@@ -371,13 +353,12 @@ async def extract_fast_document(
         )
         logger.info(
             pipeline_message(
-                "COMPLETED fast-ocr pages=%s markdown_chars=%s provider=%s fallback=%s datalab_runtime=%ss datalab_cost_cents=%s upload=%.3fs ocr=%.3fs llm=%.3fs save=%.3fs total=%.3fs saved_markdown=%s saved_json=%s",
+                "COMPLETED online-ocr pages=%s markdown_chars=%s provider=%s datalab_runtime=%ss datalab_cost_cents=%s upload=%.3fs ocr=%.3fs llm=%.3fs save=%.3fs total=%.3fs saved_markdown=%s saved_json=%s",
                 request_id=response.request_id,
             ),
             len(response.pages),
             len(response.markdown or ""),
             provider,
-            str(fallback).lower(),
             datalab_runtime,
             datalab_cost,
             upload_elapsed,
@@ -405,86 +386,8 @@ async def extract_fast_document(
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
-        logger.error(pipeline_message("FAILED fast-ocr extraction request error", request_id=request_id), exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected fast OCR extraction error: {exc}") from exc
-    finally:
-        if temp_path.exists():
-            temp_path.unlink(missing_ok=True)
-
-
-@doc_router.post("/ocr", response_class=PlainTextResponse)
-def ocr_document(
-    file: UploadFile = File(...),
-    orchestrator: ParseOrchestrator = Depends(get_orchestrator),
-    _: None = Depends(ensure_vl_runtime),
-) -> PlainTextResponse:
-    total_start = time.perf_counter()
-    upload_elapsed = 0.0
-    parse_elapsed = 0.0
-    save_elapsed = 0.0
-    request_id = f"req_{uuid.uuid4().hex[:12]}"
-    suffix = Path(file.filename or "").suffix.lower()
-    if suffix not in SUPPORTED_INPUT_SUFFIXES:
-        raise HTTPException(status_code=400, detail="Unsupported input type. Use PDF, Word, Excel, or image files.")
-
-    temp_root = Path(settings.temp_dir)
-    temp_root.mkdir(parents=True, exist_ok=True)
-    temp_path = temp_root / f"{uuid.uuid4().hex}{suffix}"
-
-    try:
-        stage_start = time.perf_counter()
-        with temp_path.open("wb") as f:
-            shutil.copyfileobj(file.file, f)
-        upload_elapsed = time.perf_counter() - stage_start
-        logger.info(
-            pipeline_message(
-                # "PHASE 1",
-                "received file=%s suffix=%s size_bytes=%s",
-                # request_id=request_id,
-            ),
-            file.filename or temp_path.name,
-            suffix,
-            temp_path.stat().st_size,
-        )
-        options = ParseOptions()
-        stage_start = time.perf_counter()
-        response = orchestrator.parse(str(temp_path), options, request_id=request_id)
-        parse_elapsed = time.perf_counter() - stage_start
-        stage_start = time.perf_counter()
-        saved_files = save_parse_artifacts(
-            response=response,
-            input_filename=file.filename or temp_path.name,
-        )
-        save_elapsed = time.perf_counter() - stage_start
-        if not response.markdown:
-            raise HTTPException(status_code=500, detail="No markdown output produced.")
-        logger.info(
-            pipeline_message(
-                "COMPLETED",
-                "pages=%s blocks=%s tables=%s markdown_chars=%s upload=%.3fs parse=%.3fs save=%.3fs total=%.3fs saved_markdown=%s",
-                request_id=response.request_id,
-            ),
-            len(response.pages),
-            len(response.blocks),
-            len(response.tables),
-            len(response.markdown or ""),
-            upload_elapsed,
-            parse_elapsed,
-            save_elapsed,
-            time.perf_counter() - total_start,
-            ",".join(saved_files) or "none",
-        )
-        return PlainTextResponse(response.markdown, media_type="text/markdown")
-    except HTTPException:
-        raise
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.error(
-            pipeline_message("FAILED", "unexpected OCR request error", request_id=request_id),
-            exc_info=True,
-        )
-        raise HTTPException(status_code=500, detail=f"Unexpected parsing error: {exc}") from exc
+        logger.error(pipeline_message("FAILED online-ocr extraction request error", request_id=request_id), exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected online OCR extraction error: {exc}") from exc
     finally:
         if temp_path.exists():
             temp_path.unlink(missing_ok=True)
