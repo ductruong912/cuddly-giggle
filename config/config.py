@@ -95,11 +95,9 @@ class Settings:
         "FAST_OCR_INFERENCE_ENGINE", "onnxruntime"
     ).strip() or "onnxruntime"
     fast_ocr_enable_mkldnn: bool = _get_bool("FAST_OCR_ENABLE_MKLDNN", False)
-    fast_ocr_provider: str = os.getenv("FAST_OCR_PROVIDER", "local").strip().lower() or "local"
     fast_ocr_datalab_mode: str = (
         os.getenv("FAST_OCR_DATALAB_MODE", "balanced").strip().lower() or "balanced"
     )
-    fast_ocr_datalab_fallback: bool = _get_bool("FAST_OCR_DATALAB_FALLBACK", True)
     fast_ocr_datalab_timeout_seconds: float = _get_float("FAST_OCR_DATALAB_TIMEOUT_SECONDS", 120.0)
     datalab_api_key: str = os.getenv("DATALAB_API_KEY", "").strip()
     warmup_models_on_startup: bool     = _get_bool("WARMUP_MODELS_ON_STARTUP", False)
@@ -154,10 +152,6 @@ class Settings:
     paddlex_disable_model_source_check: bool = _get_bool("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", True)
 
     def __post_init__(self) -> None:
-        if self.fast_ocr_provider not in {"local", "datalab"}:
-            raise ValueError(
-                "FAST_OCR_PROVIDER must be one of: local, datalab"
-            )
         if self.fast_ocr_datalab_mode not in {"fast", "balanced", "accurate"}:
             raise ValueError(
                 "FAST_OCR_DATALAB_MODE must be one of: fast, balanced, accurate"
