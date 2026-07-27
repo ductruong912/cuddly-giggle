@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import logging
+import subprocess
 
 from config.config import Settings, settings
 from core.engines.base import ParseEngine
 from core.engines.fast_paddle import PaddleOCRFastEngine
 from core.engines.paddle import PaddleOCRVLEngine
 
+logger = logging.getLogger(__name__)
 
 class LocalOCRSelector:
     """Prefer the VLM on CUDA-capable machines and PaddleOCR v6 on CPU."""
@@ -32,7 +35,7 @@ class LocalOCRSelector:
 
 
 def has_usable_gpu() -> bool:
-    """Return true only when a supported local CUDA runtime is available."""
+    """Return true when a CUDA runtime or NVIDIA GPU is available locally."""
     try:
         import torch  # type: ignore
 
@@ -43,6 +46,28 @@ def has_usable_gpu() -> bool:
     try:
         import paddle  # type: ignore
 
-        return bool(paddle.device.is_compiled_with_cuda())
+        if paddle.device.is_compiled_with_cuda():
+            return True
     except Exception:
+        pass
+
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=2,
+        )
+        return result.returncode == 0 and bool(result.stdout.strip())
+    except (FileNotFoundError, subprocess.SubprocessError):
         return False
+
+
+def log_gpu_availability(*, gpu_available: Callable[[], bool] = has_usable_gpu) -> bool:
+    """Log the hardware decision made for local OCR at application startup."""
+    available = gpu_available()
+    engine = "PaddleOCR-VL" if available else "PaddleOCR v6"
+    hardware = "GPU detected" if available else "CPU only"
+    logger.info("local OCR hardware: %s; engine=%s", hardware, engine)
+    return available
