@@ -45,6 +45,7 @@ data_test/
 .paddleocr/
 llama/
 models/
+test/
 tests/
 docs/
 .superpowers/

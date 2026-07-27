@@ -45,9 +45,13 @@ def _get_int(name: str, default: int) -> int:
 
 def _get_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
-    if raw is None:
+    if raw is None or not raw.strip():
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _get_str(name: str, default: str) -> str:
+    return os.getenv(name, default).strip() or default
 
 
 # ---------------------------------------------------------------------------
@@ -59,17 +63,17 @@ class Settings:
 
     # --- OpenAI structured extraction ---
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "").strip()
-    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-5-mini").strip()
+    openai_model: str = _get_str("OPENAI_MODEL", "gpt-5-mini")
     openai_timeout_seconds: float = _get_float("OPENAI_TIMEOUT_SECONDS", 60.0)
     openai_max_retries: int = _get_int("OPENAI_MAX_RETRIES", 2)
     llm_max_input_chars: int = _get_int("LLM_MAX_INPUT_CHARS", 120_000)
-    llm_reasoning_effort: str = os.getenv("LLM_REASONING_EFFORT", "low").strip().lower()
+    llm_reasoning_effort: str = _get_str("LLM_REASONING_EFFORT", "low").lower()
 
     # --- OCR engines ---
-    primary_engine: str                = os.getenv("OCR_PRIMARY_ENGINE", "paddleocr_vl")
+    primary_engine: str                = _get_str("OCR_PRIMARY_ENGINE", "paddleocr_vl")
     ocr_device: str                    = os.getenv("OCR_DEVICE", "").strip()
     ocr_inference_engine: str          = os.getenv("OCR_INFERENCE_ENGINE", "").strip()
-    paddleocr_vl_pipeline_version: str = os.getenv("PADDLEOCR_VL_PIPELINE_VERSION", "v1.6").strip()
+    paddleocr_vl_pipeline_version: str = _get_str("PADDLEOCR_VL_PIPELINE_VERSION", "v1.6")
     paddleocr_vl_rec_backend: str      = os.getenv("PADDLEOCR_VL_REC_BACKEND", "").strip()
     paddleocr_vl_rec_server_url: str   = os.getenv("PADDLEOCR_VL_REC_SERVER_URL", "").strip()
     paddleocr_vl_rec_max_concurrency: int = _get_int("PADDLEOCR_VL_REC_MAX_CONCURRENCY", 0)
@@ -82,44 +86,40 @@ class Settings:
         for item in os.getenv("PADDLEOCR_VL_MARKDOWN_IGNORE_LABELS", "").split(",")
         if item.strip()
     )
-    fast_ocr_device: str = os.getenv("FAST_OCR_DEVICE", "cpu").strip() or "cpu"
-    fast_ocr_detection_model_name: str = os.getenv(
+    fast_ocr_device: str = _get_str("FAST_OCR_DEVICE", "cpu")
+    fast_ocr_detection_model_name: str = _get_str(
         "FAST_OCR_DETECTION_MODEL_NAME", "PP-OCRv6_medium_det"
-    ).strip()
-    fast_ocr_recognition_model_name: str = os.getenv(
+    )
+    fast_ocr_recognition_model_name: str = _get_str(
         "FAST_OCR_RECOGNITION_MODEL_NAME", "PP-OCRv6_small_rec"
-    ).strip()
+    )
     fast_ocr_recognition_batch_size: int = _get_int("FAST_OCR_RECOGNITION_BATCH_SIZE", 8)
     fast_ocr_cpu_threads: int = _get_int("FAST_OCR_CPU_THREADS", 4)
-    fast_ocr_inference_engine: str = os.getenv(
-        "FAST_OCR_INFERENCE_ENGINE", "onnxruntime"
-    ).strip() or "onnxruntime"
+    fast_ocr_inference_engine: str = _get_str("FAST_OCR_INFERENCE_ENGINE", "onnxruntime")
     fast_ocr_enable_mkldnn: bool = _get_bool("FAST_OCR_ENABLE_MKLDNN", False)
-    fast_ocr_datalab_mode: str = (
-        os.getenv("FAST_OCR_DATALAB_MODE", "balanced").strip().lower() or "balanced"
-    )
+    fast_ocr_datalab_mode: str = _get_str("FAST_OCR_DATALAB_MODE", "balanced").lower()
     fast_ocr_datalab_timeout_seconds: float = _get_float("FAST_OCR_DATALAB_TIMEOUT_SECONDS", 120.0)
     datalab_api_key: str = os.getenv("DATALAB_API_KEY", "").strip()
     warmup_models_on_startup: bool     = _get_bool("WARMUP_MODELS_ON_STARTUP", False)
 
     # --- llama.cpp / GGUF bootstrap ---
     auto_download_llama_cpp: bool = _get_bool("AUTO_DOWNLOAD_LLAMA_CPP", False)
-    llama_cpp_dir: str = os.getenv("LLAMA_CPP_DIR", "llama").strip()
-    llama_cpp_models_dir: str = os.getenv("LLAMA_CPP_MODELS_DIR", "models").strip()
-    llama_cpp_model_file: str = os.getenv("LLAMA_CPP_MODEL_FILE", "PaddleOCR-VL-1.6-GGUF.gguf").strip()
-    llama_cpp_mmproj_file: str = os.getenv("LLAMA_CPP_MMPROJ_FILE", "PaddleOCR-VL-1.6-GGUF-mmproj.gguf").strip()
+    llama_cpp_dir: str = _get_str("LLAMA_CPP_DIR", "llama")
+    llama_cpp_models_dir: str = _get_str("LLAMA_CPP_MODELS_DIR", "models")
+    llama_cpp_model_file: str = _get_str("LLAMA_CPP_MODEL_FILE", "PaddleOCR-VL-1.6-GGUF.gguf")
+    llama_cpp_mmproj_file: str = _get_str("LLAMA_CPP_MMPROJ_FILE", "PaddleOCR-VL-1.6-GGUF-mmproj.gguf")
     llama_cpp_release_url: str = os.getenv("LLAMA_CPP_RELEASE_URL", "").strip()
-    llama_cpp_release_flavor: str = os.getenv("LLAMA_CPP_RELEASE_FLAVOR", "win-cuda-12.4-x64").strip()
+    llama_cpp_release_flavor: str = _get_str("LLAMA_CPP_RELEASE_FLAVOR", "win-cuda-12.4-x64")
 
     # --- llama.cpp server autostart ---
     llama_server_autostart: bool = _get_bool("LLAMA_SERVER_AUTOSTART", True)
-    llama_server_host: str = os.getenv("LLAMA_SERVER_HOST", "127.0.0.1").strip()
+    llama_server_host: str = _get_str("LLAMA_SERVER_HOST", "127.0.0.1")
     llama_server_port: int = _get_int("LLAMA_SERVER_PORT", 8080)
     llama_server_ctx_size: int = _get_int("LLAMA_SERVER_CTX_SIZE", 4096)
     llama_server_parallel: int = _get_int("LLAMA_SERVER_PARALLEL", 1)
     llama_server_n_gpu_layers: int = _get_int("LLAMA_SERVER_N_GPU_LAYERS", 40)
     llama_server_mmproj_offload: bool = _get_bool("LLAMA_SERVER_MMPROJ_OFFLOAD", True)
-    llama_server_flash_attn: str = os.getenv("LLAMA_SERVER_FLASH_ATTN", "on").strip()
+    llama_server_flash_attn: str = _get_str("LLAMA_SERVER_FLASH_ATTN", "on")
     llama_server_threads: int = _get_int("LLAMA_SERVER_THREADS", 4)
     llama_server_threads_batch: int = _get_int("LLAMA_SERVER_THREADS_BATCH", 4)
     llama_server_temp: float = _get_float("LLAMA_SERVER_TEMP", 0.0)
@@ -142,9 +142,13 @@ class Settings:
     # --- Output filtering ---
     table_only_output: bool              = _get_bool("TABLE_ONLY_OUTPUT", False)
 
+    # --- Rate limiting ---
+    rate_limit_default: str = _get_str("RATE_LIMIT_DEFAULT", "30/minute")
+    rate_limit_extract: str = _get_str("RATE_LIMIT_EXTRACT", "10/minute")
+
     # --- Paths & misc ---
-    temp_dir: str                        = os.getenv("DOC_TEMP_DIR", ".tmp_doc_parse")
-    parse_output_dir: str                = os.getenv("PARSE_OUTPUT_DIR", "outputs")
+    temp_dir: str                        = _get_str("DOC_TEMP_DIR", ".tmp_doc_parse")
+    parse_output_dir: str                = _get_str("PARSE_OUTPUT_DIR", "outputs")
     quiet_third_party_logs: bool         = _get_bool("QUIET_THIRD_PARTY_LOGS", True)
 
     # --- PaddleX / model cache ---

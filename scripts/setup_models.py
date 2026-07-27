@@ -12,7 +12,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from config.config import settings  # noqa: E402
-from core.engines.fast_paddle import PaddleOCRFastEngine  # noqa: E402
+from core.engines.paddle_fast import PaddleOCRFastEngine  # noqa: E402
 from core.engines.registry import create_engine  # noqa: E402
 from services.model_assets import write_model_profile  # noqa: E402
 

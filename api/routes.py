@@ -1,6 +1,4 @@
 """HTTP routes and the orchestrator dependency."""
-from __future__ import annotations
-
 from functools import lru_cache
 import logging
 from pathlib import Path
@@ -14,6 +12,7 @@ from fastapi.responses import PlainTextResponse
 # pyrefly: ignore [missing-import]
 from starlette.concurrency import run_in_threadpool
 
+from api.rate_limit import limiter
 from config.config import settings
 from config.pipeline_logging import pipeline_message, request_logging_context
 from core.domain.schemas import (
@@ -99,6 +98,7 @@ FAST_OCR_INPUT_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".t
 
 
 @doc_router.post("/local", response_model=LLMExtractionResponse)
+@limiter.limit(settings.rate_limit_extract)
 async def extract_local_document(
     request: Request,
     file: UploadFile | None = File(None),
@@ -309,6 +309,7 @@ async def extract_local_document(
 
 
 @doc_router.post("/online", response_model=LLMExtractionResponse)
+@limiter.limit(settings.rate_limit_extract)
 async def extract_online_document(
     request: Request,
     file: UploadFile | None = File(None),
@@ -416,7 +417,9 @@ async def extract_online_document(
 
 
 @ocr_router.post("/ocr", response_class=PlainTextResponse)
+@limiter.limit(settings.rate_limit_extract)
 def ocr_document(
+    request: Request,
     file: UploadFile = File(...),
     orchestrator: ParseOrchestrator = Depends(get_orchestrator),
 ) -> PlainTextResponse:

@@ -7,7 +7,7 @@ import subprocess
 
 from config.config import Settings, settings
 from core.engines.base import ParseEngine
-from core.engines.fast_paddle import PaddleOCRFastEngine
+from core.engines.paddle_fast import PaddleOCRFastEngine
 from core.engines.paddle import PaddleOCRVLEngine
 
 logger = logging.getLogger(__name__)
