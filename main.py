@@ -9,7 +9,7 @@ warnings.filterwarnings("ignore", message="No ccache found")
 # pyrefly: ignore [missing-import]
 import uvicorn
 
-from api.routes import get_fast_orchestrator, get_orchestrator
+from api.routes import get_orchestrator
 from api.application import app
 from config.config import Settings, settings
 from services.llama import (
@@ -98,27 +98,6 @@ def warmup_models_on_startup() -> None:
     warmup()
 
 
-def warmup_fast_ocr_on_startup(
-    *,
-    app_settings: Settings = settings,
-    orchestrator_factory=get_fast_orchestrator,
-) -> None:
-    if not app_settings.warmup_models_on_startup:
-        return
-    orchestrator = orchestrator_factory()
-    warmup_orchestrator = getattr(orchestrator, "warmup", None)
-    if callable(warmup_orchestrator):
-        warmup_orchestrator()
-        return
-    engine = orchestrator.engine
-    warmup = getattr(engine, "warmup", None)
-    if not callable(warmup):
-        raise RuntimeError(
-            f"Fast OCR engine {engine.__class__.__name__} does not support warmup."
-        )
-    warmup()
-
-
 def silence_known_warnings() -> None:
     warnings.filterwarnings("ignore", message=r"'llama-cpp-server' does not support")
 
@@ -127,7 +106,6 @@ def main() -> None:
     silence_known_warnings()
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "8000"))
-    warmup_fast_ocr_on_startup()
     runtime_manager = VLRuntimeManager(
         configure_runtime=configure_gguf_runtime_on_startup,
         warmup=warmup_models_on_startup,

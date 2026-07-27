@@ -97,6 +97,7 @@ Open [Swagger UI](http://127.0.0.1:8000/docs). The health endpoint is available 
 | --- | --- |
 | `POST /v1/extract/local` | Local OCR plus structured extraction. Automatically uses PaddleOCR-VL on GPU and PaddleOCR v6 on CPU. |
 | `POST /v1/extract/online` | DataLab SuryaOCR plus structured extraction for PDFs and images. |
+| `POST /v1/doc/ocr` | Local OCR only; returns Markdown for debugging and does not call the LLM. |
 | `GET /healthz` | Liveness check. |
 
 Use `multipart/form-data` with a `file` field. The local route supports PDF, DOC/DOCX, XLS/XLSX/XLSM, PNG, JPG, BMP, WEBP, and TIFF; the online route supports PDFs and images.

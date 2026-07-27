@@ -10,6 +10,7 @@ import uuid
 
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request
+from fastapi.responses import PlainTextResponse
 # pyrefly: ignore [missing-import]
 from starlette.concurrency import run_in_threadpool
 
@@ -72,6 +73,7 @@ def healthz() -> dict[str, str]:
 # =====================================================================================
 
 doc_router = APIRouter(prefix="/v1/extract", tags=["documents"])
+ocr_router = APIRouter(prefix="/v1/doc", tags=["documents"])
 
 SUPPORTED_INPUT_SUFFIXES = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".xlsm", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 FAST_OCR_INPUT_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
@@ -388,6 +390,40 @@ async def extract_online_document(
     except Exception as exc:
         logger.error(pipeline_message("FAILED online-ocr extraction request error", request_id=request_id), exc_info=True)
         raise HTTPException(status_code=500, detail=f"Unexpected online OCR extraction error: {exc}") from exc
+    finally:
+        if temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+
+
+@ocr_router.post("/ocr", response_class=PlainTextResponse)
+def ocr_document(
+    file: UploadFile = File(...),
+    orchestrator: ParseOrchestrator = Depends(get_orchestrator),
+) -> PlainTextResponse:
+    """Run local OCR only and return Markdown for debugging."""
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in SUPPORTED_INPUT_SUFFIXES:
+        raise HTTPException(status_code=400, detail="Unsupported input type. Use PDF, Word, Excel, or image files.")
+
+    temp_root = Path(settings.temp_dir)
+    temp_root.mkdir(parents=True, exist_ok=True)
+    temp_path = temp_root / f"{uuid.uuid4().hex}{suffix}"
+    request_id = f"req_{uuid.uuid4().hex[:12]}"
+    try:
+        with temp_path.open("wb") as staged_file:
+            shutil.copyfileobj(file.file, staged_file)
+        response = orchestrator.parse(str(temp_path), ParseOptions(), request_id=request_id)
+        save_parse_artifacts(response, file.filename or temp_path.name)
+        if not response.markdown:
+            raise HTTPException(status_code=500, detail="No markdown output produced.")
+        return PlainTextResponse(response.markdown, media_type="text/markdown")
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(pipeline_message("FAILED", "unexpected OCR request error", request_id=request_id), exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected parsing error: {exc}") from exc
     finally:
         if temp_path.exists():
             temp_path.unlink(missing_ok=True)
