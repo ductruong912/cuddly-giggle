@@ -5,17 +5,17 @@ FastAPI service for extracting Vietnamese documents into Markdown or structured 
 ## Highlights
 
 - Uses native text extraction for digital PDF, DOCX, XLSX, and XLSM files.
-- Uses PaddleOCR-VL for scans and complex layouts.
-- Provides a faster CPU OCR route for PDF and image files.
+- `POST /v1/extract/local` chooses PaddleOCR-VL + GGUF/llama.cpp on NVIDIA GPU, or PaddleOCR v6 on CPU.
+- `POST /v1/extract/online` sends PDFs and images to DataLab SuryaOCR.
 - Saves generated Markdown and extraction artifacts in `outputs/`.
 
 ## Requirements
 
 - Python 3.9–3.11
-- NVIDIA GPU and CUDA for PaddleOCR-VL OCR
+- NVIDIA GPU is optional; it enables the local PaddleOCR-VL + GGUF/llama.cpp path.
 - Optional: LibreOffice for legacy `.doc` and `.xls` files
 
-Native text extraction and the fast CPU OCR route can run without a GPU.
+The local CPU path and the online DataLab path work without an NVIDIA GPU.
 
 ## Installation
 
@@ -55,31 +55,64 @@ Copy-Item .env.example .env
 cp .env.example .env
 ```
 
-Edit `.env` to select the OCR device and, if needed, add `OPENAI_API_KEY` for structured extraction.
+Configure `.env` according to the API flow you will use. `OPENAI_API_KEY` is required only when calling an extraction endpoint that returns structured data.
 
-Choose one OCR setup that matches the machine before starting the service.
-`requirements.txt` contains packages shared by every profile; install the
-PaddlePaddle runtime separately so its CPU or CUDA build matches the host.
+### Local OCR on CPU
+
+Use this profile when there is no NVIDIA GPU. It runs PaddleOCR v6 and does not need llama.cpp or PaddlePaddle GPU.
 
 ```bash
-# CPU-only: fast ONNX OCR models (no PaddlePaddle installation required)
 python scripts/setup_models.py --fast-onnx
-
-# Native NVIDIA GPU: full PaddleOCR stack (recommended when VRAM is sufficient)
-python -m pip install "paddlepaddle-gpu==3.3.0" -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
-python scripts/setup_models.py --paddleocr-vl
 ```
 
-For a low-VRAM NVIDIA GPU, use the GGUF + llama.cpp backend instead. It still
-needs the PaddlePaddle CUDA wheel for detection and layout processing:
+Keep these values in `.env`:
 
-```bash
+```dotenv
+FAST_OCR_DEVICE=cpu
+PADDLEOCR_VL_USE_GGUF=false
+```
+
+### Local OCR on NVIDIA GPU: PaddleOCR-VL GGUF via llama.cpp
+
+Use this profile for `POST /v1/extract/local` on a GPU machine. The layout/Paddle side needs a CUDA PaddlePaddle build; GGUF inference runs through the local llama.cpp server.
+
+Do not keep both PaddlePaddle CPU and GPU packages in the same virtual environment:
+
+```powershell
+python -m pip uninstall -y paddlepaddle paddlepaddle-gpu
 python -m pip install "paddlepaddle-gpu==3.3.0" -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
+python scripts/setup_models.py --paddleocr-vl
 python scripts/setup_runtime.py --llama
 ```
 
-The CUDA 12.6 index must match the installed CUDA-compatible PaddlePaddle wheel;
-use the appropriate Paddle package index for another CUDA version.
+Set these values in `.env`:
+
+```dotenv
+OCR_DEVICE=gpu:0
+PADDLEOCR_VL_USE_GGUF=true
+PADDLEOCR_VL_REC_BACKEND=llama-cpp-server
+PADDLEOCR_VL_REC_SERVER_URL=http://127.0.0.1:8080/v1
+LLAMA_SERVER_AUTOSTART=true
+```
+
+Confirm that Paddle can use the GPU before starting the API:
+
+```powershell
+python -c "import paddle; print(paddle.device.is_compiled_with_cuda()); print(paddle.device.get_device())"
+```
+
+Expected output is `True` and `gpu:0`. If it says GPU is unavailable, PaddlePaddle was installed without CUDA support or with an incompatible build.
+
+### Online OCR: DataLab SuryaOCR
+
+`POST /v1/extract/online` does not require local OCR models, llama.cpp, or a GPU. Configure only the DataLab credential:
+
+```dotenv
+DATALAB_API_KEY=your_datalab_api_key_here
+FAST_OCR_DATALAB_MODE=balanced
+```
+
+The CUDA package index above is for PaddlePaddle CUDA 12.6; choose the matching index for another supported CUDA version.
 
 On Windows, `python scripts/setup_runtime.py --check` checks runtime readiness.
 
@@ -91,13 +124,13 @@ python main.py
 
 Open [Swagger UI](http://127.0.0.1:8000/docs). The health endpoint is available at `GET /healthz`.
 
-## Main API routes
+## API routes
 
 | Route | Description |
 | --- | --- |
 | `POST /v1/extract/local` | Local OCR plus structured extraction. Automatically uses PaddleOCR-VL on GPU and PaddleOCR v6 on CPU. |
 | `POST /v1/extract/online` | DataLab SuryaOCR plus structured extraction for PDFs and images. |
-| `POST /v1/doc/ocr` | Local OCR only; returns Markdown for debugging and does not call the LLM. |
+| `POST /v1/doc/ocr` | Auxiliary local OCR-only debugging endpoint; returns Markdown and does not call the LLM. |
 | `GET /healthz` | Liveness check. |
 
 Use `multipart/form-data` with a `file` field. The local route supports PDF, DOC/DOCX, XLS/XLSX/XLSM, PNG, JPG, BMP, WEBP, and TIFF; the online route supports PDFs and images.
