@@ -31,7 +31,9 @@ from services.llm_extraction import (
 )
 from services.orchestrator import ParseOrchestrator
 from services.online_orchestrator import OnlineParseOrchestrator
+from services.local_ocr_selector import has_usable_gpu
 from services.output import save_parse_artifacts, save_extraction_artifacts
+from services.vl_runtime import VLRuntimeManager
 
 
 logger = logging.getLogger(__name__)
@@ -54,6 +56,23 @@ def get_online_orchestrator() -> OnlineParseOrchestrator:
 @lru_cache(maxsize=1)
 def get_llm_extractor() -> LLMExtractionService:
     return LLMExtractionService()
+
+
+def get_vl_runtime_manager(request: Request) -> VLRuntimeManager:
+    manager = getattr(request.app.state, "vl_runtime_manager", None)
+    if manager is None:
+        raise RuntimeError("VL runtime manager is not configured")
+    return manager
+
+
+def ensure_gpu_gguf_runtime(request: Request) -> None:
+    """Start llama.cpp only when the local GPU route uses the GGUF VLM."""
+    if not (has_usable_gpu() and settings.paddleocr_vl_use_gguf):
+        return
+    try:
+        get_vl_runtime_manager(request).ensure_ready()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"VL GGUF runtime is unavailable: {exc}") from exc
 
 
 # =====================================================================================
@@ -85,6 +104,7 @@ async def extract_local_document(
     file: UploadFile | None = File(None),
     orchestrator: ParseOrchestrator = Depends(get_orchestrator),
     extractor: LLMExtractionService = Depends(get_llm_extractor),
+    _: None = Depends(ensure_gpu_gguf_runtime),
 ) -> LLMExtractionResponse:
     total_start = time.perf_counter()
     content_type = request.headers.get("content-type", "")
