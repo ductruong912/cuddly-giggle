@@ -15,7 +15,73 @@ FastAPI service for extracting Vietnamese documents into Markdown or structured 
 - NVIDIA GPU is optional; it enables the local PaddleOCR-VL + GGUF/llama.cpp path.
 - Optional: LibreOffice for legacy `.doc` and `.xls` files
 
-The local CPU path and the online DataLab path work without an NVIDIA GPU.
+## How It Works
+
+For each uploaded file the orchestrator picks the cheapest reliable path:
+
+```
+            ┌─────────────┐
+ upload ──▶ │ orchestrator│
+            └─────┬───────┘
+                  │  .docx/.doc  ──▶ Word text engine ─────┐
+                  │  .xlsx/.xls  ──▶ Excel text engine ─────┤
+                  │  .pdf (digital text) ──▶ PDF text engine┤──▶ normalizer ──▶ Markdown ──▶ outputs/
+                  │  otherwise / sparse text ──▶ PaddleOCR-VL│
+                  │       (on failure) ──────▶ PP-StructureV3┘
+```
+
+Native engines (PDF/Word/Excel) run on CPU. The OCR engines (PaddleOCR-VL,
+PP-StructureV3) require an NVIDIA GPU.
+
+---
+
+## Project Structure
+
+```text
+cuddly-giggle/
+├── main.py                       # Entrypoint: bootstraps runtime, starts the API
+├── requirements.txt              # Python dependencies (incl. PaddlePaddle GPU)
+├── .env.example                  # Sample configuration — copy to .env
+├── Dockerfile                    # App image (CUDA 12.6 + Python 3.11 + LibreOffice)
+├── docker-compose.yml            # Two-container stack: app + llama.cpp server
+├── app/
+│   ├── api/
+│   │   ├── application.py         # FastAPI app factory (ASGI entrypoint)
+│   │   └── routes.py             # Routes (/v1/doc/parse, /healthz) + orchestrator DI
+│   ├── core/
+│   │   └── config.py             # Settings + environment bootstrap
+│   ├── domain/
+│   │   └── schemas.py            # Pydantic models
+│   ├── services/
+│   │   ├── orchestrator.py       # Per-file-type engine selection + fallback
+│   │   ├── output.py             # Markdown table filter + artifact writing
+│   │   └── llama.py              # llama.cpp bootstrap + server control
+│   └── engines/
+│       ├── base.py               # Engine interface
+│       ├── registry.py           # Config-driven engine factory
+│       ├── native.py             # PDF / Word / Excel text-layer parsers
+│       ├── paddle.py             # PaddleOCR-VL + PP-StructureV3 adapters
+│       └── normalizer.py         # Normalizes engine output to the page schema
+├── scripts/                      # setup_llama_cpp, preflight_runtime, eval helpers
+├── tests/                        # pytest suite
+├── outputs/                      # Saved .md artifacts (git-ignored)
+└── data_test/                    # Local sample documents (git-ignored)
+```
+
+---
+
+## Prerequisites
+
+- **OS**: Windows 10/11 or Linux
+- **Python**: 3.9 – 3.11
+- **GPU**: NVIDIA GPU with CUDA 13.0 or 12.6 — **required** for the OCR engines
+- **Optional**: LibreOffice/soffice on `PATH` — only needed to parse legacy `.doc` / `.xls`
+
+> Native PDF/Word/Excel text extraction works without a GPU, but the OCR engines
+> (used for scans, images, and image-only PDFs) need CUDA. Running the OCR engines
+> on CPU is **not supported**.
+
+---
 
 ## Installation
 
@@ -112,7 +178,20 @@ DATALAB_API_KEY=your_datalab_api_key_here
 FAST_OCR_DATALAB_MODE=balanced
 ```
 
-The CUDA package index above is for PaddlePaddle CUDA 12.6; choose the matching index for another supported CUDA version.
+- API: http://localhost:8000 (Swagger at `/docs`)
+- llama (debug only): http://localhost:8080
+
+### Tuning / overrides
+
+Copy `.env.example` to `.env` only if you need to change a default:
+
+- `LLAMA_N_GPU_LAYERS` — VRAM offload for recognition (20 suits 6 GB; lower if llama OOMs).
+- For an **older driver (CUDA 11.8)**, switch the app image build to the cu118 wheel:
+
+  ```dotenv
+  CUDA_TAG=11.8.0-cudnn8-runtime-ubuntu22.04
+  PADDLE_INDEX=https://www.paddlepaddle.org.cn/packages/stable/cu118/
+  ```
 
 On Windows, `python scripts/setup_runtime.py --check` checks runtime readiness.
 
