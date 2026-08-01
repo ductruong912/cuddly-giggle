@@ -86,7 +86,30 @@ class LLMExtractionOCRMetadata(BaseModel):
     page_count: int
 
 
+class ValidationIssue(BaseModel):
+    """One deterministic check that the extracted record failed."""
+
+    field: str
+    message: str
+    severity: str
+
+
+class ExtractionValidation(BaseModel):
+    """Whether the extracted record reconciles, and what the retry loop did.
+
+    ``status`` is ``needs_review`` when the record still fails a blocking check
+    after the self-heal retries are exhausted. The data is still returned, so a
+    caller can decide whether to route it to a human.
+    """
+
+    status: str
+    attempts: int
+    healed: bool
+    issues: list[ValidationIssue] = Field(default_factory=list)
+
+
 class LLMExtractionResponse(BaseModel):
     request_id: str
     ocr: LLMExtractionOCRMetadata
     data: dict[str, Any]
+    validation: ExtractionValidation

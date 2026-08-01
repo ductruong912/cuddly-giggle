@@ -38,17 +38,33 @@ class LLMExtractionService:
         self.settings = app_settings
         self.client = client or self._create_client()
 
-    def extract(self, parse_response: ParseResponse) -> dict[str, Any]:
+    def extract(
+        self,
+        parse_response: ParseResponse,
+        *,
+        correction: str | None = None,
+    ) -> dict[str, Any]:
+        """Extract structured data from the parsed Markdown.
+
+        Args:
+            parse_response: the parse whose Markdown is sent to the model.
+            correction: validation feedback from a previous attempt, appended so
+                the model corrects that answer instead of starting over.
+        """
         markdown = (parse_response.markdown or "").strip()
         if not markdown:
             raise LLMExtractionError("OCR produced no usable text")
         if len(markdown) > self.settings.llm_max_input_chars:
             raise LLMExtractionInputTooLarge("OCR text exceeds configured input limit")
 
+        model_input = f"<document>\n{markdown}\n</document>"
+        if correction:
+            model_input = f"{model_input}\n\n<correction>\n{correction}\n</correction>"
+
         kwargs = {
             "model": self.settings.openai_model,
             "instructions": EXTRACTION_INSTRUCTIONS,
-            "input": f"<document>\n{markdown}\n</document>",
+            "input": model_input,
             "text": {
                 "format": {
                     "type": "json_schema",

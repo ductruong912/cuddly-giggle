@@ -268,6 +268,49 @@ already-parsed Markdown as a `text/markdown`, `text/plain`, or
 `application/json` (`{"markdown": "..."}`) body. The online route supports PDFs
 and images only.
 
+### Extraction validation
+
+Extraction is not trusted on the model's word. Every extracted record is checked
+deterministically before it is returned:
+
+- **Arithmetic** — `quantity × unit_price` must reproduce the line total printed
+  on the document, within `PO_LINE_TOTAL_TOLERANCE_RATIO`. The common failure it
+  catches is an OCR column shift, which is wrong by orders of magnitude.
+- **Structure** — a PO number, a parseable `DD-MM-YYYY` date, at least one line
+  item, positive quantities, non-negative prices.
+- **Plausibility** — date within a sane window, repeated item codes, zero-priced
+  lines. These are reported as warnings and do not fail the record.
+
+When a blocking check fails, the exact field and figures are fed back to the
+model and extraction is retried up to `LLM_SELF_HEAL_MAX_RETRIES` times. Retries
+happen inside the same LLM slot, so they cost latency, not concurrency.
+
+Every response carries the result:
+
+```json
+{
+  "request_id": "req_...",
+  "ocr": { "decision": "...", "page_count": 2 },
+  "data": { "po_number": "215497", "po_date": "05-08-2026", "items": [...] },
+  "validation": {
+    "status": "valid",
+    "attempts": 2,
+    "healed": true,
+    "issues": []
+  }
+}
+```
+
+`status` is `needs_review` when the record still fails after the retries are
+exhausted. The data is returned regardless, so the caller decides whether to
+route it to a human — there is no review queue yet.
+
+The extraction JSON Schema is generated from the `PurchaseOrder` model rather
+than written by hand, so what the model is constrained to and what is validated
+afterwards cannot drift apart. It is checked against OpenAI's strict-mode rules
+at import, making a malformed schema a startup error instead of a per-request
+400.
+
 ### Error responses
 
 | Status | Meaning |

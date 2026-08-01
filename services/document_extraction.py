@@ -15,14 +15,17 @@ import uuid
 from config.config import Settings, settings
 from config.pipeline_logging import pipeline_message, request_logging_context
 from core.domain.schemas import (
+    ExtractionValidation,
     LLMExtractionOCRMetadata,
     LLMExtractionResponse,
     ParseDecision,
     ParseResponse,
+    ValidationIssue,
 )
 from services.concurrency import PipelineLimiters
 from services.llm_extraction import LLMExtractionService
 from services.output import save_extraction_artifacts, save_parse_artifacts
+from services.validation import ExtractionOutcome, SelfHealingExtractor
 
 
 logger = logging.getLogger(__name__)
@@ -55,6 +58,7 @@ class DocumentExtractionService:
         self.limiters = limiters
         self.route_label = route_label
         self.settings = app_settings
+        self.validator = SelfHealingExtractor(extractor, app_settings=app_settings)
 
     async def extract_document(self, source_path: Path, *, filename: str) -> LLMExtractionResponse:
         """Parse a staged document, extract structured data, and save both artifacts."""
@@ -70,12 +74,12 @@ class DocumentExtractionService:
             ocr_elapsed = time.perf_counter() - ocr_start
 
             llm_start = time.perf_counter()
-            data = await self._extract(parse_response)
+            outcome = await self._extract(parse_response)
             llm_elapsed = time.perf_counter() - llm_start
 
             save_start = time.perf_counter()
             saved = await self.limiters.io.run(
-                self._save_artifacts, parse_response, data, filename
+                self._save_artifacts, parse_response, outcome.data, filename
             )
             save_elapsed = time.perf_counter() - save_start
         except RuntimeError:
@@ -92,7 +96,7 @@ class DocumentExtractionService:
         logger.info(
             pipeline_message(
                 "COMPLETED route=%s pages=%s markdown_chars=%s ocr=%.3fs llm=%.3fs "
-                "save=%.3fs total=%.3fs%s saved=%s",
+                "save=%.3fs total=%.3fs validation=%s attempts=%s%s saved=%s",
                 request_id=parse_response.request_id,
             ),
             self.route_label,
@@ -102,10 +106,12 @@ class DocumentExtractionService:
             llm_elapsed,
             save_elapsed,
             time.perf_counter() - total_start,
+            "valid" if outcome.is_valid else "needs_review",
+            outcome.attempts,
             self._engine_summary(parse_response),
             ",".join(saved) or "none",
         )
-        return self._build_response(parse_response, data)
+        return self._build_response(parse_response, outcome)
 
     @staticmethod
     def _engine_summary(parse_response: ParseResponse) -> str:
@@ -139,17 +145,18 @@ class DocumentExtractionService:
             reading_order=[],
             markdown=markdown,
         )
-        data = await self._extract(parse_response)
+        outcome = await self._extract(parse_response)
         if artifact_name:
-            await self.limiters.io.run(save_extraction_artifacts, data, artifact_name)
-        return self._build_response(parse_response, data)
+            await self.limiters.io.run(save_extraction_artifacts, outcome.data, artifact_name)
+        return self._build_response(parse_response, outcome)
 
-    async def _extract(self, parse_response: ParseResponse) -> dict[str, object]:
+    async def _extract(self, parse_response: ParseResponse) -> ExtractionOutcome:
+        """Extract and validate inside one LLM slot, so retries cost latency only."""
         return await self.limiters.llm.run(self._extract_blocking, parse_response)
 
-    def _extract_blocking(self, parse_response: ParseResponse) -> dict[str, object]:
+    def _extract_blocking(self, parse_response: ParseResponse) -> ExtractionOutcome:
         with request_logging_context(parse_response.request_id):
-            return self.extractor.extract(parse_response)
+            return self.validator.extract(parse_response)
 
     @staticmethod
     def _save_artifacts(
@@ -164,7 +171,7 @@ class DocumentExtractionService:
     @staticmethod
     def _build_response(
         parse_response: ParseResponse,
-        data: dict[str, object],
+        outcome: ExtractionOutcome,
     ) -> LLMExtractionResponse:
         return LLMExtractionResponse(
             request_id=parse_response.request_id,
@@ -172,5 +179,11 @@ class DocumentExtractionService:
                 decision=parse_response.decision.reason,
                 page_count=len(parse_response.pages),
             ),
-            data=data,
+            data=outcome.data,
+            validation=ExtractionValidation(
+                status="valid" if outcome.is_valid else "needs_review",
+                attempts=outcome.attempts,
+                healed=outcome.healed,
+                issues=[ValidationIssue(**violation.as_dict()) for violation in outcome.violations],
+            ),
         )

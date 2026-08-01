@@ -71,6 +71,13 @@ class Settings:
     llm_max_input_chars: int = _get_int("LLM_MAX_INPUT_CHARS", 120_000)
     llm_reasoning_effort: str = _get_str("LLM_REASONING_EFFORT", "low").lower()
 
+    # --- Extraction validation & self-healing ---
+    # Extra extraction calls allowed when a record fails validation. Each retry
+    # runs inside the same LLM slot, so it costs latency, not concurrency.
+    llm_self_heal_max_retries: int = _get_int("LLM_SELF_HEAL_MAX_RETRIES", 2)
+    # Relative tolerance for quantity x unit_price vs. the stated line total.
+    po_line_total_tolerance_ratio: float = _get_float("PO_LINE_TOTAL_TOLERANCE_RATIO", 0.01)
+
     # --- OCR engines ---
     primary_engine: str                = _get_str("OCR_PRIMARY_ENGINE", "paddleocr_vl")
     ocr_device: str                    = os.getenv("OCR_DEVICE", "").strip()
@@ -187,6 +194,10 @@ class Settings:
             raise ValueError("MAX_UPLOAD_BYTES must be at least 1")
         if self.pdf_max_pages < 1:
             raise ValueError("PDF_MAX_PAGES must be at least 1")
+        if self.llm_self_heal_max_retries < 0:
+            raise ValueError("LLM_SELF_HEAL_MAX_RETRIES cannot be negative")
+        if self.po_line_total_tolerance_ratio < 0:
+            raise ValueError("PO_LINE_TOTAL_TOLERANCE_RATIO cannot be negative")
 
     @property
     def resolved_thread_pool_size(self) -> int:
