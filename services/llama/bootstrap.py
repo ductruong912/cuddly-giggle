@@ -1,4 +1,4 @@
-"""llama.cpp runtime: bootstrap (download binaries + models) and server control."""
+"""Download the llama.cpp binaries and GGUF weights the VL tier needs."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -6,22 +6,14 @@ import logging
 import os
 from pathlib import Path
 import shutil
-import socket
-import subprocess
 import tempfile
-import time
-from typing import Callable, Protocol
 import zipfile
 
 import httpx
 
 
-logger = logging.getLogger("app")
+logger = logging.getLogger(__name__)
 
-
-# =====================================================================================
-# Bootstrap: download llama.cpp binaries and model artifacts
-# =====================================================================================
 
 HF_GGUF_REPO = "https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6-GGUF/resolve/main"
 LLAMA_CPP_LATEST_RELEASE_API = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
@@ -64,11 +56,14 @@ class LlamaBootstrapResult:
 
 
 class HttpDownloader:
+    """Retrying downloader that writes through a temp file so partials never land."""
+
     def __init__(self, timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS, attempts: int = 3) -> None:
         self.timeout_seconds = timeout_seconds
         self.attempts = max(1, attempts)
 
     def download_file(self, url: str, destination: Path) -> None:
+        """Download ``url`` to ``destination``, retrying transient failures."""
         last_error: Exception | None = None
         for attempt in range(self.attempts):
             try:
@@ -104,6 +99,7 @@ class HttpDownloader:
             raise
 
     def download_and_extract_zip(self, url: str, destination_dir: Path) -> None:
+        """Download a zip and install its files into ``destination_dir`` atomically."""
         destination_dir.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=destination_dir.parent) as tmp_dir_name:
             tmp_dir = Path(tmp_dir_name)
@@ -116,6 +112,7 @@ class HttpDownloader:
             _install_extracted_files(extract_dir, destination_dir, tmp_dir)
 
     def get_json(self, url: str) -> dict[str, object]:
+        """GET ``url`` and return the decoded JSON object."""
         response = httpx.get(url, follow_redirects=True, timeout=self.timeout_seconds)
         response.raise_for_status()
         payload = response.json()
@@ -125,6 +122,7 @@ class HttpDownloader:
 
 
 def default_model_artifacts(models_dir: Path, min_bytes: int = DEFAULT_MODEL_BYTES) -> list[DownloadArtifact]:
+    """The GGUF weight and projector files the VL recognition tier loads."""
     filenames = [
         "PaddleOCR-VL-1.6-GGUF.gguf",
         "PaddleOCR-VL-1.6-GGUF-mmproj.gguf",
@@ -140,6 +138,7 @@ def default_model_artifacts(models_dir: Path, min_bytes: int = DEFAULT_MODEL_BYT
 
 
 def is_artifact_ready(path: Path, min_bytes: int = 1) -> bool:
+    """True when the file exists and is at least ``min_bytes`` long."""
     try:
         return path.is_file() and path.stat().st_size >= min_bytes
     except OSError:
@@ -147,6 +146,7 @@ def is_artifact_ready(path: Path, min_bytes: int = 1) -> bool:
 
 
 def is_llama_cpp_ready(llama_dir: Path) -> bool:
+    """True when every required llama.cpp binary is present in ``llama_dir``."""
     return all(is_artifact_ready(llama_dir / name) for name in REQUIRED_LLAMA_FILES)
 
 
@@ -155,6 +155,7 @@ def select_llama_cpp_release_urls(
     *,
     flavor: str = DEFAULT_LLAMA_CPP_FLAVOR,
 ) -> list[str]:
+    """Pick the binary (and CUDA runtime) asset URLs for ``flavor`` from a release."""
     assets = release_payload.get("assets")
     if not isinstance(assets, list):
         raise RuntimeError("GitHub release payload does not contain an assets list.")
@@ -192,6 +193,7 @@ def resolve_latest_llama_cpp_release_urls(
     flavor: str = DEFAULT_LLAMA_CPP_FLAVOR,
     downloader: HttpDownloader | None = None,
 ) -> list[str]:
+    """Look up the newest llama.cpp release and return its asset URLs for ``flavor``."""
     downloader = downloader or HttpDownloader()
     payload = downloader.get_json(LLAMA_CPP_LATEST_RELEASE_API)
     return select_llama_cpp_release_urls(payload, flavor=flavor)
@@ -202,6 +204,7 @@ def bootstrap_llama_cpp(
     config: LlamaBootstrapConfig | None = None,
     downloader: HttpDownloader | None = None,
 ) -> LlamaBootstrapResult:
+    """Ensure the llama.cpp binaries and GGUF models exist, downloading what is missing."""
     config = config or LlamaBootstrapConfig()
     downloader = downloader or HttpDownloader(timeout_seconds=config.timeout_seconds)
 
@@ -279,139 +282,3 @@ def _cuda_runtime_suffix(flavor: str) -> str:
     if "win-cuda-" not in flavor:
         return ""
     return f"cudart-llama-bin-{flavor}.zip"
-
-
-# =====================================================================================
-# Server: build command, health-check ports, start/stop the llama-server process
-# =====================================================================================
-
-class ProcessLike(Protocol):
-    def poll(self) -> int | None: ...
-    def terminate(self) -> None: ...
-    def wait(self, timeout: float | None = None) -> int: ...
-    def kill(self) -> None: ...
-
-
-@dataclass(frozen=True)
-class LlamaServerConfig:
-    executable_path: Path = field(default_factory=lambda: Path.cwd() / "llama" / "llama-server.exe")
-    model_path: Path = field(default_factory=lambda: Path.cwd() / "models" / "PaddleOCR-VL-1.6-GGUF.gguf")
-    mmproj_path: Path = field(default_factory=lambda: Path.cwd() / "models" / "PaddleOCR-VL-1.6-GGUF-mmproj.gguf")
-    host: str = "127.0.0.1"
-    port: int = 8080
-    ctx_size: int = 4096
-    parallel: int = 1
-    n_gpu_layers: int = 40
-    mmproj_offload: bool = True
-    flash_attn: str = "on"
-    threads: int = 4
-    threads_batch: int = 4
-    temp: float = 0.0
-    log_verbosity: int = 1
-    startup_timeout_seconds: float = 120.0
-
-
-def build_llama_server_command(config: LlamaServerConfig) -> list[str]:
-    command = [
-        str(config.executable_path),
-        "-m",
-        str(config.model_path),
-        "--mmproj",
-        str(config.mmproj_path),
-        "--host",
-        config.host,
-        "--port",
-        str(config.port),
-        "--ctx-size",
-        str(config.ctx_size),
-        "--parallel",
-        str(config.parallel),
-        "--n-gpu-layers",
-        str(config.n_gpu_layers),
-    ]
-    if config.mmproj_offload:
-        command.append("--mmproj-offload")
-    command.extend(
-        [
-            "--flash-attn",
-            config.flash_attn,
-            "--threads",
-            str(config.threads),
-            "--threads-batch",
-            str(config.threads_batch),
-            "--temp",
-            _format_float(config.temp),
-            "-lv",
-            str(config.log_verbosity),
-        ]
-    )
-    return command
-
-
-def is_tcp_port_open(host: str, port: int, timeout_seconds: float = 0.25) -> bool:
-    try:
-        with socket.create_connection((host, port), timeout=timeout_seconds):
-            return True
-    except OSError:
-        return False
-
-
-def wait_for_tcp_port(host: str, port: int, timeout_seconds: float) -> bool:
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        if is_tcp_port_open(host, port):
-            return True
-        time.sleep(0.25)
-    return False
-
-
-def start_llama_server_if_needed(
-    config: LlamaServerConfig,
-    *,
-    port_check: Callable[[str, int], bool] = is_tcp_port_open,
-    popen: Callable[..., ProcessLike] = subprocess.Popen,
-    wait_for_server: Callable[[str, int, float], bool] = wait_for_tcp_port,
-) -> ProcessLike | None:
-    if port_check(config.host, config.port):
-        logger.info("llama.cpp server already listening on %s:%s", config.host, config.port)
-        return None
-
-    _validate_paths(config)
-    command = build_llama_server_command(config)
-    logger.info("Starting llama.cpp server: %s", " ".join(command))
-    process = popen(command, cwd=str(config.executable_path.parent))
-    if wait_for_server(config.host, config.port, config.startup_timeout_seconds):
-        return process
-
-    stop_llama_server(process)
-    raise RuntimeError(
-        f"llama.cpp server did not become ready on {config.host}:{config.port} "
-        f"within {config.startup_timeout_seconds:g}s."
-    )
-
-
-def stop_llama_server(process: ProcessLike | None, timeout_seconds: float = 10.0) -> None:
-    if process is None or process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.wait(timeout=timeout_seconds)
-    except Exception:
-        process.kill()
-        process.wait(timeout=timeout_seconds)
-
-
-def _validate_paths(config: LlamaServerConfig) -> None:
-    missing = [
-        path
-        for path in [config.executable_path, config.model_path, config.mmproj_path]
-        if not path.is_file()
-    ]
-    if missing:
-        raise RuntimeError("Missing llama.cpp runtime file(s): " + ", ".join(str(path) for path in missing))
-
-
-def _format_float(value: float) -> str:
-    if value.is_integer():
-        return str(int(value))
-    return str(value)
