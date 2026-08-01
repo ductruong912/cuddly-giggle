@@ -11,7 +11,7 @@ FastAPI service for extracting Vietnamese documents into Markdown or structured 
 
 ## Requirements
 
-- Python 3.9–3.11
+- Python 3.10+ (3.11 is what the Docker image ships)
 - NVIDIA GPU is optional; it enables the local PaddleOCR-VL + GGUF/llama.cpp path.
 - Optional: LibreOffice for legacy `.doc` and `.xls` files
 
@@ -23,15 +23,38 @@ For each uploaded file the orchestrator picks the cheapest reliable path:
             ┌─────────────┐
  upload ──▶ │ orchestrator│
             └─────┬───────┘
-                  │  .docx/.doc  ──▶ Word text engine ─────┐
-                  │  .xlsx/.xls  ──▶ Excel text engine ─────┤
-                  │  .pdf (digital text) ──▶ PDF text engine┤──▶ normalizer ──▶ Markdown ──▶ outputs/
-                  │  otherwise / sparse text ──▶ PaddleOCR-VL│
-                  │       (on failure) ──────▶ PP-StructureV3┘
+                  │  .docx/.doc  ──▶ Word text engine ──────┐
+                  │  .xlsx/.xls  ──▶ Excel text engine ─────┤──▶ normalizer ──▶ Markdown ──▶ LLM ──▶ outputs/
+                  │  .pdf (digital text) ──▶ PDF text engine┤
+                  │  scans / images / sparse text ──▶ OCR ──┘
+                  │        GPU ▸ PaddleOCR-VL (GGUF via llama.cpp)
+                  │        CPU ▸ PaddleOCR v6 (ONNX Runtime)
 ```
 
-Native engines (PDF/Word/Excel) run on CPU. The OCR engines (PaddleOCR-VL,
-PP-StructureV3) require an NVIDIA GPU.
+Native engines (PDF/Word/Excel) run on CPU and need no models. The OCR tier is
+chosen once at startup from the detected hardware.
+
+## Concurrency & capacity
+
+The service is a single process that accepts requests concurrently but admits
+only a bounded number into each expensive stage:
+
+| Stage | Setting | Default | Why |
+| --- | --- | --- | --- |
+| OCR | `OCR_MAX_CONCURRENCY` | 2 | One GPU; `llama-server --parallel 1` serialises recognition anyway. |
+| LLM | `LLM_MAX_CONCURRENCY` | 8 | Network-bound, so more can be in flight. |
+| Disk | derived | ≥4 | Upload staging and artifact writes; short and never blocks OCR. |
+
+All blocking work (OCR, the OpenAI call, file staging) runs in worker threads, so
+the event loop stays free — `GET /healthz` answers in milliseconds while the GPU
+is saturated, and reports live per-stage occupancy. Requests that cannot get a
+slot within `STAGE_QUEUE_TIMEOUT_SECONDS` are rejected with `503` and a
+`Retry-After` header rather than queueing without bound.
+
+Uploads over `MAX_UPLOAD_BYTES` (50 MB) and PDFs over `PDF_MAX_PAGES` (100) are
+rejected with `413` before they occupy a slot.
+
+Run one worker process per GPU. Adding `--workers` duplicates the model in VRAM.
 
 ---
 
@@ -39,33 +62,45 @@ PP-StructureV3) require an NVIDIA GPU.
 
 ```text
 cuddly-giggle/
-├── main.py                       # Entrypoint: bootstraps runtime, starts the API
-├── requirements.txt              # Python dependencies (incl. PaddlePaddle GPU)
-├── .env.example                  # Sample configuration — copy to .env
-├── Dockerfile                    # App image (CUDA 12.6 + Python 3.11 + LibreOffice)
-├── docker-compose.yml            # Two-container stack: app + llama.cpp server
-├── app/
-│   ├── api/
-│   │   ├── application.py         # FastAPI app factory (ASGI entrypoint)
-│   │   └── routes.py             # Routes (/v1/doc/parse, /healthz) + orchestrator DI
-│   ├── core/
-│   │   └── config.py             # Settings + environment bootstrap
-│   ├── domain/
-│   │   └── schemas.py            # Pydantic models
-│   ├── services/
-│   │   ├── orchestrator.py       # Per-file-type engine selection + fallback
-│   │   ├── output.py             # Markdown table filter + artifact writing
-│   │   └── llama.py              # llama.cpp bootstrap + server control
-│   └── engines/
-│       ├── base.py               # Engine interface
-│       ├── registry.py           # Config-driven engine factory
-│       ├── native.py             # PDF / Word / Excel text-layer parsers
-│       ├── paddle.py             # PaddleOCR-VL + PP-StructureV3 adapters
-│       └── normalizer.py         # Normalizes engine output to the page schema
-├── scripts/                      # setup_llama_cpp, preflight_runtime, eval helpers
-├── tests/                        # pytest suite
-├── outputs/                      # Saved .md artifacts (git-ignored)
-└── data_test/                    # Local sample documents (git-ignored)
+├── main.py                        # Entrypoint: starts uvicorn, nothing else
+├── requirements.txt               # Python dependencies (incl. PaddlePaddle GPU)
+├── .env.example                   # Sample configuration — copy to .env
+├── Dockerfile                     # App image (CUDA 12.6 + Python 3.11 + LibreOffice)
+├── docker-compose.yml             # Two-container stack: app + llama.cpp server
+├── api/
+│   ├── application.py             # FastAPI factory + lifespan (ASGI entrypoint)
+│   ├── routes.py                  # /v1/extract/*, /v1/doc/ocr, /healthz
+│   ├── dependencies.py            # Process-wide singletons (engines, clients, limiters)
+│   ├── errors.py                  # Request errors + the one place they map to HTTP
+│   ├── uploads.py                 # Body decoding and size-capped upload staging
+│   └── rate_limit.py              # slowapi limiter
+├── config/
+│   ├── config.py                  # Settings + environment bootstrap
+│   └── pipeline_logging.py        # Request-scoped log context
+├── core/
+│   ├── domain/schemas.py          # Pydantic models
+│   ├── engines/
+│   │   ├── base.py                # Engine interface
+│   │   ├── registry.py            # Config-driven engine factory (used by scripts)
+│   │   ├── native.py              # PDF / Word / Excel text-layer parsers
+│   │   ├── paddle.py              # PaddleOCR-VL adapter
+│   │   ├── paddle_fast.py         # PaddleOCR v6 CPU adapter
+│   │   ├── fast_datalab.py        # DataLab SuryaOCR adapter
+│   │   └── normalizer.py          # Normalizes engine output to the page schema
+│   └── prompts/prompt.py          # Extraction instructions + JSON schema
+├── services/
+│   ├── document_extraction.py     # parse → extract → save pipeline
+│   ├── concurrency.py             # Stage limiters + worker-pool sizing
+│   ├── orchestrator.py            # Per-file-type engine selection
+│   ├── online_orchestrator.py     # DataLab parse path
+│   ├── llm_extraction.py          # OpenAI structured-output adapter
+│   ├── local_ocr_selector.py      # GPU/CPU engine choice
+│   ├── vl_runtime.py              # llama.cpp lifecycle
+│   ├── llama.py                   # llama.cpp bootstrap + server control
+│   ├── model_assets.py            # Model-profile manifest checks
+│   └── output.py                  # Markdown table filter + artifact writing
+├── scripts/                       # setup_models, setup_runtime, preflight helpers
+└── outputs/                       # Saved .md/.json artifacts (git-ignored)
 ```
 
 ---
@@ -74,12 +109,14 @@ cuddly-giggle/
 
 - **OS**: Windows 10/11 or Linux
 - **Python**: 3.9 – 3.11
-- **GPU**: NVIDIA GPU with CUDA 13.0 or 12.6 — **required** for the OCR engines
+- **GPU**: NVIDIA GPU with CUDA 13.0 or 12.6 — needed only for the PaddleOCR-VL tier
 - **Optional**: LibreOffice/soffice on `PATH` — only needed to parse legacy `.doc` / `.xls`
 
-> Native PDF/Word/Excel text extraction works without a GPU, but the OCR engines
-> (used for scans, images, and image-only PDFs) need CUDA. Running the OCR engines
-> on CPU is **not supported**.
+> Native PDF/Word/Excel text extraction needs no models at all. For scans, images
+> and image-only PDFs the service picks its OCR tier from the hardware it finds:
+> PaddleOCR-VL on CUDA, PaddleOCR v6 through ONNX Runtime on CPU. The CPU tier is
+> considerably slower and lower-fidelity, but it is supported — see
+> [Local OCR on CPU](#local-ocr-on-cpu).
 
 ---
 
@@ -110,6 +147,13 @@ Install the shared dependencies and create the local configuration:
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
+
+> The install pulls several GB. `pip` unpacks into the system temp directory, so
+> if your system drive is short on space, point it elsewhere first:
+>
+> ```powershell
+> $env:TMP = "D:\build\tmp"; $env:TEMP = $env:TMP; $env:PIP_CACHE_DIR = "D:\build\pipcache"
+> ```
 
 ```powershell
 # Windows PowerShell
@@ -178,8 +222,8 @@ DATALAB_API_KEY=your_datalab_api_key_here
 FAST_OCR_DATALAB_MODE=balanced
 ```
 
-- API: http://localhost:8000 (Swagger at `/docs`)
-- llama (debug only): http://localhost:8080
+- API: <http://localhost:8000> (Swagger at `/docs`)
+- llama (debug only): <http://localhost:8080>
 
 ### Tuning / overrides
 
@@ -201,18 +245,39 @@ On Windows, `python scripts/setup_runtime.py --check` checks runtime readiness.
 python main.py
 ```
 
-Open [Swagger UI](http://127.0.0.1:8000/docs). The health endpoint is available at `GET /healthz`.
+Or point any ASGI server at the app factory — the lifespan does all the wiring:
+
+```bash
+uvicorn api.application:app --host 0.0.0.0 --port 8000
+```
+
+Open [Swagger UI](http://127.0.0.1:8000/docs). The health endpoint is `GET /healthz`.
 
 ## API routes
 
 | Route | Description |
 | --- | --- |
-| `POST /v1/extract/local` | Local OCR plus structured extraction. Automatically uses PaddleOCR-VL on GPU and PaddleOCR v6 on CPU. |
+| `POST /v1/extract/local` | Local OCR plus structured extraction. Uses PaddleOCR-VL on GPU and PaddleOCR v6 on CPU. |
 | `POST /v1/extract/online` | DataLab SuryaOCR plus structured extraction for PDFs and images. |
 | `POST /v1/doc/ocr` | Auxiliary local OCR-only debugging endpoint; returns Markdown and does not call the LLM. |
-| `GET /healthz` | Liveness check. |
+| `GET /healthz` | Liveness check plus live per-stage occupancy. |
 
-Use `multipart/form-data` with a `file` field. The local route supports PDF, DOC/DOCX, XLS/XLSX/XLSM, PNG, JPG, BMP, WEBP, and TIFF; the online route supports PDFs and images.
+Use `multipart/form-data` with a `file` field. The local route supports PDF,
+DOC/DOCX, XLS/XLSX/XLSM, PNG, JPG, BMP, WEBP, TIFF, and Markdown; it also accepts
+already-parsed Markdown as a `text/markdown`, `text/plain`, or
+`application/json` (`{"markdown": "..."}`) body. The online route supports PDFs
+and images only.
+
+### Error responses
+
+| Status | Meaning |
+| --- | --- |
+| `400` | Missing `file` field, unsupported file type, or an undecodable body. |
+| `413` | Upload over `MAX_UPLOAD_BYTES`, PDF over `PDF_MAX_PAGES`, or OCR text over `LLM_MAX_INPUT_CHARS`. |
+| `415` | Content-Type the route does not accept. |
+| `422` | The model returned output that did not satisfy the extraction schema. |
+| `429` | Rate limit (`RATE_LIMIT_DEFAULT` / `RATE_LIMIT_EXTRACT`) exceeded. |
+| `503` | A dependency is unavailable, or every slot for a stage stayed busy — retry after `Retry-After`. |
 
 ## Docker
 
@@ -226,9 +291,9 @@ It requires Docker with NVIDIA GPU support. Place GGUF models in `models/`; Padd
 
 ## Tests
 
-```bash
-python -m pytest -q
-```
+There is no automated suite in the repository yet (`tests/` is git-ignored).
+`pytest` is pinned in `requirements.txt` so one can be added without a
+dependency change.
 
 ## License
 
