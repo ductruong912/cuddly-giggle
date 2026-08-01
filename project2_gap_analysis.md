@@ -1,13 +1,15 @@
 # Gap Analysis — Implementation Plan vs. Current Code
 
 Written 2026-08-01, against the repo state after the concurrency/production review.
+Updated the same day, after the validation layer was built.
 Companion to `project2_ocr_pipeline_implementation_plan.md`.
 
-**Short version:** the OCR half of the plan is built and in places exceeds it. The
-*data* half — deterministic validation, persistence, queueing, human review, and
-evaluation — does not exist. The single most valuable missing piece is
-deterministic business-rule validation, because that is the feature the plan is
-organised around and the one thing that currently has no code behind it at all.
+**Short version:** the OCR half of the plan is built and in places exceeds it.
+Deterministic validation and self-healing are now built too (§1, "Extraction &
+validation"). What remains missing is persistence, queueing, human review, and
+evaluation. Of those, the **eval harness** is now the highest-value next step:
+without it there is no way to show that self-healing recovers anything, which
+the plan's Definition of Done explicitly asks you to report as a number.
 
 ---
 
@@ -28,25 +30,30 @@ Legend: **Done** · **Partial** · **Missing** · *N/A (deliberately diverged)*
 | `ocr/router.py` (3-way tier decision) | **Partial — biggest OCR gap** | See §2. |
 | `reconstruction/markdown_builder.py` | **Partial** | `normalizer/` reconstructs Markdown and parses HTML tables with row/colspan handling. There is no dedicated table-structure recovery beyond what the engine emits. |
 
-### Extraction & validation — the core gap
+### Extraction & validation — built
 
 | Plan component | Status | Notes |
 |---|---|---|
 | `extraction/extractor.py` | **Done** | `llm_extraction.py`, OpenAI structured outputs with a strict JSON schema. |
-| `extraction/schemas.py` (Pydantic `Invoice`/`LineItem` + `check_math`) | **Missing** | `core/prompts/prompt.py` holds a hand-written JSON-schema **dict** for a Purchase-Order domain. There is no Pydantic model and no `model_validator`. |
-| `validation/business_rules.py` | **Missing** | No deterministic checks exist. |
-| `validation/self_heal.py` (targeted retry loop) | **Missing** | Nothing to retry against. |
+| `extraction/schemas.py` (Pydantic model + reconciliation validator) | **Done** | `core/domain/purchase_order.py`. The domain is Purchase Orders, not the plan's invoices, so the invariant is `quantity × unit_price ≈ extension` rather than `subtotal + tax = total`. Required adding an `extension` field — the old schema captured quantity and unit_price but no line total, so nothing could be cross-checked. |
+| `validation/business_rules.py` | **Done** | Date format and plausibility, duplicate item codes, zero-priced lines. Error/warning severities: only errors consume a retry. |
+| `validation/self_heal.py` (targeted retry loop) | **Done** | Feeds back the exact failing field and figures. Retries run inside the same LLM slot, so they cost latency rather than concurrency. |
 
-This is the substantive gap. The plan's arithmetic reconciliation
-(`quantity × unit_price ≈ extension`, `subtotal + tax = total`) currently exists
-**only as English instructions inside the LLM prompt** — see the "Validation
-Rules" and "Output Invariants" sections of `core/prompts/prompt.py`, which ask the
-model to check its own arithmetic and "repair it before returning the JSON".
+The plan asks for the JSON schema and the validator to be "one model doing double
+duty"; that is what `PurchaseOrder` is — `EXTRACTION_JSON_SCHEMA` is generated
+from it, so the shape the model is constrained to and the shape that is validated
+cannot drift apart.
 
-Asking a model to verify its own arithmetic is not verification. A wrong total
-that the model is confident about is returned as a success, with no signal to the
-caller. The plan's whole argument — deterministic code catches what the model
-misses — has no implementation.
+Two deliberate divergences from the plan:
+
+- **Tolerance is relative, not the plan's flat `0.01`.** Line totals on these
+  documents run to seven figures, and a unit price printed to two decimals can
+  legitimately leave the product a few units off. A relative tolerance absorbs
+  that while still catching the real failure mode, an OCR column shift, which is
+  wrong by orders of magnitude.
+- **Exhausted retries return `200` with `validation.status = "needs_review"`,
+  not an error.** The plan routes these to a `needs_review` queue; there is no
+  queue yet, so the signal is surfaced in the response and the caller decides.
 
 ### Infrastructure & operations — absent
 
@@ -93,9 +100,9 @@ They are planning-grade, not commitments.
 
 | Work | Effort | Depends on | Value |
 |---|---|---|---|
-| Pydantic extraction schema + reconciliation validator | 0.5–1 day | — | **Highest.** Turns the prompt's aspirations into enforced invariants. |
-| `validation/business_rules.py` (date sanity, currency consistency) | 0.5 day | schema | High |
-| `validation/self_heal.py` retry loop with targeted correction prompts | 1 day | validator | High. Needs a per-request LLM call budget so retries cannot exhaust the LLM stage. |
+| ~~Pydantic extraction schema + reconciliation validator~~ | **done** | — | Built. |
+| ~~`validation/business_rules.py`~~ | **done** | — | Built. |
+| ~~`validation/self_heal.py` retry loop~~ | **done** | — | Built. Retries are bounded by `LLM_SELF_HEAL_MAX_RETRIES` and share one LLM slot. |
 | Postgres + schema + migrations | 1 day | — | Medium. Prerequisite for everything below. |
 | procrastinate queue + worker; `POST /documents` → job id, `GET /documents/{id}` | 2–3 days | Postgres | Medium-high. Decouples client timeouts from OCR time and survives restarts. Note the current bounded-concurrency design already handles multi-request load *within* one process; the queue adds durability, not throughput. |
 | `needs_review` status wiring + `review_actions` | 0.5 day | queue | Medium |
@@ -111,13 +118,16 @@ They are planning-grade, not commitments.
 
 ## 4. Suggested sequencing
 
-1. **Validation first** (schema → business rules → self-heal, ~2–2.5 days). It is
-   the plan's differentiator, needs no infrastructure, and every later stage
-   depends on knowing whether an extraction is trustworthy.
-2. **Eval harness + labeled set** (~2 days). Do this second, not last: without a
-   measurement you cannot tell whether self-heal or a new router helped.
+1. ~~**Validation first**~~ — done.
+2. **Eval harness + labeled set** (~2 days) — now the top item. Self-healing is
+   live but its recovery rate is unmeasured, and the plan's Definition of Done
+   asks for that number. It also becomes the yardstick for the router work
+   below. The `validation` block in each response makes the "% requiring review"
+   metric close to free to compute.
 3. **Persistence + queue + `needs_review`** (~3.5–4.5 days) once there is a
    meaningful "this one failed validation" state worth storing and reviewing.
+   The `needs_review` status already exists in the response; it just has nowhere
+   durable to live.
 4. **Review app** (~1–2 days).
 5. **Router + preprocessing** (~3 days), measured against the eval harness.
 6. Extended scope (metrics, quantization) last.
@@ -131,13 +141,17 @@ They are planning-grade, not commitments.
    cleanly. A queue adds durability across restarts and frees callers from
    holding a connection for minutes — but it is ~3–4 days and adds a database to
    operate. Worth it only if documents are large/slow or uploads are bursty.
-2. **Invoice or Purchase Order?** The plan is written around invoices with
-   `subtotal + tax = total`. The shipped prompt extracts POs
-   (`po_number`, `toto_number`, `customer_number`, `quantity`, `unit_price`) with
-   no total field at all, so the plan's specific reconciliation does not apply as
-   written. The equivalent PO invariant is `quantity × unit_price ≈ extension`
-   where extension is present — but the current schema does not even capture
-   extension, so it cannot be checked. Deciding the real domain determines the
-   schema.
+2. ~~**Invoice or Purchase Order?**~~ Settled: Purchase Order, with an added
+   `extension` field so `quantity × unit_price` has something to reconcile
+   against.
 3. **Should the fast tier be available on GPU machines?** Required for real
    per-document routing; currently the hardware check makes it either/or.
+4. **Is `PO_LINE_TOTAL_TOLERANCE_RATIO = 0.01` right?** Set to 1% without real
+   documents to calibrate against. Too tight and clean extractions burn retries;
+   too loose and a genuine misread slips through. The eval harness would settle
+   it; until then, watch for `validation.status = "needs_review"` on documents
+   that are actually fine.
+5. **Do any real documents omit line totals entirely?** `extension` is nullable
+   and a null skips the arithmetic check, so such documents get structural
+   validation only. If that is the common case, the reconciliation buys less
+   than it appears to.
