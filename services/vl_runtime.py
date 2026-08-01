@@ -13,6 +13,7 @@ from services.llama import (
     LlamaServerConfig,
     bootstrap_llama_cpp,
     is_llama_cpp_ready,
+    is_tcp_port_open,
     resolve_latest_llama_cpp_release_urls,
     start_llama_server_if_needed,
     stop_llama_server,
@@ -23,7 +24,12 @@ logger = logging.getLogger(__name__)
 
 
 class VLRuntimeManager:
-    """Prepare the VL runtime at most once, when a VL route first needs it."""
+    """Own the VL runtime: start it on first use, and notice when it dies.
+
+    ``_ready`` used to latch on forever, so a llama.cpp process that crashed took
+    every subsequent request down with it until someone restarted the API. Ready
+    is now re-checked against the process and the port on every use.
+    """
 
     def __init__(
         self,
@@ -31,34 +37,83 @@ class VLRuntimeManager:
         configure_runtime: Callable[[], Any | None],
         warmup: Callable[[], None],
         stop_runtime: Callable[[Any], None],
+        probe: Callable[[], bool] | None = None,
     ) -> None:
         self._configure_runtime = configure_runtime
         self._warmup = warmup
         self._stop_runtime = stop_runtime
+        # Answers "is the backend reachable?" for a server this process does not
+        # own — the docker-compose llama container, for instance.
+        self._probe = probe
         self._lock = threading.Lock()
         self._ready = False
+        self._started = False
         self._process: Any | None = None
 
     @property
     def is_ready(self) -> bool:
-        return self._ready
+        """True when the runtime was prepared and still looks alive."""
+        return self._ready and self._is_alive()
+
+    @property
+    def was_started(self) -> bool:
+        """True once the runtime has been prepared, alive or not.
+
+        Lets readiness distinguish "not needed yet" from "started and now down":
+        the runtime is prepared on first use, so an untouched one is not a fault.
+        """
+        return self._started
 
     def ensure_ready(self) -> None:
-        """Start the runtime and warm the models; concurrent callers wait for the first."""
+        """Start the runtime and warm the models, restarting it if it has died."""
         with self._lock:
-            if self._ready:
+            if self._ready and self._is_alive():
                 return
+            if self._ready:
+                logger.warning("VL runtime is no longer alive; restarting it")
+                self._stop_locked()
             self._process = self._configure_runtime()
             self._warmup()
             self._ready = True
+            self._started = True
+
+    def restart(self) -> None:
+        """Stop and start the runtime, whatever state it is in.
+
+        A wedged llama.cpp does not exit on its own, and the OCR calls blocked on
+        it cannot be cancelled from Python. Killing the process is what makes
+        those calls return and hands their stage slots back.
+        """
+        with self._lock:
+            logger.warning("restarting the VL runtime")
+            self._stop_locked()
+            self._process = self._configure_runtime()
+            self._warmup()
+            self._ready = True
+            self._started = True
 
     def shutdown(self) -> None:
         """Stop a runtime this process started. Safe to call when nothing was started."""
         with self._lock:
-            if self._process is not None:
-                self._stop_runtime(self._process)
-                self._process = None
-            self._ready = False
+            self._stop_locked()
+
+    def _stop_locked(self) -> None:
+        if self._process is not None:
+            self._stop_runtime(self._process)
+            self._process = None
+        self._ready = False
+        self._started = False
+
+    def _is_alive(self) -> bool:
+        """Whether the backend is still usable, by process state or by probe."""
+        if self._process is not None:
+            poll = getattr(self._process, "poll", None)
+            if callable(poll) and poll() is not None:
+                return False
+            return True
+        # No owned process: either the runtime is disabled, or an external server
+        # is serving the port. The probe distinguishes those.
+        return self._probe() if self._probe is not None else True
 
 
 def build_vl_runtime_manager(
@@ -71,7 +126,19 @@ def build_vl_runtime_manager(
         configure_runtime=lambda: _configure_gguf_runtime(app_settings),
         warmup=warmup,
         stop_runtime=stop_llama_server,
+        probe=lambda: _llama_backend_reachable(app_settings),
     )
+
+
+def _llama_backend_reachable(app_settings: Settings) -> bool:
+    """Whether something is listening where the VL backend is expected.
+
+    Used when this process does not own the server — an external llama container,
+    or the GGUF path being switched off entirely.
+    """
+    if not app_settings.paddleocr_vl_use_gguf:
+        return True
+    return is_tcp_port_open(app_settings.llama_server_host, app_settings.llama_server_port)
 
 
 def _configure_gguf_runtime(app_settings: Settings) -> Any | None:

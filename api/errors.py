@@ -12,7 +12,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from services.concurrency import StageSaturated
+from services.concurrency import StageSaturated, StageTimedOut
 from services.document_extraction import DocumentExtractionFailed
 from services.llm_extraction import (
     LLMExtractionError,
@@ -85,6 +85,12 @@ def register_exception_handlers(application: FastAPI) -> None:
             str(exc),
             headers={"Retry-After": str(max(1, int(exc.wait_timeout_seconds)))},
         )
+
+    @application.exception_handler(StageTimedOut)
+    async def _handle_stage_timeout(_: Request, exc: StageTimedOut) -> JSONResponse:
+        # 504, not 503: the dependency accepted the work and never finished it.
+        # The stage limiter has already logged that the slot is still held.
+        return _json_error(504, str(exc))
 
     @application.exception_handler(LLMExtractionInputTooLarge)
     async def _handle_input_too_large(_: Request, exc: LLMExtractionInputTooLarge) -> JSONResponse:

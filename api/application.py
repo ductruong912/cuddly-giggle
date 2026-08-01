@@ -22,6 +22,7 @@ from api.uploads import cleanup_temp_dir
 from config.config import configure_app_logging, configure_third_party_logging, settings
 from services.concurrency import apply_thread_pool_size
 from services.local_ocr_selector import log_gpu_availability
+from services.retention import artifact_retention_task
 from services.vl_runtime import build_vl_runtime_manager
 
 
@@ -37,7 +38,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     runtime_manager = build_vl_runtime_manager(warmup=warmup_primary_engine)
     application.state.vl_runtime_manager = runtime_manager
     try:
-        yield
+        async with artifact_retention_task(settings):
+            yield
     finally:
         runtime_manager.shutdown()
 

@@ -165,6 +165,12 @@ class Settings:
     stage_queue_timeout_seconds: float = _get_float("STAGE_QUEUE_TIMEOUT_SECONDS", 30.0)
     # 0 lets the app derive the worker-thread count from the stage limits.
     server_thread_pool_size: int = _get_int("SERVER_THREAD_POOL_SIZE", 0)
+    # How long a stage may spend actually working before the request is failed.
+    # Without these, a wedged dependency holds its slot forever and the service
+    # stops accepting work permanently.
+    ocr_execution_timeout_seconds: float = _get_float("OCR_EXECUTION_TIMEOUT_SECONDS", 300.0)
+    llm_execution_timeout_seconds: float = _get_float("LLM_EXECUTION_TIMEOUT_SECONDS", 180.0)
+    io_execution_timeout_seconds: float = _get_float("IO_EXECUTION_TIMEOUT_SECONDS", 60.0)
 
     # --- Request guards ---
     max_upload_bytes: int = _get_int("MAX_UPLOAD_BYTES", 50 * 1024 * 1024)
@@ -173,6 +179,10 @@ class Settings:
     # --- Paths & misc ---
     temp_dir: str                        = _get_str("DOC_TEMP_DIR", ".tmp_doc_parse")
     parse_output_dir: str                = _get_str("PARSE_OUTPUT_DIR", "outputs")
+    # Saved artifacts accumulate one directory per request forever otherwise,
+    # and a full disk turns every write into a 500. 0 disables the sweep.
+    parse_output_retention_days: int     = _get_int("PARSE_OUTPUT_RETENTION_DAYS", 14)
+    parse_output_sweep_minutes: int      = _get_int("PARSE_OUTPUT_SWEEP_MINUTES", 60)
     quiet_third_party_logs: bool         = _get_bool("QUIET_THIRD_PARTY_LOGS", True)
 
     # --- PaddleX / model cache ---
@@ -192,6 +202,17 @@ class Settings:
             raise ValueError("LLM_MAX_CONCURRENCY must be at least 1")
         if self.stage_queue_timeout_seconds <= 0:
             raise ValueError("STAGE_QUEUE_TIMEOUT_SECONDS must be greater than zero")
+        for name, value in (
+            ("OCR_EXECUTION_TIMEOUT_SECONDS", self.ocr_execution_timeout_seconds),
+            ("LLM_EXECUTION_TIMEOUT_SECONDS", self.llm_execution_timeout_seconds),
+            ("IO_EXECUTION_TIMEOUT_SECONDS", self.io_execution_timeout_seconds),
+        ):
+            if value <= 0:
+                raise ValueError(f"{name} must be greater than zero")
+        if self.parse_output_retention_days < 0:
+            raise ValueError("PARSE_OUTPUT_RETENTION_DAYS cannot be negative")
+        if self.parse_output_sweep_minutes < 1:
+            raise ValueError("PARSE_OUTPUT_SWEEP_MINUTES must be at least 1")
         if self.max_upload_bytes < 1:
             raise ValueError("MAX_UPLOAD_BYTES must be at least 1")
         if self.pdf_max_pages < 1:

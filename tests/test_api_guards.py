@@ -28,6 +28,75 @@ def test_healthz_reports_stage_occupancy(api: Any) -> None:
     assert payload["stages"]["ocr"]["max_concurrency"] == 2
 
 
+def test_readyz_reports_ready_when_dependencies_are_fine(api: Any) -> None:
+    async def body(client):
+        return await client.get("/readyz")
+
+    response = api(body)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert payload["checks"]["llm_credentials"] == "ok"
+    assert payload["checks"]["stages"] == "ok"
+
+
+def test_readyz_sheds_traffic_when_a_stage_is_degraded(api: Any) -> None:
+    """A held slot means the instance is running below capacity; stop routing to it."""
+    import threading
+
+    from services.concurrency import StageTimedOut
+    from api.dependencies import get_pipeline_limiters
+
+    release = threading.Event()
+
+    async def body(client):
+        limiters = get_pipeline_limiters()
+        limiters.ocr.execution_timeout_seconds = 0.1
+        try:
+            await limiters.ocr.run(release.wait, 5)
+        except StageTimedOut:
+            pass
+        response = await client.get("/readyz")
+        release.set()
+        return response
+
+    response = api(body)
+
+    assert response.status_code == 503
+    payload = response.json()
+    assert payload["status"] == "not_ready"
+    assert payload["degraded_stages"] == ["ocr"]
+    assert payload["stages"]["ocr"]["abandoned"] == 1
+
+
+def test_healthz_stays_ok_while_readiness_fails(api: Any) -> None:
+    """Liveness must not go red on a sick dependency, or the container restart-loops."""
+    import threading
+
+    from services.concurrency import StageTimedOut
+    from api.dependencies import get_pipeline_limiters
+
+    release = threading.Event()
+
+    async def body(client):
+        limiters = get_pipeline_limiters()
+        limiters.ocr.execution_timeout_seconds = 0.1
+        try:
+            await limiters.ocr.run(release.wait, 5)
+        except StageTimedOut:
+            pass
+        health = await client.get("/healthz")
+        ready = await client.get("/readyz")
+        release.set()
+        return health, ready
+
+    health, ready = api(body)
+
+    assert health.status_code == 200
+    assert ready.status_code == 503
+
+
 def test_the_worker_pool_is_sized_from_the_stage_limits(api: Any) -> None:
     """Threads must outnumber the slots that use them, or stages starve."""
 

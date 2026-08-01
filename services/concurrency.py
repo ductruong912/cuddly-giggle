@@ -39,6 +39,18 @@ class StageSaturated(RuntimeError):
         self.wait_timeout_seconds = wait_timeout_seconds
 
 
+class StageTimedOut(RuntimeError):
+    """A stage held its slot longer than the work was allowed to take."""
+
+    def __init__(self, stage: str, execution_timeout_seconds: float) -> None:
+        super().__init__(
+            f"The {stage} stage did not finish within {execution_timeout_seconds:g}s "
+            "and was abandoned."
+        )
+        self.stage = stage
+        self.execution_timeout_seconds = execution_timeout_seconds
+
+
 class StageLimiter:
     """Run blocking stage work in the threadpool behind a bounded async semaphore.
 
@@ -47,31 +59,95 @@ class StageLimiter:
     and accept new connections while the GPU is busy.
     """
 
-    def __init__(self, name: str, max_concurrency: int, wait_timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        name: str,
+        max_concurrency: int,
+        wait_timeout_seconds: float,
+        execution_timeout_seconds: float,
+    ) -> None:
         self.name = name
         self.max_concurrency = max_concurrency
         self.wait_timeout_seconds = wait_timeout_seconds
+        self.execution_timeout_seconds = execution_timeout_seconds
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._in_flight = 0
+        self._abandoned = 0
 
     @property
     def in_flight(self) -> int:
         """Number of requests currently occupying a slot."""
         return self._in_flight
 
+    @property
+    def abandoned(self) -> int:
+        """Slots held by work that timed out and has not yet returned.
+
+        Non-zero means a dependency is wedged: the stage is running below its
+        configured capacity until those calls unblock, which usually only
+        happens when the dependency is restarted.
+        """
+        return self._abandoned
+
     async def run(self, func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
-        """Acquire a slot, then run ``func`` in a worker thread.
+        """Acquire a slot, then run ``func`` in a worker thread under a time budget.
 
         Raises:
             StageSaturated: no slot became free within the configured wait budget.
+            StageTimedOut: the work exceeded the execution budget.
         """
         await self._acquire()
         self._in_flight += 1
+        # Shielded so the timeout abandons the *wait*, not the work: a worker
+        # thread cannot be cancelled, and pretending otherwise would release a
+        # slot whose thread is still running and admit more work than capacity.
+        task = asyncio.ensure_future(run_in_threadpool(func, *args, **kwargs))
         try:
-            return await run_in_threadpool(func, *args, **kwargs)
-        finally:
-            self._in_flight -= 1
-            self._semaphore.release()
+            result = await asyncio.wait_for(
+                asyncio.shield(task), timeout=self.execution_timeout_seconds
+            )
+        except asyncio.TimeoutError as exc:
+            self._abandon(task)
+            logger.error(
+                "stage=%s abandoned a request after %.0fs; the slot stays held until the "
+                "call returns (abandoned=%s of %s slots)",
+                self.name,
+                self.execution_timeout_seconds,
+                self._abandoned,
+                self.max_concurrency,
+            )
+            raise StageTimedOut(self.name, self.execution_timeout_seconds) from exc
+        except asyncio.CancelledError:
+            # The caller went away (client disconnect). The thread carries on, so
+            # the slot is not ours to give back yet.
+            self._abandon(task)
+            raise
+        except BaseException:
+            self._settle()
+            raise
+        self._settle()
+        return result
+
+    def _abandon(self, task: "asyncio.Future[Any]") -> None:
+        """Keep the slot booked until the orphaned call actually returns."""
+        self._abandoned += 1
+        task.add_done_callback(self._on_abandoned_done)
+
+    def _on_abandoned_done(self, task: "asyncio.Future[Any]") -> None:
+        self._abandoned -= 1
+        self._settle()
+        if not task.cancelled() and task.exception() is not None:
+            logger.warning(
+                "stage=%s abandoned call finally returned an error: %s",
+                self.name,
+                task.exception(),
+            )
+        else:
+            logger.info("stage=%s abandoned call returned; slot recovered", self.name)
+
+    def _settle(self) -> None:
+        self._in_flight -= 1
+        self._semaphore.release()
 
     async def _acquire(self) -> None:
         wait_start = time.perf_counter()
@@ -107,11 +183,13 @@ class PipelineLimiters:
             "ocr",
             app_settings.ocr_max_concurrency,
             app_settings.stage_queue_timeout_seconds,
+            app_settings.ocr_execution_timeout_seconds,
         )
         self.llm = StageLimiter(
             "llm",
             app_settings.llm_max_concurrency,
             app_settings.stage_queue_timeout_seconds,
+            app_settings.llm_execution_timeout_seconds,
         )
         # File staging and artifact writes are short and disk-bound; they get a
         # generous slot count so they never queue behind OCR work.
@@ -119,7 +197,17 @@ class PipelineLimiters:
             "io",
             max(4, app_settings.ocr_max_concurrency * 2),
             app_settings.stage_queue_timeout_seconds,
+            app_settings.io_execution_timeout_seconds,
         )
+
+    @property
+    def stages(self) -> tuple[StageLimiter, ...]:
+        return (self.ocr, self.llm, self.io)
+
+    @property
+    def degraded_stages(self) -> list[str]:
+        """Stages running below capacity because work timed out and never returned."""
+        return [limiter.name for limiter in self.stages if limiter.abandoned]
 
     def snapshot(self) -> dict[str, dict[str, int]]:
         """Current occupancy per stage, for the health endpoint."""
@@ -127,8 +215,9 @@ class PipelineLimiters:
             limiter.name: {
                 "in_flight": limiter.in_flight,
                 "max_concurrency": limiter.max_concurrency,
+                "abandoned": limiter.abandoned,
             }
-            for limiter in (self.ocr, self.llm, self.io)
+            for limiter in self.stages
         }
 
 

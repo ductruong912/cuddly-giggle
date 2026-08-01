@@ -8,7 +8,7 @@ import logging
 
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from api.dependencies import (
     ensure_gpu_gguf_runtime,
@@ -35,6 +35,7 @@ from config.pipeline_logging import pipeline_message
 from core.domain.schemas import LLMExtractionResponse
 from services.concurrency import PipelineLimiters
 from services.document_extraction import DocumentExtractionService
+from services.local_ocr_selector import has_usable_gpu
 from services.orchestrator import ParseOrchestrator
 from services.output import save_parse_artifacts
 
@@ -67,8 +68,54 @@ health_router = APIRouter(tags=["health"])
 
 @health_router.get("/healthz")
 def healthz(limiters: PipelineLimiters = Depends(get_pipeline_limiters)) -> dict[str, object]:
-    """Liveness plus current occupancy of each bounded pipeline stage."""
+    """Liveness: the process is up and serving. Never fails on a sick dependency.
+
+    This is what the container healthcheck watches, so it must not report a
+    stalled backend as a dead application — that would restart the API in a loop
+    while leaving the actual problem untouched. Use ``/readyz`` for that.
+    """
     return {"status": "ok", "stages": limiters.snapshot()}
+
+
+@health_router.get("/readyz")
+def readyz(
+    request: Request,
+    limiters: PipelineLimiters = Depends(get_pipeline_limiters),
+) -> JSONResponse:
+    """Readiness: whether this instance can actually serve work right now.
+
+    Returns 503 when a dependency is down or a stage is running below capacity,
+    so a load balancer stops sending traffic here instead of collecting failures.
+    """
+    checks = {
+        "vl_runtime": _vl_runtime_state(request),
+        "llm_credentials": "ok" if settings.openai_api_key else "missing",
+        "stages": "ok" if not limiters.degraded_stages else "degraded",
+    }
+    degraded = limiters.degraded_stages
+    ready = all(state == "ok" for state in checks.values())
+    payload: dict[str, object] = {
+        "status": "ready" if ready else "not_ready",
+        "checks": checks,
+        "stages": limiters.snapshot(),
+    }
+    if degraded:
+        # A stage below capacity means work timed out and never came back; the
+        # slots return only when the wedged dependency is restarted.
+        payload["degraded_stages"] = degraded
+        logger.warning("readiness degraded: stages holding abandoned slots: %s", degraded)
+    return JSONResponse(status_code=200 if ready else 503, content=payload)
+
+
+def _vl_runtime_state(request: Request) -> str:
+    """Whether the local VL backend is usable, or why the question does not apply."""
+    if not (settings.paddleocr_vl_use_gguf and has_usable_gpu()):
+        return "ok"
+    manager = getattr(request.app.state, "vl_runtime_manager", None)
+    if manager is None:
+        return "unconfigured"
+    # Not yet started is fine: the runtime is prepared on first use by design.
+    return "ok" if (not manager.was_started or manager.is_ready) else "down"
 
 
 # =====================================================================================

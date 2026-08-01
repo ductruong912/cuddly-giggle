@@ -19,7 +19,7 @@ FastAPI service for extracting Vietnamese documents into Markdown or structured 
 
 For each uploaded file the orchestrator picks the cheapest reliable path:
 
-```
+```text
             ┌─────────────┐
  upload ──▶ │ orchestrator│
             └─────┬───────┘
@@ -337,6 +337,38 @@ at import, making a malformed schema a startup error instead of a per-request
 | `422` | The model returned output that did not satisfy the extraction schema. |
 | `429` | Rate limit (`RATE_LIMIT_DEFAULT` / `RATE_LIMIT_EXTRACT`) exceeded. |
 | `503` | A dependency is unavailable, or every slot for a stage stayed busy — retry after `Retry-After`. |
+| `504` | A stage exceeded its execution timeout and the work was abandoned. |
+
+## Health and readiness
+
+| Endpoint | Answers | Use it for |
+| --- | --- | --- |
+| `GET /healthz` | Is the process alive and serving? Always `200`. | Container healthcheck. |
+| `GET /readyz` | Can this instance actually do work? `503` when not. | Load balancer / orchestrator routing. |
+
+The split matters. `/healthz` deliberately stays green when a *dependency* is
+sick, because a container healthcheck that goes red there would restart the API
+in a loop while leaving the real problem — usually llama.cpp — untouched.
+`/readyz` is the one that reports a dead VL backend, a missing `OPENAI_API_KEY`,
+or a stage running below capacity.
+
+### When a backend wedges
+
+A worker thread cannot be cancelled in Python, so a hung call cannot simply be
+dropped. The stage limiter therefore fails the *request* at its execution
+timeout but keeps the slot booked until the call actually returns, and reports
+the stage as degraded:
+
+```json
+{ "status": "not_ready",
+  "degraded_stages": ["ocr"],
+  "stages": { "ocr": { "in_flight": 1, "max_concurrency": 2, "abandoned": 1 } } }
+```
+
+Releasing the slot early would admit more work than there is capacity to run it.
+`abandoned` slots come back on their own once the call returns — which for a
+wedged llama.cpp means restarting it. A backend that has *died* rather than
+wedged is detected and restarted automatically on the next request.
 
 ## Docker
 
