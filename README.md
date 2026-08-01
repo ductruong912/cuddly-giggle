@@ -64,6 +64,8 @@ Run one worker process per GPU. Adding `--workers` duplicates the model in VRAM.
 cuddly-giggle/
 ├── main.py                        # Entrypoint: starts uvicorn, nothing else
 ├── requirements.txt               # Python dependencies (incl. PaddlePaddle GPU)
+├── requirements-ci.txt            # Test-only subset, installable without CUDA
+├── pytest.ini                     # Test discovery and import path
 ├── .env.example                   # Sample configuration — copy to .env
 ├── Dockerfile                     # App image (CUDA 12.6 + Python 3.11 + LibreOffice)
 ├── docker-compose.yml             # Two-container stack: app + llama.cpp server
@@ -111,6 +113,8 @@ cuddly-giggle/
 │   ├── runner.py                  # Case execution
 │   ├── sources.py                 # Replayed answers, or the live pipeline
 │   └── wiring.py                  # Live-source construction + VL runtime
+├── tests/                         # pytest suite; runs without the OCR extras
+├── .github/workflows/ci.yml       # Tests, accuracy gate, compileall, pyflakes
 ├── scripts/                       # setup_models, setup_runtime, preflight helpers
 └── outputs/                       # Saved .md/.json artifacts (git-ignored)
 ```
@@ -384,10 +388,42 @@ Only ground truth catches these, which is the argument for a labeled set.
 
 ## Tests
 
-There is no automated suite in the repository yet (`tests/` is git-ignored).
-`pytest` is pinned in `requirements.txt` so one can be added without a
-dependency change. `python -m eval.run_eval --fail-under` works as a regression
-gate in the meantime.
+```bash
+pytest                              # the whole suite, ~18s
+pytest tests/test_self_heal.py      # one module
+pytest -k concurrency               # by name
+```
+
+140 tests covering the record's invariants, the business rules, the self-heal
+retry loop, the strict-schema generation, the PDF text-layer engine, the API's
+request guards and stage limiters, and the eval harness itself.
+
+The suite needs no sample documents — the PDF fixtures are generated with
+PyMuPDF at test time — and no API key, since every extraction is a stand-in.
+
+**It also runs without the OCR extras installed.** The engines defer their
+imports, so `paddlepaddle-gpu`, `paddleocr`, `paddlex` and `onnxruntime` are not
+needed to exercise anything above. That is what makes CI possible on an ordinary
+runner; see [requirements-ci.txt](requirements-ci.txt). What the suite therefore
+does *not* cover is OCR inference itself and the live OpenAI call — both need the
+full stack and are exercised by running the service.
+
+> `caplog` does not work on this project's loggers. `configure_app_logging` sets
+> `propagate = False` (paddlex installs a root handler, and propagating would
+> print every line twice), and `caplog` attaches to the root logger. Use the
+> `capture_logs` fixture in [tests/conftest.py](tests/conftest.py) instead.
+
+### CI
+
+[.github/workflows/ci.yml](.github/workflows/ci.yml) runs on every push and pull
+request: the suite on Python 3.11, then `run_eval --fail-under 0.92` as an
+accuracy gate, then `compileall` and `pyflakes`. The evaluation report is
+uploaded as a build artifact.
+
+`requirements-ci.txt` is a subset of `requirements.txt` — the full file needs
+CUDA and a custom index. `tests/test_requirements.py` fails the build if the two
+files' pins ever drift, so CI cannot quietly start testing different versions
+than production runs.
 
 ## License
 

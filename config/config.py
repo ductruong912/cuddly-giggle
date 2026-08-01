@@ -10,6 +10,8 @@ import site
 from dotenv import load_dotenv
 
 
+logger = logging.getLogger(__name__)
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 # Load from the repo root, not the working directory: a service started from
 # elsewhere (Windows service, systemd, `python f:\...\main.py`) must still see .env.
@@ -280,13 +282,20 @@ _prepend_windows_cuda_paths()
 # ---------------------------------------------------------------------------
 
 def configure_third_party_logging() -> None:
+    """Quieten paddlex's logger where it is installed, and carry on where it is not."""
     if not settings.quiet_third_party_logs:
         return
     try:
         from paddlex.utils import logging as paddlex_logging  # type: ignore
+    except ImportError:
+        # Expected wherever the OCR extras are absent, such as CI. Not an error:
+        # there is no third-party logger to quieten.
+        logger.debug("paddlex is not installed; skipping its logging setup")
+        return
+    try:
         paddlex_logging.setup_logging("WARNING")
     except Exception:
-        pass
+        logger.exception("paddlex logging could not be configured")
 
 
 def configure_app_logging() -> None:

@@ -48,7 +48,11 @@ ENV/
 /.paddleocr/
 /llama/
 /models/
+# `tests/` is deliberately NOT ignored: the suite is part of the repo. `test/`
+# stays ignored as a scratch directory.
 test/
-tests/
 docs/
 .superpowers/
+
+# Written by `python -m eval.run_eval --json`.
+/eval-report.json

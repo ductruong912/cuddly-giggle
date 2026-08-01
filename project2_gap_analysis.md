@@ -65,8 +65,8 @@ Two deliberate divergences from the plan:
 | `review_app/streamlit_review.py` (HITL) | **Missing** | No `needs_review` state to review. |
 | `eval/run_eval.py` | **Done** | One command; reports field accuracy, % requiring review, self-heal recovery rate, and per-field accuracy. `--fail-under` makes it a CI gate. |
 | Labeled set (20–30 real documents) | **Missing — now the binding constraint** | The shipped `synthetic.json` is 12 hand-written cases. It exercises the validation layer honestly but says nothing about OCR accuracy. See §6. |
-| `.github/workflows/ci.yml` | **Missing** | No CI. |
-| `tests/` | **Missing** | Also git-ignored. |
+| `.github/workflows/ci.yml` | **Done** | Suite on Python 3.11, then `run_eval --fail-under 0.92` as an accuracy gate, then `compileall` + `pyflakes`. Installs `requirements-ci.txt`, since the full file needs CUDA and a custom index. |
+| `tests/` | **Done** | 140 tests. `tests/` was git-ignored; that is now lifted. The plan names `test_business_rules.py` and `test_self_heal.py` specifically — both exist. `test_router.py` does not, because routing is out of scope (§2). |
 | `/metrics` + Prometheus/Grafana *(extended scope)* | **Missing** | `GET /healthz` now reports live per-stage occupancy, which is a partial substitute. |
 | ONNX INT8 quantization *(extended scope)* | **Partial** | The fast tier already runs through ONNX Runtime, but there is no explicit INT8 quantization step and no before/after latency/memory numbers. |
 
@@ -116,10 +116,10 @@ They are planning-grade, not commitments.
 | `needs_review` status wiring + `review_actions` | 0.5 day | queue | Medium |
 | Streamlit review app | 1–2 days | queue | Medium |
 | ~~`eval/run_eval.py`~~ | **done** | — | Built. Runs in one command; scores replayed or live extractions. |
-| Labeled set: 20–30 real documents + ground truth | 1–1.5 days | real documents | **Highest.** The harness exists and is idle. Nothing else here can be shown to have helped until this lands. |
+| ~~CI workflow + test suite~~ | **done** | — | Built. 140 tests, plus an accuracy gate and lint. |
+| Labeled set: 20–30 real documents + ground truth | 1–1.5 days | real documents (you hold these) | **Highest.** The harness exists and is idle. Nothing else here can be shown to have helped until this lands. |
 | `quality_score.py` + real 3-way `router.py` | 2 days | both tiers loadable together — **declined**, see §2 | Out of scope by decision |
-| `image_prep.py` (deskew/binarize/denoise) | 1 day | — | Medium. Only pays off on genuinely poor scans; measure before adopting. |
-| CI workflow + starter test suite | 1 day | — | High. `run_eval --fail-under` is already a usable gate. |
+| `image_prep.py` (deskew/binarize/denoise) | 1 day | labeled set | Medium. Only pays off on genuinely poor scans; measure before adopting. |
 | `/metrics` + Prometheus/Grafana | 1–2 days | — | Low until there is production traffic |
 | ONNX INT8 quantization + benchmark | 1–2 days | — | Low |
 
@@ -130,17 +130,18 @@ They are planning-grade, not commitments.
 1. ~~**Validation first**~~ — done.
 2. ~~**Eval harness**~~ — done. The runner, metrics and report exist and are
    verified; only the data is missing.
-3. **Label 20–30 real documents** (~1–1.5 days) — now the top item, and the only
+3. ~~**Tests + CI**~~ — done. 140 tests and an accuracy gate, so everything
+   below has a regression net under it before it is built.
+4. **Label 20–30 real documents** (~1–1.5 days) — now the top item, and the only
    one that needs something the repo cannot produce for itself. Every number
-   below is unmeasurable until this exists, and it simultaneously settles both
-   open questions in §5.
-4. **Persistence + queue + `needs_review`** (~3.5–4.5 days) once there is a
+   below is unmeasurable until this exists, and it settles both open questions
+   in §5. Confirmed 2026-08-01 that the documents exist but stay on your side,
+   so this is a task for you to run, not for the repo to acquire — see §7.
+5. **Persistence + queue + `needs_review`** (~3.5–4.5 days) once there is a
    meaningful "this one failed validation" state worth storing and reviewing.
    The `needs_review` status already exists in the response; it just has nowhere
    durable to live.
-5. **Review app** (~1–2 days).
-6. **CI** (~1 day) — `run_eval --fail-under` against the labeled set, so
-   accuracy regressions fail a build rather than being discovered in production.
+6. **Review app** (~1–2 days).
 7. Extended scope (metrics, quantization) last. ~~Router~~ is out of scope by
    the §2 decision.
 
@@ -165,13 +166,12 @@ They are planning-grade, not commitments.
    on documents that are actually fine. It cannot be settled against synthetic
    fixtures, because the fixtures were written to whatever the current threshold
    is.
-5. **Do any real documents omit line totals entirely?** Still open, and now
-   measurable: `null-extension-unverifiable` in the synthetic set demonstrates
-   the failure concretely — a quantity misread by a factor of 2.7 scores 91.7%
-   accuracy and passes every check, because a null `extension` leaves nothing to
-   contradict it. If most real documents omit line totals, the reconciliation
-   check protects far less than its presence suggests, and the case for human
-   review over self-healing gets stronger.
+5. ~~**Do any real documents omit line totals entirely?**~~ Settled 2026-08-01:
+   line totals are printed on nearly every document. So the reconciliation check
+   runs on nearly every line and earns its place, and question 4 above matters
+   more rather than less. The `null-extension-unverifiable` blind spot stays
+   real but rare — worth keeping in the eval set so a shift in document format
+   shows up as a measurable change rather than a silent one.
 
 ---
 
@@ -206,3 +206,40 @@ It also explains a design choice worth keeping: the prompt tells the model to
 copy the line total **as printed** rather than compute it. A model that computes
 turns every quantity misread into `consistent-but-wrong` — silently valid, and
 undetectable without ground truth.
+
+---
+
+## 7. The labeled set is yours to build
+
+Confirmed 2026-08-01: the documents exist but stay on your side. So this is the
+one remaining task the repository cannot do for itself, and everything in §4
+below step 4 waits on it. It is roughly a day's work.
+
+1. Put 20–30 documents in `eval/labeled_set/documents/`.
+2. Write `eval/labeled_set/real.json`, one case per document, with the expected
+   record. The format is in `eval/labeled_set/README.md`; `synthetic.json` is a
+   worked example.
+3. Run `python -m eval.run_eval --source local --json outputs/eval.json`.
+
+Three things worth doing deliberately:
+
+- **Label from the document, not from a pipeline run.** Ground truth taken from
+  output measures self-consistency, not accuracy, and will look excellent while
+  telling you nothing.
+- **Bias the selection toward what fails today.** Clean single-column scans are
+  already near 100%; they add cost and no information. Pick the layouts you know
+  cause trouble — multi-column, stamped, skewed, multi-page tables.
+- **Include a few documents whose stated totals genuinely do not reconcile**, if
+  such documents exist. The loader warns rather than fails on those, and they
+  set the ceiling on the achievable validity rate. Better to know that ceiling
+  than to mistake it for a bug.
+
+The first real run answers question 4 in §5 — sweep
+`PO_LINE_TOTAL_TOLERANCE_RATIO` and watch where `needs_review` starts firing on
+documents that are actually fine. Neither the synthetic set nor any amount of
+reasoning can settle that; only the documents can.
+
+Once `real.json` exists, raise the `--fail-under` threshold in
+`.github/workflows/ci.yml` from 0.92 to whatever the real set scores, less a
+point or two of headroom. At that point CI is measuring the pipeline rather than
+the fixtures, which is the whole objective.
