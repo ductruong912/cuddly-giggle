@@ -78,15 +78,18 @@ cuddly-giggle/
 │   ├── config.py                  # Settings + environment bootstrap
 │   └── pipeline_logging.py        # Request-scoped log context
 ├── core/
-│   ├── domain/schemas.py          # Pydantic models
+│   ├── domain/
+│   │   ├── schemas.py             # Request/response models
+│   │   ├── purchase_order.py      # The extracted record and its invariants
+│   │   └── strict_schema.py       # Pydantic model → OpenAI strict JSON Schema
 │   ├── engines/
 │   │   ├── base.py                # Engine interface
 │   │   ├── registry.py            # Config-driven engine factory (used by scripts)
-│   │   ├── native.py              # PDF / Word / Excel text-layer parsers
+│   │   ├── native/                # PDF / Word / Excel text-layer parsers
+│   │   ├── normalizer/            # Normalizes engine output to the page schema
 │   │   ├── paddle.py              # PaddleOCR-VL adapter
 │   │   ├── paddle_fast.py         # PaddleOCR v6 CPU adapter
-│   │   ├── fast_datalab.py        # DataLab SuryaOCR adapter
-│   │   └── normalizer.py          # Normalizes engine output to the page schema
+│   │   └── fast_datalab.py        # DataLab SuryaOCR adapter
 │   └── prompts/prompt.py          # Extraction instructions + JSON schema
 ├── services/
 │   ├── document_extraction.py     # parse → extract → save pipeline
@@ -94,11 +97,20 @@ cuddly-giggle/
 │   ├── orchestrator.py            # Per-file-type engine selection
 │   ├── online_orchestrator.py     # DataLab parse path
 │   ├── llm_extraction.py          # OpenAI structured-output adapter
+│   ├── validation/                # Deterministic checks + the self-heal retry loop
 │   ├── local_ocr_selector.py      # GPU/CPU engine choice
 │   ├── vl_runtime.py              # llama.cpp lifecycle
-│   ├── llama.py                   # llama.cpp bootstrap + server control
+│   ├── llama/                     # llama.cpp bootstrap + server control
 │   ├── model_assets.py            # Model-profile manifest checks
 │   └── output.py                  # Markdown table filter + artifact writing
+├── eval/
+│   ├── run_eval.py                # `python -m eval.run_eval` — accuracy report
+│   ├── labeled_set/               # Ground truth, one case per document
+│   ├── scoring.py                 # Field-level comparison against ground truth
+│   ├── report.py                  # Metric aggregation and rendering
+│   ├── runner.py                  # Case execution
+│   ├── sources.py                 # Replayed answers, or the live pipeline
+│   └── wiring.py                  # Live-source construction + VL runtime
 ├── scripts/                       # setup_models, setup_runtime, preflight helpers
 └── outputs/                       # Saved .md/.json artifacts (git-ignored)
 ```
@@ -332,11 +344,50 @@ docker compose up --build
 
 It requires Docker with NVIDIA GPU support. Place GGUF models in `models/`; Paddle model cache is stored in `.paddlex/`.
 
+## Evaluation
+
+```bash
+python -m eval.run_eval                                  # replay, no API key needed
+python -m eval.run_eval --source local --json outputs/eval.json
+python -m eval.run_eval --fail-under 0.95                # exits 1 when accuracy drops
+```
+
+Scores extractions against the ground truth in [eval/labeled_set/](eval/labeled_set/)
+and reports field-level accuracy, the share of documents needing review, and the
+self-healing recovery rate — the fraction of extractions that failed validation
+on the first attempt and were correct by the last.
+
+Two kinds of case. A **replay** case supplies recorded model answers and runs
+them through the real validation loop, so the retry behaviour can be measured
+without an OCR engine, an API key or a document. A **document** case runs the
+full pipeline against a file on disk. `--source replay` runs the first kind,
+`--source local` / `--source online` the second; the report says how many cases
+were skipped.
+
+> The shipped `synthetic.json` is **12 hand-written cases, not real documents.**
+> It measures the validation layer only. Its accuracy figure is a property of the
+> fixtures, not of the pipeline — replace it with real purchase orders before
+> reading anything into the number. See
+> [eval/labeled_set/README.md](eval/labeled_set/README.md).
+
+The report also counts **validation blind spots**: cases that satisfied every
+check and are still wrong. Three failure modes cause them, and no amount of
+arithmetic checking will catch any of them:
+
+| Blind spot | Why validation cannot see it |
+| --- | --- |
+| A line item is dropped entirely | Every row that *was* returned reconciles. |
+| Quantity is misread and the line total computed from it | The arithmetic agrees with itself. |
+| The document states no line totals | With `extension` null there is nothing to reconcile against. |
+
+Only ground truth catches these, which is the argument for a labeled set.
+
 ## Tests
 
 There is no automated suite in the repository yet (`tests/` is git-ignored).
 `pytest` is pinned in `requirements.txt` so one can be added without a
-dependency change.
+dependency change. `python -m eval.run_eval --fail-under` works as a regression
+gate in the meantime.
 
 ## License
 

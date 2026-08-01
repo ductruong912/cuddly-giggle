@@ -1,15 +1,15 @@
 # Gap Analysis — Implementation Plan vs. Current Code
 
 Written 2026-08-01, against the repo state after the concurrency/production review.
-Updated the same day, after the validation layer was built.
+Updated the same day, twice: after the validation layer, then after the eval harness.
 Companion to `project2_ocr_pipeline_implementation_plan.md`.
 
 **Short version:** the OCR half of the plan is built and in places exceeds it.
-Deterministic validation and self-healing are now built too (§1, "Extraction &
-validation"). What remains missing is persistence, queueing, human review, and
-evaluation. Of those, the **eval harness** is now the highest-value next step:
-without it there is no way to show that self-healing recovers anything, which
-the plan's Definition of Done explicitly asks you to report as a number.
+Deterministic validation, self-healing and the eval harness are now built too.
+What remains missing is persistence, queueing and human review — and a **real
+labeled set**, which is now the binding constraint on everything else. The
+harness runs and reports, but against synthetic fixtures; until real documents
+are labeled, its accuracy figure measures the fixtures rather than the pipeline.
 
 ---
 
@@ -63,7 +63,8 @@ Two deliberate divergences from the plan:
 | `queue/tasks.py` + `worker.py` (procrastinate) | **Missing** | Processing is synchronous within the request. |
 | `POST /documents` → job id, `GET /documents/{id}` | *Diverged* | Actual: `POST /v1/extract/local`, `POST /v1/extract/online`, `POST /v1/doc/ocr`, `GET /healthz`. Caller blocks for the full pipeline. |
 | `review_app/streamlit_review.py` (HITL) | **Missing** | No `needs_review` state to review. |
-| `eval/run_eval.py` + labeled set | **Missing** | No accuracy measurement of any kind. |
+| `eval/run_eval.py` | **Done** | One command; reports field accuracy, % requiring review, self-heal recovery rate, and per-field accuracy. `--fail-under` makes it a CI gate. |
+| Labeled set (20–30 real documents) | **Missing — now the binding constraint** | The shipped `synthetic.json` is 12 hand-written cases. It exercises the validation layer honestly but says nothing about OCR accuracy. See §6. |
 | `.github/workflows/ci.yml` | **Missing** | No CI. |
 | `tests/` | **Missing** | Also git-ignored. |
 | `/metrics` + Prometheus/Grafana *(extended scope)* | **Missing** | `GET /healthz` now reports live per-stage occupancy, which is a partial substitute. |
@@ -91,6 +92,13 @@ per-document quality decision the plan describes is not made anywhere.
 Closing this needs `quality_score.py` plus a real `router.py`, and the fast tier
 must be loadable alongside the VL tier rather than instead of it.
 
+**Decided 2026-08-01: keep the either/or selection.** Loading both tiers on a GPU
+box was declined, which makes per-document routing impossible by construction —
+the fast tier is not in memory to route to. The plan's "centerpiece" is therefore
+deliberately out of scope, not merely unbuilt. Reopening it means reopening that
+decision first. The cost is that clean single-column scans still go to the VLM on
+a GPU box, and messy multi-column forms still go to the fast tier on a CPU box.
+
 ---
 
 ## 3. Rough effort
@@ -107,10 +115,11 @@ They are planning-grade, not commitments.
 | procrastinate queue + worker; `POST /documents` → job id, `GET /documents/{id}` | 2–3 days | Postgres | Medium-high. Decouples client timeouts from OCR time and survives restarts. Note the current bounded-concurrency design already handles multi-request load *within* one process; the queue adds durability, not throughput. |
 | `needs_review` status wiring + `review_actions` | 0.5 day | queue | Medium |
 | Streamlit review app | 1–2 days | queue | Medium |
-| `quality_score.py` + real 3-way `router.py` | 2 days | both tiers loadable together | Medium-high |
+| ~~`eval/run_eval.py`~~ | **done** | — | Built. Runs in one command; scores replayed or live extractions. |
+| Labeled set: 20–30 real documents + ground truth | 1–1.5 days | real documents | **Highest.** The harness exists and is idle. Nothing else here can be shown to have helped until this lands. |
+| `quality_score.py` + real 3-way `router.py` | 2 days | both tiers loadable together — **declined**, see §2 | Out of scope by decision |
 | `image_prep.py` (deskew/binarize/denoise) | 1 day | — | Medium. Only pays off on genuinely poor scans; measure before adopting. |
-| Labeled set (20–30 docs) + `eval/run_eval.py` | 2 days | — | High. Without it, none of the above can be shown to have helped. |
-| CI workflow + starter test suite | 1 day | — | High |
+| CI workflow + starter test suite | 1 day | — | High. `run_eval --fail-under` is already a usable gate. |
 | `/metrics` + Prometheus/Grafana | 1–2 days | — | Low until there is production traffic |
 | ONNX INT8 quantization + benchmark | 1–2 days | — | Low |
 
@@ -119,18 +128,21 @@ They are planning-grade, not commitments.
 ## 4. Suggested sequencing
 
 1. ~~**Validation first**~~ — done.
-2. **Eval harness + labeled set** (~2 days) — now the top item. Self-healing is
-   live but its recovery rate is unmeasured, and the plan's Definition of Done
-   asks for that number. It also becomes the yardstick for the router work
-   below. The `validation` block in each response makes the "% requiring review"
-   metric close to free to compute.
-3. **Persistence + queue + `needs_review`** (~3.5–4.5 days) once there is a
+2. ~~**Eval harness**~~ — done. The runner, metrics and report exist and are
+   verified; only the data is missing.
+3. **Label 20–30 real documents** (~1–1.5 days) — now the top item, and the only
+   one that needs something the repo cannot produce for itself. Every number
+   below is unmeasurable until this exists, and it simultaneously settles both
+   open questions in §5.
+4. **Persistence + queue + `needs_review`** (~3.5–4.5 days) once there is a
    meaningful "this one failed validation" state worth storing and reviewing.
    The `needs_review` status already exists in the response; it just has nowhere
    durable to live.
-4. **Review app** (~1–2 days).
-5. **Router + preprocessing** (~3 days), measured against the eval harness.
-6. Extended scope (metrics, quantization) last.
+5. **Review app** (~1–2 days).
+6. **CI** (~1 day) — `run_eval --fail-under` against the labeled set, so
+   accuracy regressions fail a build rather than being discovered in production.
+7. Extended scope (metrics, quantization) last. ~~Router~~ is out of scope by
+   the §2 decision.
 
 ---
 
@@ -144,14 +156,53 @@ They are planning-grade, not commitments.
 2. ~~**Invoice or Purchase Order?**~~ Settled: Purchase Order, with an added
    `extension` field so `quantity × unit_price` has something to reconcile
    against.
-3. **Should the fast tier be available on GPU machines?** Required for real
-   per-document routing; currently the hardware check makes it either/or.
-4. **Is `PO_LINE_TOTAL_TOLERANCE_RATIO = 0.01` right?** Set to 1% without real
-   documents to calibrate against. Too tight and clean extractions burn retries;
-   too loose and a genuine misread slips through. The eval harness would settle
-   it; until then, watch for `validation.status = "needs_review"` on documents
-   that are actually fine.
-5. **Do any real documents omit line totals entirely?** `extension` is nullable
-   and a null skips the arithmetic check, so such documents get structural
-   validation only. If that is the common case, the reconciliation buys less
-   than it appears to.
+3. ~~**Should the fast tier be available on GPU machines?**~~ Settled: no. See
+   §2 — this closes out per-document routing as well.
+4. **Is `PO_LINE_TOTAL_TOLERANCE_RATIO = 0.01` right?** Still open, and still set
+   blind. Too tight and clean extractions burn retries; too loose and a genuine
+   misread slips through. The harness can now settle this in one run against
+   real documents — sweep the ratio and watch where `needs_review` starts firing
+   on documents that are actually fine. It cannot be settled against synthetic
+   fixtures, because the fixtures were written to whatever the current threshold
+   is.
+5. **Do any real documents omit line totals entirely?** Still open, and now
+   measurable: `null-extension-unverifiable` in the synthetic set demonstrates
+   the failure concretely — a quantity misread by a factor of 2.7 scores 91.7%
+   accuracy and passes every check, because a null `extension` leaves nothing to
+   contradict it. If most real documents omit line totals, the reconciliation
+   check protects far less than its presence suggests, and the case for human
+   review over self-healing gets stronger.
+
+---
+
+## 6. What the harness already shows
+
+Against the 12 synthetic cases — **fixtures, not documents**, so read these as
+properties of the validation layer and not as pipeline accuracy:
+
+```text
+Field accuracy       93.0%  (120/129 fields)
+Exact record match   66.7%  (8/12 cases)
+Requiring review      8.3%  (1/12 cases)
+Recovery rate        75.0%  (3 of 4 first-attempt failures corrected)
+```
+
+The one number here that is genuinely informative is the **three validation
+blind spots** — cases that satisfy every deterministic check and are still
+wrong. They are not fixture artifacts; they are structural:
+
+| Case | What happens | Why no check can catch it |
+|---|---|---|
+| `dropped-line-item` | A row is missed entirely; 70.6% accurate, reported valid | Every row that *was* returned reconciles |
+| `consistent-but-wrong` | Quantity misread, line total computed from it; 71.4% accurate, reported valid | The arithmetic agrees with itself |
+| `null-extension-unverifiable` | Quantity misread on a document with no line totals; 91.7% accurate, reported valid | A null `extension` leaves nothing to reconcile against |
+
+This is the honest limit of deterministic validation, and it is the argument for
+the labeled set rather than for more rules. The reconciliation check catches
+column shifts well; it cannot catch a plausible misreading, and it cannot notice
+something that is not there. Only ground truth can.
+
+It also explains a design choice worth keeping: the prompt tells the model to
+copy the line total **as printed** rather than compute it. A model that computes
+turns every quantity misread into `consistent-but-wrong` — silently valid, and
+undetectable without ground truth.

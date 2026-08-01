@@ -290,7 +290,7 @@ def configure_third_party_logging() -> None:
 
 
 def configure_app_logging() -> None:
-    for logger_name in ("app", "api", "config", "core", "services"):
+    for logger_name in ("app", "api", "config", "core", "eval", "services"):
         app_logger = logging.getLogger(logger_name)
         app_logger.setLevel(logging.INFO)
         # Do not propagate: paddlex installs its own root handler on import, so
