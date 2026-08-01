@@ -28,23 +28,26 @@ ENV/
 # ==============================================================================
 # 4. APPLICATION TEMPORARY FILES & ARTIFACTS
 # ==============================================================================
-.tmp_doc_parse/
-outputs/
+# Leading "/" anchors these to the repo root. Without it, a pattern like
+# "llama/" or "models/" also matches a *source package* of that name at any
+# depth (services/llama/, core/models/) and silently drops it from the repo.
+/.tmp_doc_parse/
+/outputs/
 *.log
 
 # ==============================================================================
 # 5. LOCAL TEST DATA (GIT-IGNORED FOR PRIVACY)
 # ==============================================================================
-data/
-data_test/
+/data/
+/data_test/
 
 # ==============================================================================
 # 6. AI MODELS & RUNTIME BINARIES (HEAVY DATA)
 # ==============================================================================
-.paddlex/
-.paddleocr/
-llama/
-models/
+/.paddlex/
+/.paddleocr/
+/llama/
+/models/
 test/
 tests/
 docs/
