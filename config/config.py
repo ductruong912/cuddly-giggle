@@ -18,6 +18,24 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(REPO_ROOT / ".env", override=False)
 
 
+def mask_database_url(url: str) -> str:
+    """Strip the password from a connection string so it can be logged.
+
+    Connection strings routinely reach logs through startup lines and error
+    messages, and they carry a credential.
+    """
+    if not url:
+        return ""
+    scheme, separator, remainder = url.partition("://")
+    if not separator or "@" not in remainder:
+        return url
+    credentials, _, host = remainder.rpartition("@")
+    user, has_password, _ = credentials.partition(":")
+    if not has_password:
+        return url
+    return f"{scheme}://{user}:***@{host}"
+
+
 def _repo_path_from_env(name: str, default: str) -> str:
     value = Path(os.getenv(name, default).strip() or default)
     return str(value if value.is_absolute() else (REPO_ROOT / value).resolve())
@@ -176,6 +194,19 @@ class Settings:
     max_upload_bytes: int = _get_int("MAX_UPLOAD_BYTES", 50 * 1024 * 1024)
     pdf_max_pages: int = _get_int("PDF_MAX_PAGES", 100)
 
+    # --- Persistence ---
+    # Empty DATABASE_URL keeps the service file-only, exactly as before.
+    database_url: str                    = os.getenv("DATABASE_URL", "").strip()
+    database_pool_min_size: int          = _get_int("DATABASE_POOL_MIN_SIZE", 1)
+    database_pool_max_size: int          = _get_int("DATABASE_POOL_MAX_SIZE", 8)
+    database_connect_timeout_seconds: int = _get_int("DATABASE_CONNECT_TIMEOUT_SECONDS", 10)
+    # A query that hangs would hold an io slot; Postgres kills it instead.
+    database_statement_timeout_ms: int   = _get_int("DATABASE_STATEMENT_TIMEOUT_MS", 15000)
+    database_migrate_on_startup: bool    = _get_bool("DATABASE_MIGRATE_ON_STARTUP", True)
+    # When on, a failed write fails the request: a record you did not record is
+    # worse than a retryable error. Turn off for best-effort logging.
+    database_persistence_required: bool  = _get_bool("DATABASE_PERSISTENCE_REQUIRED", True)
+
     # --- Paths & misc ---
     temp_dir: str                        = _get_str("DOC_TEMP_DIR", ".tmp_doc_parse")
     parse_output_dir: str                = _get_str("PARSE_OUTPUT_DIR", "outputs")
@@ -211,6 +242,13 @@ class Settings:
                 raise ValueError(f"{name} must be greater than zero")
         if self.parse_output_retention_days < 0:
             raise ValueError("PARSE_OUTPUT_RETENTION_DAYS cannot be negative")
+        if self.database_url:
+            if self.database_pool_min_size < 0:
+                raise ValueError("DATABASE_POOL_MIN_SIZE cannot be negative")
+            if self.database_pool_max_size < max(1, self.database_pool_min_size):
+                raise ValueError("DATABASE_POOL_MAX_SIZE must be at least DATABASE_POOL_MIN_SIZE")
+            if self.database_statement_timeout_ms < 0:
+                raise ValueError("DATABASE_STATEMENT_TIMEOUT_MS cannot be negative")
         if self.parse_output_sweep_minutes < 1:
             raise ValueError("PARSE_OUTPUT_SWEEP_MINUTES must be at least 1")
         if self.max_upload_bytes < 1:
@@ -221,6 +259,16 @@ class Settings:
             raise ValueError("LLM_SELF_HEAL_MAX_RETRIES cannot be negative")
         if self.po_line_total_tolerance_ratio < 0:
             raise ValueError("PO_LINE_TOTAL_TOLERANCE_RATIO cannot be negative")
+
+    @property
+    def persistence_enabled(self) -> bool:
+        """True when a database is configured; otherwise results are files only."""
+        return bool(self.database_url)
+
+    @property
+    def masked_database_url(self) -> str:
+        """The connection string with its password removed, safe to log."""
+        return mask_database_url(self.database_url)
 
     @property
     def resolved_thread_pool_size(self) -> int:

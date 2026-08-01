@@ -15,6 +15,11 @@ slowapi==0.1.9
 # Transitive pin: paddleocr / onnxruntime are sensitive to the numpy 2.x line.
 numpy==2.3.5
 
+# Extraction history (optional at runtime: no DATABASE_URL, no database).
+# [binary] ships libpq, so no system PostgreSQL client is needed.
+psycopg[binary]==3.2.10
+psycopg-pool==3.2.6
+
 # Testing
 pytest==8.3.5
 

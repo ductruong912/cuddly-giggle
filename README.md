@@ -339,6 +339,51 @@ at import, making a malformed schema a startup error instead of a per-request
 | `503` | A dependency is unavailable, or every slot for a stage stayed busy — retry after `Retry-After`. |
 | `504` | A stage exceeded its execution timeout and the work was abandoned. |
 
+## Extraction history (PostgreSQL)
+
+Optional. With `DATABASE_URL` unset the service behaves exactly as before and
+writes results to `outputs/` only. Set it and every extraction is also recorded
+and queryable:
+
+```bash
+docker compose up -d postgres
+export DATABASE_URL=postgresql://docpipe:docpipepass@127.0.0.1:5433/docpipeline
+```
+
+The schema is applied on startup — numbered SQL files in
+[services/persistence/migrations/](services/persistence/migrations/), tracked in
+a `schema_migrations` table, under a Postgres advisory lock so two instances
+starting together cannot race. No Alembic, and therefore no SQLAlchemy.
+
+Two tables. `extractions` holds the record, the validation verdict and the full
+JSONB payload, with `po_number` and `po_date` denormalised for lookup.
+`extraction_items` holds the line items relationally, so you can ask which
+orders contain a part — with money as `NUMERIC(18,4)`, never floating point.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /v1/extractions` | List, newest first. Filters: `po_number`, `status`, `toto_number`. Paged with `limit`/`offset`. |
+| `GET /v1/extractions/{request_id}` | One extraction with its line items. |
+
+```bash
+curl 'localhost:8000/v1/extractions?status=needs_review&limit=20'
+curl 'localhost:8000/v1/extractions?toto_number=TX703AR'
+```
+
+Re-processing the same `request_id` updates in place rather than duplicating, so
+a retry is idempotent.
+
+**A failed write fails the request** (`DATABASE_PERSISTENCE_REQUIRED=true`).
+Returning `200` for a result that was never recorded loses data silently, and
+the caller can retry a `503`. Set it to `false` for best-effort logging. Startup
+also fails on an unreachable database rather than deferring the error to the
+first upload.
+
+> Note the interaction with `PARSE_OUTPUT_RETENTION_DAYS`: the file sweep deletes
+> artifacts after 14 days by default. Once the database is the system of record
+> that is usually what you want, but the Markdown is only kept in `outputs/`
+> unless you read it back from the `markdown` column.
+
 ## Health and readiness
 
 | Endpoint | Answers | Use it for |

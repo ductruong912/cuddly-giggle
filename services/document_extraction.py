@@ -25,6 +25,7 @@ from core.domain.schemas import (
 from services.concurrency import PipelineLimiters
 from services.llm_extraction import LLMExtractionService
 from services.output import save_extraction_artifacts, save_parse_artifacts
+from services.persistence import ExtractionRecord, ExtractionStore
 from services.validation import ExtractionOutcome, SelfHealingExtractor
 
 
@@ -52,12 +53,14 @@ class DocumentExtractionService:
         *,
         route_label: str,
         app_settings: Settings = settings,
+        store: ExtractionStore | None = None,
     ) -> None:
         self.parser = parser
         self.extractor = extractor
         self.limiters = limiters
         self.route_label = route_label
         self.settings = app_settings
+        self.store = store
         self.validator = SelfHealingExtractor(extractor, app_settings=app_settings)
 
     async def extract_document(self, source_path: Path, *, filename: str) -> LLMExtractionResponse:
@@ -82,6 +85,13 @@ class DocumentExtractionService:
                 self._save_artifacts, parse_response, outcome.data, filename
             )
             save_elapsed = time.perf_counter() - save_start
+
+            await self._persist(
+                parse_response,
+                outcome,
+                filename,
+                duration_ms=int((time.perf_counter() - total_start) * 1000),
+            )
         except RuntimeError:
             # Engine, LLM-provider and admission failures already map to a precise
             # status code in the API layer; let them through untouched.
@@ -149,6 +159,52 @@ class DocumentExtractionService:
         if artifact_name:
             await self.limiters.io.run(save_extraction_artifacts, outcome.data, artifact_name)
         return self._build_response(parse_response, outcome)
+
+    async def _persist(
+        self,
+        parse_response: ParseResponse,
+        outcome: ExtractionOutcome,
+        filename: str,
+        *,
+        duration_ms: int,
+    ) -> None:
+        """Record the extraction in the database, when one is configured.
+
+        With ``DATABASE_PERSISTENCE_REQUIRED`` on, a write failure fails the
+        request: returning 200 for a result that was never recorded loses data
+        silently, and the caller can retry a 503.
+        """
+        if self.store is None:
+            return
+
+        record = ExtractionRecord(
+            request_id=parse_response.request_id,
+            source_filename=filename,
+            route=self.route_label,
+            engine=parse_response.engine_name or None,
+            page_count=len(parse_response.pages),
+            validation_status="valid" if outcome.is_valid else "needs_review",
+            attempts=outcome.attempts,
+            healed=outcome.healed,
+            data=outcome.data,
+            issues=[violation.as_dict() for violation in outcome.violations],
+            markdown=parse_response.markdown,
+            duration_ms=duration_ms,
+        )
+        try:
+            await self.limiters.io.run(self.store.save, record)
+        except Exception:
+            logger.exception(
+                pipeline_message(
+                    "FAILED", "could not persist the extraction",
+                    request_id=parse_response.request_id,
+                )
+            )
+            if self.settings.database_persistence_required:
+                raise
+            logger.warning(
+                "continuing without a stored record; DATABASE_PERSISTENCE_REQUIRED is off"
+            )
 
     async def _extract(self, parse_response: ParseResponse) -> ExtractionOutcome:
         """Extract and validate inside one LLM slot, so retries cost latency only."""

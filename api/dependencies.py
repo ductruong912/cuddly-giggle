@@ -22,6 +22,7 @@ from services.llm_extraction import LLMExtractionService
 from services.local_ocr_selector import has_usable_gpu
 from services.online_orchestrator import OnlineParseOrchestrator
 from services.orchestrator import ParseOrchestrator
+from services.persistence import DatabasePool, ExtractionStore
 from services.vl_runtime import VLRuntimeManager
 
 
@@ -77,6 +78,33 @@ def get_llm_extractor() -> LLMExtractionService:
     return _singleton("llm_extractor", LLMExtractionService)
 
 
+def get_database_pool() -> DatabasePool:
+    """The process-wide connection pool. Opened by the application lifespan."""
+    return _singleton("database_pool", lambda: DatabasePool(settings))
+
+
+def get_extraction_store() -> ExtractionStore | None:
+    """History store, or ``None`` when no database is configured."""
+    if not settings.persistence_enabled:
+        return None
+    return _singleton("extraction_store", lambda: ExtractionStore(get_database_pool()))
+
+
+def require_extraction_store() -> ExtractionStore:
+    """The history store for routes that cannot work without one.
+
+    Raises:
+        HTTPException: 503 when the service is running without a database.
+    """
+    store = get_extraction_store()
+    if store is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Extraction history is unavailable: no DATABASE_URL is configured.",
+        )
+    return store
+
+
 def get_local_extraction_service() -> DocumentExtractionService:
     """Full pipeline for the local OCR route."""
     return _singleton(
@@ -87,6 +115,7 @@ def get_local_extraction_service() -> DocumentExtractionService:
             get_pipeline_limiters(),
             route_label="local",
             app_settings=settings,
+            store=get_extraction_store(),
         ),
     )
 
@@ -101,6 +130,7 @@ def get_online_extraction_service() -> DocumentExtractionService:
             get_pipeline_limiters(),
             route_label="online",
             app_settings=settings,
+            store=get_extraction_store(),
         ),
     )
 

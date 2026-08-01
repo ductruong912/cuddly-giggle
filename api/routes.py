@@ -7,16 +7,18 @@ signatures at import time and cannot build a field from a stringified
 import logging
 
 # pyrefly: ignore [missing-import]
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from api.dependencies import (
     ensure_gpu_gguf_runtime,
+    get_database_pool,
     get_local_extraction_service,
     get_online_extraction_service,
     get_orchestrator,
     get_pipeline_limiters,
     get_upload_stager,
+    require_extraction_store,
 )
 from api.errors import UnsupportedContentType
 from api.rate_limit import limiter
@@ -36,6 +38,8 @@ from core.domain.schemas import LLMExtractionResponse
 from services.concurrency import PipelineLimiters
 from services.document_extraction import DocumentExtractionService
 from services.local_ocr_selector import has_usable_gpu
+from services.persistence import ExtractionQuery, ExtractionStore
+from services.persistence.extraction_store import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from services.orchestrator import ParseOrchestrator
 from services.output import save_parse_artifacts
 
@@ -91,6 +95,7 @@ def readyz(
         "vl_runtime": _vl_runtime_state(request),
         "llm_credentials": "ok" if settings.openai_api_key else "missing",
         "stages": "ok" if not limiters.degraded_stages else "degraded",
+        "database": _database_state(),
     }
     degraded = limiters.degraded_stages
     ready = all(state == "ok" for state in checks.values())
@@ -105,6 +110,13 @@ def readyz(
         payload["degraded_stages"] = degraded
         logger.warning("readiness degraded: stages holding abandoned slots: %s", degraded)
     return JSONResponse(status_code=200 if ready else 503, content=payload)
+
+
+def _database_state() -> str:
+    """Whether the history database can serve a query, or is not configured at all."""
+    if not settings.persistence_enabled:
+        return "ok"
+    return "ok" if get_database_pool().check() else "down"
 
 
 def _vl_runtime_state(request: Request) -> str:
@@ -124,6 +136,54 @@ def _vl_runtime_state(request: Request) -> str:
 
 doc_router = APIRouter(prefix="/v1/extract", tags=["documents"])
 ocr_router = APIRouter(prefix="/v1/doc", tags=["documents"])
+
+
+# =====================================================================================
+# History
+# =====================================================================================
+
+history_router = APIRouter(prefix="/v1/extractions", tags=["history"])
+
+
+@history_router.get("")
+def list_extractions(
+    po_number: str | None = Query(default=None, description="Exact purchase order number."),
+    status: str | None = Query(
+        default=None, description="Filter by validation status: valid or needs_review."
+    ),
+    toto_number: str | None = Query(
+        default=None, description="Only orders containing this item code."
+    ),
+    limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(default=0, ge=0),
+    store: ExtractionStore = Depends(require_extraction_store),
+) -> dict[str, object]:
+    """List past extractions, newest first."""
+    query = ExtractionQuery(
+        po_number=po_number,
+        validation_status=status,
+        toto_number=toto_number,
+        limit=limit,
+        offset=offset,
+    )
+    return {
+        "total": store.count(query),
+        "limit": limit,
+        "offset": offset,
+        "items": store.list(query),
+    }
+
+
+@history_router.get("/{request_id}")
+def get_extraction(
+    request_id: str,
+    store: ExtractionStore = Depends(require_extraction_store),
+) -> dict[str, object]:
+    """Fetch one past extraction and its line items."""
+    record = store.get(request_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"No extraction for request_id {request_id}")
+    return record
 
 
 @doc_router.post("/local", response_model=LLMExtractionResponse)
