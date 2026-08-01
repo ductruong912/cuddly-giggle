@@ -19,6 +19,7 @@ services:
       - ./models:/models:ro
     ports:
       - "8080:8080"
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || wget -qO- http://localhost:8080/health || exit 1"]
       interval: 10s
@@ -54,12 +55,27 @@ services:
       PADDLEOCR_VL_REC_API_MODEL_NAME: paddleocr-vl
       PADDLE_PDX_CACHE_HOME: /app/.paddlex
       PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "true"
+      # llama runs --parallel 1, so a second concurrent OCR request only queues.
+      OCR_MAX_CONCURRENCY: "${OCR_MAX_CONCURRENCY:-2}"
+      LLM_MAX_CONCURRENCY: "${LLM_MAX_CONCURRENCY:-8}"
+      STAGE_QUEUE_TIMEOUT_SECONDS: "${STAGE_QUEUE_TIMEOUT_SECONDS:-30}"
+      MAX_UPLOAD_BYTES: "${MAX_UPLOAD_BYTES:-52428800}"
+      PDF_MAX_PAGES: "${PDF_MAX_PAGES:-100}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      DATALAB_API_KEY: "${DATALAB_API_KEY:-}"
     volumes:
       - ./models:/app/models:ro
       - ./.paddlex:/app/.paddlex
       - ./outputs:/app/outputs
     ports:
       - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python3.11 -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=4)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     deploy:
       resources:
         reservations:
