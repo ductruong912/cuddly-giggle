@@ -6,10 +6,6 @@ import logging
 import time
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
-_GPT5_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
-
 from config.config import Settings, settings
 from config.pipeline_logging import pipeline_message
 from core.domain.schemas import ParseResponse
@@ -18,6 +14,11 @@ from core.prompts.prompt import (
     EXTRACTION_JSON_SCHEMA,
     EXTRACTION_SCHEMA_NAME,
 )
+
+
+logger = logging.getLogger(__name__)
+
+_GPT5_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
 
 
 class LLMExtractionError(RuntimeError):
@@ -142,13 +143,15 @@ class LLMExtractionService:
         return isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError))
 
     def _create_client(self) -> Any:
+        # A missing key or SDK is a server-side gap, not a bad request: surface it
+        # as "unavailable" (503) rather than "unprocessable" (422).
         if not self.settings.openai_api_key:
-            raise LLMExtractionError("OPENAI_API_KEY is not configured")
+            raise LLMExtractionUnavailable("OPENAI_API_KEY is not configured")
         try:
             # pyrefly: ignore [missing-import]
             from openai import OpenAI
         except ImportError as exc:
-            raise LLMExtractionError("OpenAI SDK is not installed") from exc
+            raise LLMExtractionUnavailable("OpenAI SDK is not installed") from exc
         return OpenAI(
             api_key=self.settings.openai_api_key,
             timeout=self.settings.openai_timeout_seconds,

@@ -11,7 +11,9 @@ from dotenv import load_dotenv
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(Path.cwd() / ".env", override=False)
+# Load from the repo root, not the working directory: a service started from
+# elsewhere (Windows service, systemd, `python f:\...\main.py`) must still see .env.
+load_dotenv(REPO_ROOT / ".env", override=False)
 
 
 def _repo_path_from_env(name: str, default: str) -> str:
@@ -146,6 +148,19 @@ class Settings:
     rate_limit_default: str = _get_str("RATE_LIMIT_DEFAULT", "30/minute")
     rate_limit_extract: str = _get_str("RATE_LIMIT_EXTRACT", "10/minute")
 
+    # --- Concurrency & admission control ---
+    # One GPU and a llama.cpp server started with --parallel 1 serialise most OCR
+    # work, so admitting more than a couple of parses at a time only grows the queue.
+    ocr_max_concurrency: int = _get_int("OCR_MAX_CONCURRENCY", 2)
+    llm_max_concurrency: int = _get_int("LLM_MAX_CONCURRENCY", 8)
+    stage_queue_timeout_seconds: float = _get_float("STAGE_QUEUE_TIMEOUT_SECONDS", 30.0)
+    # 0 lets the app derive the worker-thread count from the stage limits.
+    server_thread_pool_size: int = _get_int("SERVER_THREAD_POOL_SIZE", 0)
+
+    # --- Request guards ---
+    max_upload_bytes: int = _get_int("MAX_UPLOAD_BYTES", 50 * 1024 * 1024)
+    pdf_max_pages: int = _get_int("PDF_MAX_PAGES", 100)
+
     # --- Paths & misc ---
     temp_dir: str                        = _get_str("DOC_TEMP_DIR", ".tmp_doc_parse")
     parse_output_dir: str                = _get_str("PARSE_OUTPUT_DIR", "outputs")
@@ -162,6 +177,29 @@ class Settings:
             )
         if self.fast_ocr_datalab_timeout_seconds <= 0:
             raise ValueError("FAST_OCR_DATALAB_TIMEOUT_SECONDS must be greater than zero")
+        if self.ocr_max_concurrency < 1:
+            raise ValueError("OCR_MAX_CONCURRENCY must be at least 1")
+        if self.llm_max_concurrency < 1:
+            raise ValueError("LLM_MAX_CONCURRENCY must be at least 1")
+        if self.stage_queue_timeout_seconds <= 0:
+            raise ValueError("STAGE_QUEUE_TIMEOUT_SECONDS must be greater than zero")
+        if self.max_upload_bytes < 1:
+            raise ValueError("MAX_UPLOAD_BYTES must be at least 1")
+        if self.pdf_max_pages < 1:
+            raise ValueError("PDF_MAX_PAGES must be at least 1")
+
+    @property
+    def resolved_thread_pool_size(self) -> int:
+        """Worker threads to allow, sized from the stage limits rather than anyio's default 40.
+
+        Every admitted OCR and LLM request occupies one worker thread, plus a few
+        for upload staging and synchronous dependencies. Anyio's default is far
+        larger than this machine can usefully run and lets bursts thrash the GPU.
+        """
+        if self.server_thread_pool_size > 0:
+            return self.server_thread_pool_size
+        stage_threads = self.ocr_max_concurrency + self.llm_max_concurrency
+        return max(8, stage_threads + 4)
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +282,9 @@ def configure_app_logging() -> None:
     for logger_name in ("app", "api", "config", "core", "services"):
         app_logger = logging.getLogger(logger_name)
         app_logger.setLevel(logging.INFO)
-        app_logger.propagate = True
+        # Do not propagate: paddlex installs its own root handler on import, so
+        # bubbling up would print every application line a second time in its format.
+        app_logger.propagate = False
 
         already_configured = any(
             getattr(h, "_cuddly_giggle_app_handler", False) for h in app_logger.handlers

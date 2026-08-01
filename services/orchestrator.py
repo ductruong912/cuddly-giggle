@@ -23,6 +23,10 @@ from services.output import filter_tables_markdown
 logger = logging.getLogger(__name__)
 
 
+class DocumentTooLarge(Exception):
+    """The document has more pages than the OCR path is allowed to process."""
+
+
 class ParseOrchestrator:
     def __init__(
         self,
@@ -41,13 +45,14 @@ class ParseOrchestrator:
     def parse(
         self,
         input_path: str,
-        options: ParseOptions,
+        options: ParseOptions | None = None,
         *,
         request_id: str | None = None,
     ) -> ParseResponse:
+        """Route the file to the cheapest engine that can read it, then normalize."""
         resolved_request_id = request_id or f"req_{uuid.uuid4().hex[:12]}"
         with request_logging_context(resolved_request_id):
-            return self._parse(input_path, options, resolved_request_id)
+            return self._parse(input_path, options or ParseOptions(), resolved_request_id)
 
     def _parse(self, input_path: str, options: ParseOptions, request_id: str) -> ParseResponse:
         total_start = time.perf_counter()
@@ -113,6 +118,7 @@ class ParseOrchestrator:
                     self._compact_error(str(exc)),
                 )
 
+        self._guard_ocr_page_count(input_path)
         logger.info(pipeline_message("PHASE 1", "route=ocr engine=%s"), self.primary_engine.name)
         stage_start = time.perf_counter()
         result = self.primary_engine.parse(input_path, options.lang_hint.value)
@@ -133,6 +139,30 @@ class ParseOrchestrator:
             time.perf_counter() - total_start,
         )
         return response
+
+    def _guard_ocr_page_count(self, input_path: str) -> None:
+        """Reject PDFs too long to OCR before they occupy an OCR slot for an hour.
+
+        Only the OCR path is capped: the native text engines are fast even on long
+        documents, and their output is already bounded by LLM_MAX_INPUT_CHARS.
+        """
+        if Path(input_path).suffix.lower() != ".pdf":
+            return
+        try:
+            # pyrefly: ignore [missing-import]
+            import fitz  # PyMuPDF
+
+            with fitz.open(input_path) as document:
+                page_count = document.page_count
+        except Exception:
+            logger.warning("could not read the PDF page count; skipping the page cap", exc_info=True)
+            return
+
+        if page_count > self.settings.pdf_max_pages:
+            raise DocumentTooLarge(
+                f"This PDF has {page_count} pages; the OCR path accepts at most "
+                f"{self.settings.pdf_max_pages}. Split the document or raise PDF_MAX_PAGES."
+            )
 
     def _should_try_pdf_text(self, input_path: str) -> bool:
         return self.settings.pdf_text_parse_enabled and Path(input_path).suffix.lower() == ".pdf"

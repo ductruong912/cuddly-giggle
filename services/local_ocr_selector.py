@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import lru_cache
 import logging
 import subprocess
 
@@ -34,8 +35,14 @@ class LocalOCRSelector:
         return self._cpu_factory(self.settings)
 
 
+@lru_cache(maxsize=1)
 def has_usable_gpu() -> bool:
-    """Return true when a CUDA runtime or NVIDIA GPU is available locally."""
+    """Return true when a CUDA runtime or NVIDIA GPU is available locally.
+
+    Cached: this runs on every request to the local route, and the uncached path
+    can spawn `nvidia-smi` and wait up to two seconds. Hardware does not change
+    while the process is running.
+    """
     try:
         import torch  # type: ignore
 

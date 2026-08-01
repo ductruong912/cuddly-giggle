@@ -16,6 +16,11 @@ class ModelAssetsMissing(RuntimeError):
 
 _MANIFEST_NAME = "cuddly-giggle-models.json"
 
+# Profiles already proven complete this process. The check reads the manifest and
+# stats every recorded model file, which is far too much I/O to repeat per request;
+# `set` membership and `add` are atomic under the GIL, so no lock is needed.
+_verified_profiles: set[tuple[str, str]] = set()
+
 
 def _cache_path(app_settings: SettingsLike) -> Path:
     return Path(app_settings.paddlex_cache_home)
@@ -52,7 +57,20 @@ def write_model_profile(app_settings: SettingsLike, profile: str) -> None:
 
 
 def require_model_profile(app_settings: SettingsLike, profile: str) -> None:
-    """Fail before PaddleX can initiate an implicit network download."""
+    """Fail before PaddleX can initiate an implicit network download.
+
+    The result is memoised per (cache directory, profile): a prepared profile does
+    not become unprepared while the service is running, and re-verifying it on
+    every parse would stat every cached model file again.
+    """
+    cache_key = (str(_cache_path(app_settings)), profile)
+    if cache_key in _verified_profiles:
+        return
+    _verify_model_profile(app_settings, profile)
+    _verified_profiles.add(cache_key)
+
+
+def _verify_model_profile(app_settings: SettingsLike, profile: str) -> None:
     manifest_path = _manifest_path(app_settings)
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

@@ -1,77 +1,61 @@
-"""HTTP routes and the orchestrator dependency."""
-from functools import lru_cache
+"""HTTP routes. Request translation only — the pipeline lives in the service layer.
+
+Note: no ``from __future__ import annotations`` here. FastAPI resolves handler
+signatures at import time and cannot build a field from a stringified
+``UploadFile | None``.
+"""
 import logging
-from pathlib import Path
-import shutil
-import time
-import uuid
 
 # pyrefly: ignore [missing-import]
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import PlainTextResponse
-# pyrefly: ignore [missing-import]
-from starlette.concurrency import run_in_threadpool
 
+from api.dependencies import (
+    ensure_gpu_gguf_runtime,
+    get_local_extraction_service,
+    get_online_extraction_service,
+    get_orchestrator,
+    get_pipeline_limiters,
+    get_upload_stager,
+)
+from api.errors import UnsupportedContentType
 from api.rate_limit import limiter
+from api.uploads import (
+    MARKDOWN_SUFFIXES,
+    MULTIPART_CONTENT_TYPE,
+    StagedUpload,
+    UploadStager,
+    read_markdown_payload,
+    read_markdown_upload,
+    resolve_upload,
+    upload_suffix,
+)
 from config.config import settings
-from config.pipeline_logging import pipeline_message, request_logging_context
-from core.domain.schemas import (
-    LLMExtractionOCRMetadata,
-    LLMExtractionResponse,
-    ParseDecision,
-    ParseOptions,
-    ParseResponse,
-)
-from services.llm_extraction import (
-    LLMExtractionError,
-    LLMExtractionInputTooLarge,
-    LLMExtractionService,
-    LLMExtractionUnavailable,
-)
+from config.pipeline_logging import pipeline_message
+from core.domain.schemas import LLMExtractionResponse
+from services.concurrency import PipelineLimiters
+from services.document_extraction import DocumentExtractionService
 from services.orchestrator import ParseOrchestrator
-from services.online_orchestrator import OnlineParseOrchestrator
-from services.local_ocr_selector import has_usable_gpu
-from services.output import save_parse_artifacts, save_extraction_artifacts
-from services.vl_runtime import VLRuntimeManager
+from services.output import save_parse_artifacts
 
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_INPUT_SUFFIXES = frozenset(
+    {
+        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".xlsm",
+        ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff",
+    }
+)
+FAST_OCR_INPUT_SUFFIXES = frozenset(
+    {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
+)
+_MARKDOWN_BODY_CONTENT_TYPES = ("text/markdown", "text/plain", "application/json")
 
-# =====================================================================================
-# Dependencies
-# =====================================================================================
-
-@lru_cache(maxsize=1)
-def get_orchestrator() -> ParseOrchestrator:
-    return ParseOrchestrator()
-
-
-@lru_cache(maxsize=1)
-def get_online_orchestrator() -> OnlineParseOrchestrator:
-    return OnlineParseOrchestrator()
-
-
-@lru_cache(maxsize=1)
-def get_llm_extractor() -> LLMExtractionService:
-    return LLMExtractionService()
-
-
-def get_vl_runtime_manager(request: Request) -> VLRuntimeManager:
-    manager = getattr(request.app.state, "vl_runtime_manager", None)
-    if manager is None:
-        raise RuntimeError("VL runtime manager is not configured")
-    return manager
-
-
-def ensure_gpu_gguf_runtime(request: Request) -> None:
-    """Start llama.cpp only when the local GPU route uses the GGUF VLM."""
-    if not (has_usable_gpu() and settings.paddleocr_vl_use_gguf):
-        return
-    try:
-        get_vl_runtime_manager(request).ensure_ready()
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"VL GGUF runtime is unavailable: {exc}") from exc
+_LOCAL_UNSUPPORTED_MESSAGE = (
+    "Unsupported input type. Use PDF, Word, Excel, Markdown, or image files."
+)
+_ONLINE_UNSUPPORTED_MESSAGE = "Online OCR supports PDF and image files only."
 
 
 # =====================================================================================
@@ -82,8 +66,9 @@ health_router = APIRouter(tags=["health"])
 
 
 @health_router.get("/healthz")
-def healthz() -> dict[str, str]:
-    return {"status": "ok"}
+def healthz(limiters: PipelineLimiters = Depends(get_pipeline_limiters)) -> dict[str, object]:
+    """Liveness plus current occupancy of each bounded pipeline stage."""
+    return {"status": "ok", "stages": limiters.snapshot()}
 
 
 # =====================================================================================
@@ -93,219 +78,46 @@ def healthz() -> dict[str, str]:
 doc_router = APIRouter(prefix="/v1/extract", tags=["documents"])
 ocr_router = APIRouter(prefix="/v1/doc", tags=["documents"])
 
-SUPPORTED_INPUT_SUFFIXES = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".xlsm", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
-FAST_OCR_INPUT_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
-
 
 @doc_router.post("/local", response_model=LLMExtractionResponse)
 @limiter.limit(settings.rate_limit_extract)
 async def extract_local_document(
     request: Request,
     file: UploadFile | None = File(None),
-    orchestrator: ParseOrchestrator = Depends(get_orchestrator),
-    extractor: LLMExtractionService = Depends(get_llm_extractor),
+    service: DocumentExtractionService = Depends(get_local_extraction_service),
+    stager: UploadStager = Depends(get_upload_stager),
     _: None = Depends(ensure_gpu_gguf_runtime),
 ) -> LLMExtractionResponse:
-    total_start = time.perf_counter()
+    """Run local OCR plus structured extraction on an upload, or on supplied Markdown."""
     content_type = request.headers.get("content-type", "")
 
-    # 1. Handle multipart/form-data (File Upload)
-    if "multipart/form-data" in content_type:
-        uploaded_file = file
-        if uploaded_file is None:
-            form = await request.form()
-            uploaded_file = form.get("file")
-        if not uploaded_file or not (hasattr(uploaded_file, "filename") and hasattr(uploaded_file, "file")):
-            raise HTTPException(status_code=400, detail="Missing 'file' field in multipart/form-data upload.")
-
-        suffix = Path(uploaded_file.filename or "").suffix.lower()
-
-        # 1a. If it's a Markdown file, bypass OCR and extract directly
-        if suffix in {".md", ".markdown"}:
-            try:
-                markdown = (await uploaded_file.read()).decode("utf-8")
-            except UnicodeDecodeError as exc:
-                raise HTTPException(status_code=400, detail="Markdown file must be UTF-8 encoded.") from exc
-
-            parse_response = ParseResponse(
-                request_id=f"llm_{uuid.uuid4().hex[:12]}",
-                decision=ParseDecision(reason="Provided parsed Markdown via file upload."),
-                pages=[],
-                blocks=[],
-                tables=[],
-                reading_order=[],
-                markdown=markdown,
+    if MULTIPART_CONTENT_TYPE in content_type:
+        upload = await resolve_upload(request, file)
+        if upload_suffix(upload) in MARKDOWN_SUFFIXES:
+            markdown = await read_markdown_upload(upload)
+            return await service.extract_markdown(
+                markdown,
+                reason="Provided parsed Markdown via file upload.",
+                artifact_name=upload.filename or "extraction.json",
             )
-            try:
-                data = extractor.extract(parse_response)
-                save_extraction_artifacts(data, uploaded_file.filename or "extraction.json")
-                return LLMExtractionResponse(
-                    request_id=parse_response.request_id,
-                    ocr=LLMExtractionOCRMetadata(
-                        decision=parse_response.decision.reason,
-                        page_count=0,
-                    ),
-                    data=data,
-                )
-            except LLMExtractionInputTooLarge as exc:
-                raise HTTPException(status_code=413, detail=str(exc)) from exc
-            except LLMExtractionUnavailable as exc:
-                raise HTTPException(status_code=503, detail=str(exc)) from exc
-            except LLMExtractionError as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-        # 1b. If it's a supported document format, run the full pipeline (OCR + LLM)
-        elif suffix in SUPPORTED_INPUT_SUFFIXES:
-            temp_root = Path(settings.temp_dir)
-            temp_root.mkdir(parents=True, exist_ok=True)
-            temp_path = temp_root / f"{uuid.uuid4().hex}{suffix}"
-            request_id = f"req_{uuid.uuid4().hex[:12]}"
-            try:
-                with temp_path.open("wb") as f:
-                    shutil.copyfileobj(uploaded_file.file, f)
-                logger.info(
-                    pipeline_message(
-                        # "PHASE 1",
-                        "received file=%s suffix=%s size_bytes=%s",
-                        # request_id=request_id,
-                    ),
-                    uploaded_file.filename or temp_path.name,
-                    suffix,
-                    temp_path.stat().st_size,
-                )
-                response = orchestrator.parse(
-                    str(temp_path),
-                    ParseOptions(),
-                    request_id=request_id,
-                )
-                with request_logging_context(response.request_id):
-                    data = extractor.extract(response)
-                
-                # Save markdown OCR result and structured JSON output
-                saved_markdown = save_parse_artifacts(response, uploaded_file.filename or temp_path.name)
-                saved_json = save_extraction_artifacts(data, uploaded_file.filename or temp_path.name)
-
-                logger.info(
-                    pipeline_message(
-                        "COMPLETED",
-                        "pages=%s blocks=%s tables=%s total=%.3fs saved_markdown=%s saved_json=%s",
-                        request_id=response.request_id,
-                    ),
-                    len(response.pages),
-                    len(response.blocks),
-                    len(response.tables),
-                    time.perf_counter() - total_start,
-                    ",".join(saved_markdown) or "none",
-                    ",".join(saved_json) or "none",
-                )
-                return LLMExtractionResponse(
-                    request_id=response.request_id,
-                    ocr=LLMExtractionOCRMetadata(
-                        decision=response.decision.reason,
-                        page_count=len(response.pages),
-                    ),
-                    data=data,
-                )
-            except LLMExtractionInputTooLarge as exc:
-                raise HTTPException(status_code=413, detail=str(exc)) from exc
-            except LLMExtractionUnavailable as exc:
-                raise HTTPException(status_code=503, detail=str(exc)) from exc
-            except LLMExtractionError as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
-            except RuntimeError as exc:
-                raise HTTPException(status_code=503, detail=str(exc)) from exc
-            except Exception as exc:
-                logger.error(
-                    pipeline_message("FAILED", "unexpected extraction request error", request_id=request_id),
-                    exc_info=True,
-                )
-                raise HTTPException(status_code=500, detail=f"Unexpected extraction error: {exc}") from exc
-            finally:
-                if temp_path.exists():
-                    temp_path.unlink(missing_ok=True)
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="Unsupported input type. Use PDF, Word, Excel, Markdown, or image files."
-            )
-
-    # 2. Handle plain text / markdown bodies
-    elif "text/markdown" in content_type or "text/plain" in content_type:
-        body_bytes = await request.body()
-        try:
-            markdown = body_bytes.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise HTTPException(status_code=400, detail="Request body must be UTF-8 encoded.") from exc
-
-        parse_response = ParseResponse(
-            request_id=f"llm_{uuid.uuid4().hex[:12]}",
-            decision=ParseDecision(reason="Provided raw Markdown body."),
-            pages=[],
-            blocks=[],
-            tables=[],
-            reading_order=[],
-            markdown=markdown,
+        return await _extract_upload(
+            service,
+            stager,
+            upload,
+            allowed_suffixes=SUPPORTED_INPUT_SUFFIXES,
+            unsupported_message=_LOCAL_UNSUPPORTED_MESSAGE,
         )
-        try:
-            data = extractor.extract(parse_response)
-            return LLMExtractionResponse(
-                request_id=parse_response.request_id,
-                ocr=LLMExtractionOCRMetadata(
-                    decision=parse_response.decision.reason,
-                    page_count=0,
-                ),
-                data=data,
-            )
-        except LLMExtractionInputTooLarge as exc:
-            raise HTTPException(status_code=413, detail=str(exc)) from exc
-        except LLMExtractionUnavailable as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        except LLMExtractionError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    # 3. Handle application/json payloads
-    elif "application/json" in content_type:
-        try:
-            body_json = await request.json()
-            if not isinstance(body_json, dict) or "markdown" not in body_json:
-                raise HTTPException(status_code=400, detail="JSON payload must be an object containing a 'markdown' key.")
-            markdown = str(body_json["markdown"])
-        except Exception as exc:
-            if isinstance(exc, HTTPException):
-                raise
-            raise HTTPException(status_code=400, detail="Invalid JSON body.") from exc
-
-        parse_response = ParseResponse(
-            request_id=f"llm_{uuid.uuid4().hex[:12]}",
-            decision=ParseDecision(reason="Provided Markdown via JSON payload."),
-            pages=[],
-            blocks=[],
-            tables=[],
-            reading_order=[],
-            markdown=markdown,
+    if any(accepted in content_type for accepted in _MARKDOWN_BODY_CONTENT_TYPES):
+        markdown = await read_markdown_payload(request)
+        return await service.extract_markdown(
+            markdown, reason="Provided Markdown request body."
         )
-        try:
-            data = extractor.extract(parse_response)
-            return LLMExtractionResponse(
-                request_id=parse_response.request_id,
-                ocr=LLMExtractionOCRMetadata(
-                    decision=parse_response.decision.reason,
-                    page_count=0,
-                ),
-                data=data,
-            )
-        except LLMExtractionInputTooLarge as exc:
-            raise HTTPException(status_code=413, detail=str(exc)) from exc
-        except LLMExtractionUnavailable as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        except LLMExtractionError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    else:
-        raise HTTPException(
-            status_code=415,
-            detail="Unsupported Content-Type. Use multipart/form-data, text/markdown, text/plain, or application/json."
-        )
+    raise UnsupportedContentType(
+        "Unsupported Content-Type. Use multipart/form-data, text/markdown, "
+        "text/plain, or application/json."
+    )
 
 
 @doc_router.post("/online", response_model=LLMExtractionResponse)
@@ -313,140 +125,76 @@ async def extract_local_document(
 async def extract_online_document(
     request: Request,
     file: UploadFile | None = File(None),
-    orchestrator: OnlineParseOrchestrator = Depends(get_online_orchestrator),
-    extractor: LLMExtractionService = Depends(get_llm_extractor),
+    service: DocumentExtractionService = Depends(get_online_extraction_service),
+    stager: UploadStager = Depends(get_upload_stager),
 ) -> LLMExtractionResponse:
-    total_start = time.perf_counter()
-    upload_elapsed = 0.0
-    ocr_elapsed = 0.0
-    llm_elapsed = 0.0
-    save_elapsed = 0.0
-    if "multipart/form-data" not in request.headers.get("content-type", ""):
-        raise HTTPException(status_code=415, detail="Online OCR requires a multipart/form-data file upload.")
-
-    uploaded_file = file
-    if uploaded_file is None:
-        form = await request.form()
-        uploaded_file = form.get("file")
-    if not uploaded_file or not (hasattr(uploaded_file, "filename") and hasattr(uploaded_file, "file")):
-        raise HTTPException(status_code=400, detail="Missing 'file' field in multipart/form-data upload.")
-
-    suffix = Path(uploaded_file.filename or "").suffix.lower()
-    if suffix not in FAST_OCR_INPUT_SUFFIXES:
-        raise HTTPException(status_code=400, detail="Online OCR supports PDF and image files only.")
-
-    temp_root = Path(settings.temp_dir)
-    temp_root.mkdir(parents=True, exist_ok=True)
-    temp_path = temp_root / f"{uuid.uuid4().hex}{suffix}"
-    request_id = f"req_{uuid.uuid4().hex[:12]}"
-    try:
-        stage_start = time.perf_counter()
-        with temp_path.open("wb") as staged_file:
-            shutil.copyfileobj(uploaded_file.file, staged_file)
-        upload_elapsed = time.perf_counter() - stage_start
-        logger.info(
-            pipeline_message("received online-ocr file=%s suffix=%s size_bytes=%s"),
-            uploaded_file.filename or temp_path.name,
-            suffix,
-            temp_path.stat().st_size,
-        )
-        stage_start = time.perf_counter()
-        response = await run_in_threadpool(
-            orchestrator.parse,
-            str(temp_path),
-            request_id=request_id,
-        )
-        ocr_elapsed = time.perf_counter() - stage_start
-        stage_start = time.perf_counter()
-        with request_logging_context(response.request_id):
-            data = extractor.extract(response)
-        llm_elapsed = time.perf_counter() - stage_start
-        stage_start = time.perf_counter()
-        saved_markdown = save_parse_artifacts(response, uploaded_file.filename or temp_path.name)
-        saved_json = save_extraction_artifacts(data, uploaded_file.filename or temp_path.name)
-        save_elapsed = time.perf_counter() - stage_start
-        engine_metadata = response.engine_metadata or {}
-        provider = str(engine_metadata.get("provider") or ("datalab" if response.engine_name == "datalab" else "local"))
-        datalab_runtime = engine_metadata.get("runtime", "n/a")
-        cost_breakdown = engine_metadata.get("cost_breakdown")
-        datalab_cost = (
-            cost_breakdown.get("final_cost_cents", "n/a")
-            if isinstance(cost_breakdown, dict)
-            else "n/a"
-        )
-        logger.info(
-            pipeline_message(
-                "COMPLETED online-ocr pages=%s markdown_chars=%s provider=%s datalab_runtime=%ss datalab_cost_cents=%s upload=%.3fs ocr=%.3fs llm=%.3fs save=%.3fs total=%.3fs saved_markdown=%s saved_json=%s",
-                request_id=response.request_id,
-            ),
-            len(response.pages),
-            len(response.markdown or ""),
-            provider,
-            datalab_runtime,
-            datalab_cost,
-            upload_elapsed,
-            ocr_elapsed,
-            llm_elapsed,
-            save_elapsed,
-            time.perf_counter() - total_start,
-            ",".join(saved_markdown) or "none",
-            ",".join(saved_json) or "none",
-        )
-        return LLMExtractionResponse(
-            request_id=response.request_id,
-            ocr=LLMExtractionOCRMetadata(
-                decision=response.decision.reason,
-                page_count=len(response.pages),
-            ),
-            data=data,
-        )
-    except LLMExtractionInputTooLarge as exc:
-        raise HTTPException(status_code=413, detail=str(exc)) from exc
-    except LLMExtractionUnavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except LLMExtractionError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.error(pipeline_message("FAILED online-ocr extraction request error", request_id=request_id), exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected online OCR extraction error: {exc}") from exc
-    finally:
-        if temp_path.exists():
-            temp_path.unlink(missing_ok=True)
+    """Run DataLab SuryaOCR plus structured extraction on an uploaded PDF or image."""
+    upload = await resolve_upload(request, file)
+    return await _extract_upload(
+        service,
+        stager,
+        upload,
+        allowed_suffixes=FAST_OCR_INPUT_SUFFIXES,
+        unsupported_message=_ONLINE_UNSUPPORTED_MESSAGE,
+    )
 
 
 @ocr_router.post("/ocr", response_class=PlainTextResponse)
 @limiter.limit(settings.rate_limit_extract)
-def ocr_document(
+async def ocr_document(
     request: Request,
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(None),
     orchestrator: ParseOrchestrator = Depends(get_orchestrator),
+    stager: UploadStager = Depends(get_upload_stager),
+    limiters: PipelineLimiters = Depends(get_pipeline_limiters),
+    _: None = Depends(ensure_gpu_gguf_runtime),
 ) -> PlainTextResponse:
-    """Run local OCR only and return Markdown for debugging."""
-    suffix = Path(file.filename or "").suffix.lower()
-    if suffix not in SUPPORTED_INPUT_SUFFIXES:
-        raise HTTPException(status_code=400, detail="Unsupported input type. Use PDF, Word, Excel, or image files.")
-
-    temp_root = Path(settings.temp_dir)
-    temp_root.mkdir(parents=True, exist_ok=True)
-    temp_path = temp_root / f"{uuid.uuid4().hex}{suffix}"
-    request_id = f"req_{uuid.uuid4().hex[:12]}"
+    """Run local OCR only and return Markdown, for debugging the parse stage."""
+    upload = await resolve_upload(request, file)
+    staged = await stager.stage(
+        upload,
+        allowed_suffixes=SUPPORTED_INPUT_SUFFIXES,
+        unsupported_message=_LOCAL_UNSUPPORTED_MESSAGE,
+    )
     try:
-        with temp_path.open("wb") as staged_file:
-            shutil.copyfileobj(file.file, staged_file)
-        response = orchestrator.parse(str(temp_path), ParseOptions(), request_id=request_id)
-        save_parse_artifacts(response, file.filename or temp_path.name)
+        response = await limiters.ocr.run(orchestrator.parse, str(staged.path))
+        await limiters.io.run(save_parse_artifacts, response, staged.filename)
         if not response.markdown:
-            raise HTTPException(status_code=500, detail="No markdown output produced.")
+            raise HTTPException(status_code=422, detail="No markdown output produced.")
         return PlainTextResponse(response.markdown, media_type="text/markdown")
-    except HTTPException:
-        raise
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.error(pipeline_message("FAILED", "unexpected OCR request error", request_id=request_id), exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected parsing error: {exc}") from exc
     finally:
-        if temp_path.exists():
-            temp_path.unlink(missing_ok=True)
+        stager.discard(staged)
+
+
+# =====================================================================================
+# Shared route helpers
+# =====================================================================================
+
+async def _extract_upload(
+    service: DocumentExtractionService,
+    stager: UploadStager,
+    upload: UploadFile,
+    *,
+    allowed_suffixes: frozenset[str],
+    unsupported_message: str,
+) -> LLMExtractionResponse:
+    """Stage an upload, run the pipeline against it, and always clean the temp file."""
+    staged = await stager.stage(
+        upload,
+        allowed_suffixes=allowed_suffixes,
+        unsupported_message=unsupported_message,
+    )
+    _log_received(staged)
+    try:
+        return await service.extract_document(staged.path, filename=staged.filename)
+    finally:
+        stager.discard(staged)
+
+
+def _log_received(staged: StagedUpload) -> None:
+    logger.info(
+        pipeline_message("received file=%s suffix=%s size_bytes=%s"),
+        staged.filename,
+        staged.suffix,
+        staged.size_bytes,
+    )
