@@ -150,6 +150,31 @@ class ExtractionStore:
     def list(self, query: ExtractionQuery) -> list[dict[str, Any]]:
         """List extractions newest first, filtered by the query."""
         criteria = query.normalised()
+        clause, parameters = self._where_clause(criteria)
+        sql = (
+            f"SELECT {_SELECT_COLUMNS} FROM extractions{clause} "
+            "ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s"
+        )
+        parameters.extend([criteria.limit, criteria.offset])
+
+        with self.pool.connection() as connection:
+            rows = connection.execute(sql, tuple(parameters)).fetchall()
+            return [self._as_dict(row) for row in rows]
+
+    def count(self, query: ExtractionQuery) -> int:
+        """Total rows matching the query's filters, ignoring paging."""
+        clause, parameters = self._where_clause(query.normalised())
+        with self.pool.connection() as connection:
+            row = connection.execute(
+                f"SELECT count(*) AS total FROM extractions{clause}", tuple(parameters)
+            ).fetchone()
+        return int(row["total"] if isinstance(row, dict) else row[0])
+
+    # -- helpers ---------------------------------------------------------------
+
+    @staticmethod
+    def _where_clause(criteria: ExtractionQuery) -> tuple[str, list[Any]]:
+        """Build the WHERE clause and parameters shared by ``list`` and ``count``."""
         where: list[str] = []
         parameters: list[Any] = []
 
@@ -169,42 +194,7 @@ class ExtractionStore:
             parameters.append(criteria.toto_number)
 
         clause = f" WHERE {' AND '.join(where)}" if where else ""
-        sql = (
-            f"SELECT {_SELECT_COLUMNS} FROM extractions{clause} "
-            "ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s"
-        )
-        parameters.extend([criteria.limit, criteria.offset])
-
-        with self.pool.connection() as connection:
-            rows = connection.execute(sql, tuple(parameters)).fetchall()
-            return [self._as_dict(row) for row in rows]
-
-    def count(self, query: ExtractionQuery) -> int:
-        """Total rows matching the query's filters, ignoring paging."""
-        criteria = query.normalised()
-        where: list[str] = []
-        parameters: list[Any] = []
-        if criteria.po_number:
-            where.append("po_number = %s")
-            parameters.append(criteria.po_number)
-        if criteria.validation_status:
-            where.append("validation_status = %s")
-            parameters.append(criteria.validation_status)
-        if criteria.toto_number:
-            where.append(
-                "EXISTS (SELECT 1 FROM extraction_items i "
-                "WHERE i.extraction_id = extractions.id AND i.toto_number = %s)"
-            )
-            parameters.append(criteria.toto_number)
-
-        clause = f" WHERE {' AND '.join(where)}" if where else ""
-        with self.pool.connection() as connection:
-            row = connection.execute(
-                f"SELECT count(*) AS total FROM extractions{clause}", tuple(parameters)
-            ).fetchone()
-        return int(row["total"] if isinstance(row, dict) else row[0])
-
-    # -- helpers ---------------------------------------------------------------
+        return clause, parameters
 
     @classmethod
     def _insert_parameters(cls, record: ExtractionRecord) -> dict[str, Any]:
