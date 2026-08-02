@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The suite must never reach a real provider. config.config reads this at
+  # import, and every extraction in the suite is a stand-in.
+  OPENAI_API_KEY: ci-key-never-used
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 only: it is what the Dockerfile ships and the only version this
+        # suite has actually been run against. Add entries once one passes here.
+        python-version: ["3.11"]
+
+    services:
+      # The migrations and the SQL cannot be verified against a fake connection,
+      # so the persistence tests run against a real server here.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: docpipeline
+          POSTGRES_USER: docpipe
+          POSTGRES_PASSWORD: docpipepass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U docpipe -d docpipeline"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+
+      - name: Install the test subset
+        # Not requirements.txt: that pulls paddlepaddle-gpu from a custom index
+        # and needs CUDA. The OCR engines defer their imports, so the suite runs
+        # without them. See requirements-ci.txt.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-ci.txt
+
+      - name: Run the test suite
+        # TEST_DATABASE_URL switches on tests/test_persistence_database.py, which
+        # skips without it. Those are the only checks that exercise the real SQL.
+        env:
+          TEST_DATABASE_URL: postgresql://docpipe:docpipepass@127.0.0.1:5432/docpipeline
+        run: pytest
+
+      - name: Check accuracy against the labeled set
+        # Fails the build on an extraction-accuracy regression. The synthetic set
+        # scores a deterministic 93.0%, so this leaves a point of headroom for
+        # adding cases. Raise it once real documents are labeled.
+        run: python -m eval.run_eval --fail-under 0.92 --json eval-report.json
+
+      - name: Upload the evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-py${{ matrix.python-version }}
+          path: eval-report.json
+          if-no-files-found: warn
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install linters
+        run: pip install pyflakes==3.4.0
+
+      - name: Byte-compile every module
+        run: python -m compileall -q api config core eval services scripts main.py
+
+      - name: Check for unused imports and undefined names
+        run: python -m pyflakes api config core eval services scripts main.py

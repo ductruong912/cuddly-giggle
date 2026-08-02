@@ -33,8 +33,16 @@ RUN python3.11 -m pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Run as a non-root user; the mounted cache/output volumes must be writable by it.
+RUN useradd --create-home --uid 10001 appuser \
+    && mkdir -p /app/.paddlex /app/outputs /app/.tmp_doc_parse \
+    && chown -R appuser:appuser /app
+USER appuser
+
 ENV HOST=0.0.0.0 \
     PORT=8000
 
 EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+    CMD python3.11 -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=4)" || exit 1
 CMD ["python3.11", "main.py"]

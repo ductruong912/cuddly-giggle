@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from pathlib import Path, PurePosixPath
 import re
-import shutil
 
 from config.config import settings
 from core.domain.schemas import ParseResponse
@@ -99,18 +99,25 @@ def _artifact_folder_name(raw_stem: str, display_stem: str) -> str:
     return f"{display_stem}-{digest}"
 
 
-def _replace_artifact_dir(output_dir: Path, stem: str) -> Path:
-    artifact_dir = output_dir / stem
-    if artifact_dir.exists():
-        shutil.rmtree(artifact_dir)
+def _artifact_dir(input_filename: str) -> tuple[Path, str]:
+    """Return the output directory for a document plus the stem to name files with.
+
+    The directory is created but never wiped: two concurrent uploads sharing a
+    filename would otherwise delete each other's results mid-write. Both artifacts
+    are overwritten in place instead, which is idempotent and safe to interleave.
+    """
+    raw_stem = _raw_upload_stem(input_filename)
+    display_stem = _safe_artifact_stem(raw_stem)
+    artifact_dir = Path(settings.parse_output_dir) / _artifact_folder_name(raw_stem, display_stem)
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    return artifact_dir
+    return artifact_dir, display_stem
 
 
 def save_parse_artifacts(
     response: ParseResponse,
     input_filename: str,
 ) -> list[str]:
+    """Write the parsed Markdown next to the source document's name. Returns saved paths."""
     if not response.markdown:
         # Surface a signal so an empty saved_files is not mistaken for a successful export.
         logger.warning(
@@ -119,12 +126,7 @@ def save_parse_artifacts(
         )
         return []
 
-    raw_stem = _raw_upload_stem(input_filename)
-    display_stem = _safe_artifact_stem(raw_stem)
-    artifact_dir = _replace_artifact_dir(
-        Path(settings.parse_output_dir),
-        _artifact_folder_name(raw_stem, display_stem),
-    )
+    artifact_dir, display_stem = _artifact_dir(input_filename)
     md_path = artifact_dir / f"{display_stem}.md"
     md_path.write_text(response.markdown, encoding="utf-8")
     return [str(md_path.resolve())]
@@ -134,11 +136,8 @@ def save_extraction_artifacts(
     data: dict[str, object],
     input_filename: str,
 ) -> list[str]:
-    import json
-    raw_stem = _raw_upload_stem(input_filename)
-    display_stem = _safe_artifact_stem(raw_stem)
-    artifact_dir = Path(settings.parse_output_dir) / _artifact_folder_name(raw_stem, display_stem)
-    artifact_dir.mkdir(parents=True, exist_ok=True)
+    """Write the structured extraction result as JSON. Returns saved paths."""
+    artifact_dir, display_stem = _artifact_dir(input_filename)
     json_path = artifact_dir / f"{display_stem}.json"
     json_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     return [str(json_path.resolve())]

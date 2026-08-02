@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import lru_cache
 import logging
 import subprocess
 
@@ -34,8 +35,14 @@ class LocalOCRSelector:
         return self._cpu_factory(self.settings)
 
 
+@lru_cache(maxsize=1)
 def has_usable_gpu() -> bool:
-    """Return true when a CUDA runtime or NVIDIA GPU is available locally."""
+    """Return true when a CUDA runtime or NVIDIA GPU is available locally.
+
+    Cached: this runs on every request to the local route, and the uncached path
+    can spawn `nvidia-smi` and wait up to two seconds. Hardware does not change
+    while the process is running.
+    """
     try:
         import torch  # type: ignore
 
@@ -46,10 +53,14 @@ def has_usable_gpu() -> bool:
     try:
         import paddle  # type: ignore
 
-        if paddle.device.is_compiled_with_cuda():
+        # device_count(), not is_compiled_with_cuda(): the latter reports whether
+        # the installed wheel was *built* with CUDA, which paddlepaddle-gpu always
+        # was. On a CPU-only machine it returns True and the VLM is selected with
+        # no GPU to run it on.
+        if paddle.device.cuda.device_count() > 0:
             return True
     except Exception:
-        pass
+        logger.debug("paddle CUDA probe failed; falling back to nvidia-smi", exc_info=True)
 
     try:
         result = subprocess.run(

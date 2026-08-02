@@ -10,8 +10,30 @@ import site
 from dotenv import load_dotenv
 
 
+logger = logging.getLogger(__name__)
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(Path.cwd() / ".env", override=False)
+# Load from the repo root, not the working directory: a service started from
+# elsewhere (Windows service, systemd, `python f:\...\main.py`) must still see .env.
+load_dotenv(REPO_ROOT / ".env", override=False)
+
+
+def mask_database_url(url: str) -> str:
+    """Strip the password from a connection string so it can be logged.
+
+    Connection strings routinely reach logs through startup lines and error
+    messages, and they carry a credential.
+    """
+    if not url:
+        return ""
+    scheme, separator, remainder = url.partition("://")
+    if not separator or "@" not in remainder:
+        return url
+    credentials, _, host = remainder.rpartition("@")
+    user, has_password, _ = credentials.partition(":")
+    if not has_password:
+        return url
+    return f"{scheme}://{user}:***@{host}"
 
 
 def _repo_path_from_env(name: str, default: str) -> str:
@@ -68,6 +90,13 @@ class Settings:
     openai_max_retries: int = _get_int("OPENAI_MAX_RETRIES", 2)
     llm_max_input_chars: int = _get_int("LLM_MAX_INPUT_CHARS", 120_000)
     llm_reasoning_effort: str = _get_str("LLM_REASONING_EFFORT", "low").lower()
+
+    # --- Extraction validation & self-healing ---
+    # Extra extraction calls allowed when a record fails validation. Each retry
+    # runs inside the same LLM slot, so it costs latency, not concurrency.
+    llm_self_heal_max_retries: int = _get_int("LLM_SELF_HEAL_MAX_RETRIES", 2)
+    # Relative tolerance for quantity x unit_price vs. the stated line total.
+    po_line_total_tolerance_ratio: float = _get_float("PO_LINE_TOTAL_TOLERANCE_RATIO", 0.01)
 
     # --- OCR engines ---
     primary_engine: str                = _get_str("OCR_PRIMARY_ENGINE", "paddleocr_vl")
@@ -146,9 +175,45 @@ class Settings:
     rate_limit_default: str = _get_str("RATE_LIMIT_DEFAULT", "30/minute")
     rate_limit_extract: str = _get_str("RATE_LIMIT_EXTRACT", "10/minute")
 
+    # --- Concurrency & admission control ---
+    # One GPU and a llama.cpp server started with --parallel 1 serialise most OCR
+    # work, so admitting more than a couple of parses at a time only grows the queue.
+    ocr_max_concurrency: int = _get_int("OCR_MAX_CONCURRENCY", 2)
+    llm_max_concurrency: int = _get_int("LLM_MAX_CONCURRENCY", 8)
+    stage_queue_timeout_seconds: float = _get_float("STAGE_QUEUE_TIMEOUT_SECONDS", 30.0)
+    # 0 lets the app derive the worker-thread count from the stage limits.
+    server_thread_pool_size: int = _get_int("SERVER_THREAD_POOL_SIZE", 0)
+    # How long a stage may spend actually working before the request is failed.
+    # Without these, a wedged dependency holds its slot forever and the service
+    # stops accepting work permanently.
+    ocr_execution_timeout_seconds: float = _get_float("OCR_EXECUTION_TIMEOUT_SECONDS", 300.0)
+    llm_execution_timeout_seconds: float = _get_float("LLM_EXECUTION_TIMEOUT_SECONDS", 180.0)
+    io_execution_timeout_seconds: float = _get_float("IO_EXECUTION_TIMEOUT_SECONDS", 60.0)
+
+    # --- Request guards ---
+    max_upload_bytes: int = _get_int("MAX_UPLOAD_BYTES", 50 * 1024 * 1024)
+    pdf_max_pages: int = _get_int("PDF_MAX_PAGES", 100)
+
+    # --- Persistence ---
+    # Empty DATABASE_URL keeps the service file-only, exactly as before.
+    database_url: str                    = os.getenv("DATABASE_URL", "").strip()
+    database_pool_min_size: int          = _get_int("DATABASE_POOL_MIN_SIZE", 1)
+    database_pool_max_size: int          = _get_int("DATABASE_POOL_MAX_SIZE", 8)
+    database_connect_timeout_seconds: int = _get_int("DATABASE_CONNECT_TIMEOUT_SECONDS", 10)
+    # A query that hangs would hold an io slot; Postgres kills it instead.
+    database_statement_timeout_ms: int   = _get_int("DATABASE_STATEMENT_TIMEOUT_MS", 15000)
+    database_migrate_on_startup: bool    = _get_bool("DATABASE_MIGRATE_ON_STARTUP", True)
+    # When on, a failed write fails the request: a record you did not record is
+    # worse than a retryable error. Turn off for best-effort logging.
+    database_persistence_required: bool  = _get_bool("DATABASE_PERSISTENCE_REQUIRED", True)
+
     # --- Paths & misc ---
     temp_dir: str                        = _get_str("DOC_TEMP_DIR", ".tmp_doc_parse")
     parse_output_dir: str                = _get_str("PARSE_OUTPUT_DIR", "outputs")
+    # Saved artifacts accumulate one directory per request forever otherwise,
+    # and a full disk turns every write into a 500. 0 disables the sweep.
+    parse_output_retention_days: int     = _get_int("PARSE_OUTPUT_RETENTION_DAYS", 14)
+    parse_output_sweep_minutes: int      = _get_int("PARSE_OUTPUT_SWEEP_MINUTES", 60)
     quiet_third_party_logs: bool         = _get_bool("QUIET_THIRD_PARTY_LOGS", True)
 
     # --- PaddleX / model cache ---
@@ -162,6 +227,61 @@ class Settings:
             )
         if self.fast_ocr_datalab_timeout_seconds <= 0:
             raise ValueError("FAST_OCR_DATALAB_TIMEOUT_SECONDS must be greater than zero")
+        if self.ocr_max_concurrency < 1:
+            raise ValueError("OCR_MAX_CONCURRENCY must be at least 1")
+        if self.llm_max_concurrency < 1:
+            raise ValueError("LLM_MAX_CONCURRENCY must be at least 1")
+        if self.stage_queue_timeout_seconds <= 0:
+            raise ValueError("STAGE_QUEUE_TIMEOUT_SECONDS must be greater than zero")
+        for name, value in (
+            ("OCR_EXECUTION_TIMEOUT_SECONDS", self.ocr_execution_timeout_seconds),
+            ("LLM_EXECUTION_TIMEOUT_SECONDS", self.llm_execution_timeout_seconds),
+            ("IO_EXECUTION_TIMEOUT_SECONDS", self.io_execution_timeout_seconds),
+        ):
+            if value <= 0:
+                raise ValueError(f"{name} must be greater than zero")
+        if self.parse_output_retention_days < 0:
+            raise ValueError("PARSE_OUTPUT_RETENTION_DAYS cannot be negative")
+        if self.database_url:
+            if self.database_pool_min_size < 0:
+                raise ValueError("DATABASE_POOL_MIN_SIZE cannot be negative")
+            if self.database_pool_max_size < max(1, self.database_pool_min_size):
+                raise ValueError("DATABASE_POOL_MAX_SIZE must be at least DATABASE_POOL_MIN_SIZE")
+            if self.database_statement_timeout_ms < 0:
+                raise ValueError("DATABASE_STATEMENT_TIMEOUT_MS cannot be negative")
+        if self.parse_output_sweep_minutes < 1:
+            raise ValueError("PARSE_OUTPUT_SWEEP_MINUTES must be at least 1")
+        if self.max_upload_bytes < 1:
+            raise ValueError("MAX_UPLOAD_BYTES must be at least 1")
+        if self.pdf_max_pages < 1:
+            raise ValueError("PDF_MAX_PAGES must be at least 1")
+        if self.llm_self_heal_max_retries < 0:
+            raise ValueError("LLM_SELF_HEAL_MAX_RETRIES cannot be negative")
+        if self.po_line_total_tolerance_ratio < 0:
+            raise ValueError("PO_LINE_TOTAL_TOLERANCE_RATIO cannot be negative")
+
+    @property
+    def persistence_enabled(self) -> bool:
+        """True when a database is configured; otherwise results are files only."""
+        return bool(self.database_url)
+
+    @property
+    def masked_database_url(self) -> str:
+        """The connection string with its password removed, safe to log."""
+        return mask_database_url(self.database_url)
+
+    @property
+    def resolved_thread_pool_size(self) -> int:
+        """Worker threads to allow, sized from the stage limits rather than anyio's default 40.
+
+        Every admitted OCR and LLM request occupies one worker thread, plus a few
+        for upload staging and synchronous dependencies. Anyio's default is far
+        larger than this machine can usefully run and lets bursts thrash the GPU.
+        """
+        if self.server_thread_pool_size > 0:
+            return self.server_thread_pool_size
+        stage_threads = self.ocr_max_concurrency + self.llm_max_concurrency
+        return max(8, stage_threads + 4)
 
 
 # ---------------------------------------------------------------------------
@@ -231,20 +351,29 @@ _prepend_windows_cuda_paths()
 # ---------------------------------------------------------------------------
 
 def configure_third_party_logging() -> None:
+    """Quieten paddlex's logger where it is installed, and carry on where it is not."""
     if not settings.quiet_third_party_logs:
         return
     try:
         from paddlex.utils import logging as paddlex_logging  # type: ignore
+    except ImportError:
+        # Expected wherever the OCR extras are absent, such as CI. Not an error:
+        # there is no third-party logger to quieten.
+        logger.debug("paddlex is not installed; skipping its logging setup")
+        return
+    try:
         paddlex_logging.setup_logging("WARNING")
     except Exception:
-        pass
+        logger.exception("paddlex logging could not be configured")
 
 
 def configure_app_logging() -> None:
-    for logger_name in ("app", "api", "config", "core", "services"):
+    for logger_name in ("app", "api", "config", "core", "eval", "services"):
         app_logger = logging.getLogger(logger_name)
         app_logger.setLevel(logging.INFO)
-        app_logger.propagate = True
+        # Do not propagate: paddlex installs its own root handler on import, so
+        # bubbling up would print every application line a second time in its format.
+        app_logger.propagate = False
 
         already_configured = any(
             getattr(h, "_cuddly_giggle_app_handler", False) for h in app_logger.handlers

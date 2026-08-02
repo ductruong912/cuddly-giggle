@@ -1,5 +1,13 @@
-"""Edit this module to adapt LLM extraction to a document domain."""
+"""Edit this module to adapt LLM extraction to a document domain.
+
+The JSON schema is generated from ``PurchaseOrder`` rather than written out by
+hand, so the shape the model is constrained to and the shape that is validated
+afterwards cannot drift apart.
+"""
 from __future__ import annotations
+
+from core.domain.purchase_order import PurchaseOrder
+from core.domain.strict_schema import to_strict_json_schema
 
 EXTRACTION_INSTRUCTIONS = """
 You are an expert Purchase Order (PO) information extraction system. Your task is to extract structured data from a Purchase Order into a structured JSON object.
@@ -74,6 +82,20 @@ Never fabricate missing product codes.
 
 ---
 
+## Extension (line total) Rules
+
+Extract the stated line total into `extension` when the document shows one —
+it may be labelled Extension, Amount, Total, Line Total, or Thành tiền.
+
+- Copy the figure as printed. Do NOT compute it yourself.
+- If the document does not state a line total, return null.
+
+This field is checked deterministically after extraction: `quantity x unit_price`
+must reproduce `extension`. A mismatch is treated as a misread row, not as a
+number to be adjusted.
+
+---
+
 ## Validation Rules
 
 Before producing the final output:
@@ -123,7 +145,8 @@ If the output is invalid, repair it before returning the JSON.
       "toto_number": "",
       "customer_number": "",
       "quantity": 0,
-      "unit_price": 0
+      "unit_price": 0,
+      "extension": 0
     }
   ]
 }
@@ -131,31 +154,6 @@ If the output is invalid, repair it before returning the JSON.
 
 EXTRACTION_SCHEMA_NAME = "document_extraction"
 
-EXTRACTION_JSON_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "po_number": {"type": "string"},
-        "po_date": {"type": "string"},
-        "items": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "toto_number": {"type": "string"},
-                    "customer_number": {"type": ["string", "null"]},
-                    "quantity": {"type": "number"},
-                    "unit_price": {"type": "number"},
-                },
-                "required": [
-                    "toto_number",
-                    "customer_number",
-                    "quantity",
-                    "unit_price",
-                ],
-                "additionalProperties": False,
-              },
-          },
-     },
-    "required": ["po_number", "po_date", "items"],
-    "additionalProperties": False,
-}
+# Generated from the Pydantic model and checked against the strict-mode rules at
+# import, so an invalid schema is a startup failure rather than a 400 per request.
+EXTRACTION_JSON_SCHEMA = to_strict_json_schema(PurchaseOrder)

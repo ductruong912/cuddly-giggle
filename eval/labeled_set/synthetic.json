@@ -1,0 +1,284 @@
+{
+  "_comment": "SYNTHETIC cases. These are hand-written, not real documents. They measure the validation and self-healing layer, never OCR accuracy. See README.md.",
+  "cases": [
+    {
+      "case_id": "clean-single-line",
+      "description": "One line, read correctly on the first attempt.",
+      "expected": {
+        "po_number": "215497",
+        "po_date": "05-06-2026",
+        "items": [
+          {"toto_number": "TX703AR", "customer_number": "CT-9001", "quantity": 4, "unit_price": 1250000, "extension": 5000000}
+        ]
+      },
+      "attempts": [
+        {
+          "po_number": "215497",
+          "po_date": "05-06-2026",
+          "items": [
+            {"toto_number": "TX703AR", "customer_number": "CT-9001", "quantity": 4, "unit_price": 1250000, "extension": 5000000}
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "clean-multi-line",
+      "description": "Four lines, all read correctly on the first attempt.",
+      "expected": {
+        "po_number": "215612",
+        "po_date": "18-06-2026",
+        "items": [
+          {"toto_number": "TX703AR", "customer_number": "CT-9001", "quantity": 4, "unit_price": 1250000, "extension": 5000000},
+          {"toto_number": "CW823RJ", "customer_number": null, "quantity": 12, "unit_price": 3450000, "extension": 41400000},
+          {"toto_number": "TS402SN", "customer_number": "CT-9105", "quantity": 2, "unit_price": 890000, "extension": 1780000},
+          {"toto_number": "LW1716B", "customer_number": null, "quantity": 1, "unit_price": 15600000, "extension": 15600000}
+        ]
+      },
+      "attempts": [
+        {
+          "po_number": "215612",
+          "po_date": "18-06-2026",
+          "items": [
+            {"toto_number": "TX703AR", "customer_number": "CT-9001", "quantity": 4, "unit_price": 1250000, "extension": 5000000},
+            {"toto_number": "CW823RJ", "customer_number": null, "quantity": 12, "unit_price": 3450000, "extension": 41400000},
+            {"toto_number": "TS402SN", "customer_number": "CT-9105", "quantity": 2, "unit_price": 890000, "extension": 1780000},
+            {"toto_number": "LW1716B", "customer_number": null, "quantity": 1, "unit_price": 15600000, "extension": 15600000}
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "column-shift-recovered",
+      "description": "A digit is dropped from a line total; the retry re-reads the row correctly.",
+      "expected": {
+        "po_number": "215703",
+        "po_date": "22-06-2026",
+        "items": [
+          {"toto_number": "TX703AR", "customer_number": "CT-9001", "quantity": 6, "unit_price": 1250000, "extension": 7500000},
+          {"toto_number": "CW823RJ", "customer_number": null, "quantity": 3, "unit_price": 3450000, "extension": 10350000}
+        ]
+      },
+      "attempts": [
+        {
+          "po_number": "215703",
+          "po_date": "22-06-2026",
+          "items": [
+            {"toto_number": "TX703AR", "customer_number": "CT-9001", "quantity": 6, "unit_price": 1250000, "extension": 750000},
+            {"toto_number": "CW823RJ", "customer_number": null, "quantity": 3, "unit_price": 3450000, "extension": 10350000}
+          ]
+        },
+        {
+          "po_number": "215703",
+          "po_date": "22-06-2026",
+          "items": [
+            {"toto_number": "TX703AR", "customer_number": "CT-9001", "quantity": 6, "unit_price": 1250000, "extension": 7500000},
+            {"toto_number": "CW823RJ", "customer_number": null, "quantity": 3, "unit_price": 3450000, "extension": 10350000}
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "column-shift-persistent",
+      "description": "The same misread repeats on every attempt, so the case exhausts its retries.",
+      "expected": {
+        "po_number": "215744",
+        "po_date": "25-06-2026",
+        "items": [
+          {"toto_number": "TS402SN", "customer_number": "CT-9105", "quantity": 5, "unit_price": 890000, "extension": 4450000}
+        ]
+      },
+      "attempts": [
+        {
+          "po_number": "215744",
+          "po_date": "25-06-2026",
+          "items": [
+            {"toto_number": "TS402SN", "customer_number": "CT-9105", "quantity": 5, "unit_price": 890000, "extension": 445000}
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "date-format-recovered",
+      "description": "The date comes back in the wrong format; the retry reformats it.",
+      "expected": {
+        "po_number": "215801",
+        "po_date": "12-07-2026",
+        "items": [
+          {"toto_number": "LW1716B", "customer_number": null, "quantity": 2, "unit_price": 15600000, "extension": 31200000}
+        ]
+      },
+      "attempts": [
+        {
+          "po_number": "215801",
+          "po_date": "2026/07/12",
+          "items": [
+            {"toto_number": "LW1716B", "customer_number": null, "quantity": 2, "unit_price": 15600000, "extension": 31200000}
+          ]
+        },
+        {
+          "po_number": "215801",
+          "po_date": "12-07-2026",
+          "items": [
+            {"toto_number": "LW1716B", "customer_number": null, "quantity": 2, "unit_price": 15600000, "extension": 31200000}
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "dropped-line-item",
+      "description": "BLIND SPOT: a row is missed entirely. Every returned row reconciles, so nothing flags it.",
+      "expected": {
+        "po_number": "215830",
+        "po_date": "15-07-2026",
+        "items": [
+          {"toto_number": "TX703AR", "customer_number": "CT-9001", "quantity": 2, "unit_price": 1250000, "extension": 2500000},
+          {"toto_number": "CW823RJ", "customer_number": null, "quantity": 4, "unit_price": 3450000, "extension": 13800000},
+          {"toto_number": "TS402SN", "customer_number": "CT-9105", "quantity": 1, "unit_price": 890000, "extension": 890000}
+        ]
+      },
+      "attempts": [
+        {
+          "po_number": "215830",
+          "po_date": "15-07-2026",
+          "items": [
+            {"toto_number": "TX703AR", "customer_number": "CT-9001", "quantity": 2, "unit_price": 1250000, "extension": 2500000},
+            {"toto_number": "CW823RJ", "customer_number": null, "quantity": 4, "unit_price": 3450000, "extension": 13800000}
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "consistent-but-wrong",
+      "description": "BLIND SPOT: quantity is misread and the line total is computed from it, so the arithmetic agrees with itself.",
+      "expected": {
+        "po_number": "215877",
+        "po_date": "20-07-2026",
+        "items": [
+          {"toto_number": "CW823RJ", "customer_number": null, "quantity": 12, "unit_price": 3450000, "extension": 41400000}
+        ]
+      },
+      "attempts": [
+        {
+          "po_number": "215877",
+          "po_date": "20-07-2026",
+          "items": [
+            {"toto_number": "CW823RJ", "customer_number": null, "quantity": 72, "unit_price": 3450000, "extension": 248400000}
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "null-extension-unverifiable",
+      "description": "BLIND SPOT: the document states no line totals, so a misread quantity has nothing to contradict it.",
+      "expected": {
+        "po_number": "215902",
+        "po_date": "23-07-2026",
+        "items": [
+          {"toto_number": "TS402SN", "customer_number": "CT-9105", "quantity": 8, "unit_price": 890000, "extension": null},
+          {"toto_number": "LW1716B", "customer_number": null, "quantity": 3, "unit_price": 15600000, "extension": null}
+        ]
+      },
+      "attempts": [
+        {
+          "po_number": "215902",
+          "po_date": "23-07-2026",
+          "items": [
+            {"toto_number": "TS402SN", "customer_number": "CT-9105", "quantity": 8, "unit_price": 890000, "extension": null},
+            {"toto_number": "LW1716B", "customer_number": null, "quantity": 8, "unit_price": 15600000, "extension": null}
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "duplicate-codes-warning",
+      "description": "The same item code on two lines at different prices: a warning, not a retry.",
+      "expected": {
+        "po_number": "215940",
+        "po_date": "27-07-2026",
+        "items": [
+          {"toto_number": "TX703AR", "customer_number": "CT-9001", "quantity": 2, "unit_price": 1250000, "extension": 2500000},
+          {"toto_number": "TX703AR", "customer_number": "CT-9002", "quantity": 3, "unit_price": 1180000, "extension": 3540000}
+        ]
+      },
+      "attempts": [
+        {
+          "po_number": "215940",
+          "po_date": "27-07-2026",
+          "items": [
+            {"toto_number": "TX703AR", "customer_number": "CT-9001", "quantity": 2, "unit_price": 1250000, "extension": 2500000},
+            {"toto_number": "TX703AR", "customer_number": "CT-9002", "quantity": 3, "unit_price": 1180000, "extension": 3540000}
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "zero-priced-line-warning",
+      "description": "A promotional line at zero: a warning, not a retry.",
+      "expected": {
+        "po_number": "215958",
+        "po_date": "29-07-2026",
+        "items": [
+          {"toto_number": "TX703AR", "customer_number": "CT-9001", "quantity": 2, "unit_price": 1250000, "extension": 2500000},
+          {"toto_number": "ACC-SEAL", "customer_number": null, "quantity": 2, "unit_price": 0, "extension": 0}
+        ]
+      },
+      "attempts": [
+        {
+          "po_number": "215958",
+          "po_date": "29-07-2026",
+          "items": [
+            {"toto_number": "TX703AR", "customer_number": "CT-9001", "quantity": 2, "unit_price": 1250000, "extension": 2500000},
+            {"toto_number": "ACC-SEAL", "customer_number": null, "quantity": 2, "unit_price": 0, "extension": 0}
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "rounding-drift-tolerated",
+      "description": "A unit price printed to two decimals leaves the product 0.02 short. The tolerance must absorb it.",
+      "expected": {
+        "po_number": "215977",
+        "po_date": "30-07-2026",
+        "items": [
+          {"toto_number": "CW823RJ", "customer_number": null, "quantity": 7, "unit_price": 142857.14, "extension": 1000000}
+        ]
+      },
+      "attempts": [
+        {
+          "po_number": "215977",
+          "po_date": "30-07-2026",
+          "items": [
+            {"toto_number": "CW823RJ", "customer_number": null, "quantity": 7, "unit_price": 142857.14, "extension": 1000000}
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "missing-po-number-recovered",
+      "description": "The header number comes back empty; the retry finds it.",
+      "expected": {
+        "po_number": "216004",
+        "po_date": "31-07-2026",
+        "items": [
+          {"toto_number": "LW1716B", "customer_number": null, "quantity": 1, "unit_price": 15600000, "extension": 15600000}
+        ]
+      },
+      "attempts": [
+        {
+          "po_number": "",
+          "po_date": "31-07-2026",
+          "items": [
+            {"toto_number": "LW1716B", "customer_number": null, "quantity": 1, "unit_price": 15600000, "extension": 15600000}
+          ]
+        },
+        {
+          "po_number": "216004",
+          "po_date": "31-07-2026",
+          "items": [
+            {"toto_number": "LW1716B", "customer_number": null, "quantity": 1, "unit_price": 15600000, "extension": 15600000}
+          ]
+        }
+      ]
+    }
+  ]
+}
