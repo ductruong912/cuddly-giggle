@@ -13,10 +13,11 @@ import time
 from typing import Any, Callable
 
 from config.config import Settings, settings
-from config.pipeline_logging import pipeline_message
+from config.pipeline_logging import current_source_document, pipeline_message
 from core.domain.schemas import PageParseResult
 from core.engines.base import EngineParseResult, ParseEngine
 from core.engines.normalizer import normalize_engine_output
+from core.preprocess import preprocess_file
 from services.model_assets import require_model_profile
 
 
@@ -63,7 +64,7 @@ class PaddlePipelineEngine(ParseEngine):
         # page is rasterized to a standalone image and OCR'd alone, instead of letting
         # PaddleOCR render+batch the whole PDF. Fall back to the original flow if
         # rasterization is disabled, the input is not a PDF, or rendering fails.
-        page_images, cleanup = self._rasterize_pdf_pages(input_path)
+        page_images, cleanup = self._prepare_page_images(input_path)
         try:
             if page_images is None:
                 return self._parse_with_progress(input_path, lang_hint, page_number=1, page_count=1)
@@ -121,6 +122,85 @@ class PaddlePipelineEngine(ParseEngine):
 
         pages, markdown, normalized_raw = normalize_engine_output(raw, self.name, self.settings)
         return EngineParseResult(engine_name=self.name, pages=pages, markdown=markdown, raw=normalized_raw)
+
+    def _prepare_page_images(self, input_path: str) -> tuple[list[str] | None, Callable[[], None]]:
+        """Produce the page images OCR should read, cleaned up if preprocessing is on.
+
+        Returns ``(None, noop)`` to mean "hand the original path straight to the
+        pipeline", which is the flow for a PDF when rasterization is off or has
+        failed, and for any input the preprocessing chain declined to touch.
+        """
+        page_images, cleanup = self._rasterize_pdf_pages(input_path)
+        if not self.settings.preprocess_enabled:
+            return page_images, cleanup
+
+        document_stem = self._document_stem(input_path)
+        try:
+            if page_images is not None:
+                # Rasterized pages are throwaway temp files, so they are rewritten
+                # in place and removed by the existing cleanup.
+                for page_number, image_path in enumerate(page_images, start=1):
+                    self._preprocess_page(
+                        image_path, image_path, document_stem, page_number, allow_exif=False
+                    )
+                return page_images, cleanup
+            return self._preprocess_standalone_input(input_path, document_stem)
+        except Exception:
+            # Never let cleanup leak because preprocessing raised.
+            logger.warning("page preprocessing failed for %s; using the raw pages", input_path, exc_info=True)
+            return page_images, cleanup
+
+    @staticmethod
+    def _document_stem(input_path: str) -> str:
+        """Name saved diagnostics after the uploaded document, not its staged UUID."""
+        source = current_source_document()
+        stem = Path(source).stem if source else Path(input_path).stem
+        # The stem becomes a directory name, and an upload can be called anything.
+        safe = "".join(ch for ch in stem if ch.isalnum() or ch in "-_. ").strip(" .")
+        return safe or "document"
+
+    def _preprocess_standalone_input(
+        self, input_path: str, document_stem: str
+    ) -> tuple[list[str] | None, Callable[[], None]]:
+        """Clean a single image input into a temp copy, never over the source file."""
+        noop: Callable[[], None] = lambda: None
+        if Path(input_path).suffix.lower() == ".pdf":
+            # Rasterization is off or failed, so there is no page image to clean;
+            # PaddleOCR renders the PDF itself.
+            return None, noop
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix=f"{self.name}_pre_"))
+        destination = tmp_dir / f"page_0000{Path(input_path).suffix or '.png'}"
+        result = self._preprocess_page(input_path, str(destination), document_stem, 1)
+        if not result.changed:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return None, noop
+        return [result.path], lambda: shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def _preprocess_page(
+        self,
+        source_path: str,
+        destination_path: str,
+        document_stem: str,
+        page_number: int,
+        *,
+        allow_exif: bool = True,
+    ):  # type: ignore[no-untyped-def]
+        result = preprocess_file(
+            source_path,
+            output_path=destination_path,
+            app_settings=self.settings,
+            debug_name=f"{document_stem}/page_{page_number:04d}",
+            allow_exif=allow_exif,
+        )
+        if result.changed:
+            logger.info(
+                pipeline_message("PHASE 2", "preprocess page=%s duration=%.3fs steps=%s"),
+                page_number,
+                result.total_seconds,
+                result.summary(),
+            )
+        return result
 
     def _rasterize_pdf_pages(self, input_path: str) -> tuple[list[str] | None, Callable[[], None]]:
         noop: Callable[[], None] = lambda: None
@@ -293,7 +373,10 @@ class PaddleOCRVLEngine(PaddlePipelineEngine):
             kwargs["pipeline_version"] = self.settings.paddleocr_vl_pipeline_version
         if self.settings.paddleocr_vl_use_gguf:
             kwargs.update(self._remote_vl_kwargs())
-        
+        if self.settings.paddleocr_vl_auto_rotate:
+            kwargs["use_doc_orientation_classify"] = True
+            kwargs["use_doc_unwarping"] = True
+
         # Override ignore labels (e.g. empty list to keep headers and footers)
         kwargs["markdown_ignore_labels"] = list(self.settings.paddleocr_vl_markdown_ignore_labels)
         return kwargs
@@ -305,6 +388,9 @@ class PaddleOCRVLEngine(PaddlePipelineEngine):
         if self.settings.paddleocr_vl_use_gguf:
             for key, value in self._remote_vl_kwargs().items():
                 args.extend([f"--{key}", str(value)])
+        if self.settings.paddleocr_vl_auto_rotate:
+            args.extend(["--use_doc_orientation_classify", "True"])
+            args.extend(["--use_doc_unwarping", "True"])
         return args
 
     def _remote_vl_kwargs(self) -> dict[str, Any]:

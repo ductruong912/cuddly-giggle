@@ -109,6 +109,9 @@ class Settings:
     paddleocr_vl_rec_api_model_name: str = os.getenv("PADDLEOCR_VL_REC_API_MODEL_NAME", "").strip()
     paddleocr_vl_rec_api_key: str      = os.getenv("PADDLEOCR_VL_REC_API_KEY", "").strip()
     paddleocr_vl_use_gguf: bool        = _get_bool("PADDLEOCR_VL_USE_GGUF", False)
+    # Corrects page rotation/warp before layout detection. Off by default: it adds
+    # a model pass per page, and most scans already arrive upright.
+    paddleocr_vl_auto_rotate: bool     = _get_bool("PADDLEOCR_VL_AUTO_ROTATE", False)
     paddleocr_vl_max_pixels: int       = _get_int("PADDLEOCR_VL_MAX_PIXELS", 1003520)
     paddleocr_vl_markdown_ignore_labels: tuple[str, ...] = tuple(
         item.strip()
@@ -126,6 +129,7 @@ class Settings:
     fast_ocr_cpu_threads: int = _get_int("FAST_OCR_CPU_THREADS", 4)
     fast_ocr_inference_engine: str = _get_str("FAST_OCR_INFERENCE_ENGINE", "onnxruntime")
     fast_ocr_enable_mkldnn: bool = _get_bool("FAST_OCR_ENABLE_MKLDNN", False)
+    fast_ocr_auto_rotate: bool = _get_bool("FAST_OCR_AUTO_ROTATE", False)
     fast_ocr_datalab_mode: str = _get_str("FAST_OCR_DATALAB_MODE", "balanced").lower()
     fast_ocr_datalab_timeout_seconds: float = _get_float("FAST_OCR_DATALAB_TIMEOUT_SECONDS", 120.0)
     datalab_api_key: str = os.getenv("DATALAB_API_KEY", "").strip()
@@ -167,6 +171,31 @@ class Settings:
     # --- PDF rasterization for OCR (render each page to an image, OCR per page) ---
     pdf_rasterize_enabled: bool          = _get_bool("PDF_RASTERIZE_ENABLED", True)
     pdf_rasterize_dpi: int               = _get_int("PDF_RASTERIZE_DPI", 200)
+
+    # --- Scan preprocessing (cleans each page image before OCR) ---
+    # Everything here is off by default and switchable one step at a time, so a
+    # step's cost and its effect on accuracy can be attributed to that step
+    # alone. These are cheap CPU array passes, unlike PADDLEOCR_VL_AUTO_ROTATE,
+    # which runs two extra models per page inside the OCR slot.
+    preprocess_enabled: bool             = _get_bool("PREPROCESS_ENABLED", False)
+    # OpenCV drops EXIF, so a phone photo of a document otherwise reaches OCR
+    # sideways with nothing downstream able to notice.
+    preprocess_exif_transpose: bool      = _get_bool("PREPROCESS_EXIF_TRANSPOSE", False)
+    preprocess_border_crop: bool         = _get_bool("PREPROCESS_BORDER_CROP", False)
+    preprocess_deskew: bool              = _get_bool("PREPROCESS_DESKEW", False)
+    # Beyond the maximum, the estimate is likelier wrong than the page is tilted;
+    # below the minimum, rotating costs a resample and buys nothing.
+    preprocess_deskew_max_degrees: float = _get_float("PREPROCESS_DESKEW_MAX_DEGREES", 10.0)
+    preprocess_deskew_min_degrees: float = _get_float("PREPROCESS_DESKEW_MIN_DEGREES", 0.2)
+    preprocess_illumination: bool        = _get_bool("PREPROCESS_ILLUMINATION", False)
+    preprocess_denoise: bool             = _get_bool("PREPROCESS_DENOISE", False)
+    preprocess_denoise_kernel: int       = _get_int("PREPROCESS_DENOISE_KERNEL", 3)
+    preprocess_clahe: bool               = _get_bool("PREPROCESS_CLAHE", False)
+    preprocess_clahe_clip_limit: float   = _get_float("PREPROCESS_CLAHE_CLIP_LIMIT", 2.0)
+    # Writes the finished page image for inspection. Diagnostic: it costs a PNG
+    # encode per page and the files are never swept.
+    preprocess_save_images: bool         = _get_bool("PREPROCESS_SAVE_IMAGES", False)
+    preprocess_debug_dir: str            = _get_str("PREPROCESS_DEBUG_DIR", "outputs/preprocess")
 
     # --- Output filtering ---
     table_only_output: bool              = _get_bool("TABLE_ONLY_OUTPUT", False)
@@ -259,6 +288,21 @@ class Settings:
             raise ValueError("LLM_SELF_HEAL_MAX_RETRIES cannot be negative")
         if self.po_line_total_tolerance_ratio < 0:
             raise ValueError("PO_LINE_TOTAL_TOLERANCE_RATIO cannot be negative")
+        if self.preprocess_deskew_max_degrees <= 0:
+            raise ValueError("PREPROCESS_DESKEW_MAX_DEGREES must be greater than zero")
+        if self.preprocess_deskew_min_degrees < 0:
+            raise ValueError("PREPROCESS_DESKEW_MIN_DEGREES cannot be negative")
+        if self.preprocess_deskew_min_degrees > self.preprocess_deskew_max_degrees:
+            raise ValueError(
+                "PREPROCESS_DESKEW_MIN_DEGREES cannot exceed PREPROCESS_DESKEW_MAX_DEGREES; "
+                "no angle would ever be corrected"
+            )
+        # cv2.medianBlur rejects even and sub-3 kernels at call time, which would
+        # surface as a mid-parse failure rather than a startup one.
+        if self.preprocess_denoise_kernel < 3 or self.preprocess_denoise_kernel % 2 == 0:
+            raise ValueError("PREPROCESS_DENOISE_KERNEL must be an odd number of at least 3")
+        if self.preprocess_clahe_clip_limit <= 0:
+            raise ValueError("PREPROCESS_CLAHE_CLIP_LIMIT must be greater than zero")
 
     @property
     def persistence_enabled(self) -> bool:

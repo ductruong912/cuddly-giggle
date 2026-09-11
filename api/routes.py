@@ -33,7 +33,7 @@ from api.uploads import (
     upload_suffix,
 )
 from config.config import settings
-from config.pipeline_logging import pipeline_message
+from config.pipeline_logging import pipeline_message, source_document_context
 from core.domain.schemas import LLMExtractionResponse
 from services.concurrency import PipelineLimiters
 from services.document_extraction import DocumentExtractionService
@@ -264,7 +264,8 @@ async def ocr_document(
         unsupported_message=_LOCAL_UNSUPPORTED_MESSAGE,
     )
     try:
-        response = await limiters.ocr.run(orchestrator.parse, str(staged.path))
+        with source_document_context(staged.filename):
+            response = await limiters.ocr.run(orchestrator.parse, str(staged.path))
         await limiters.io.run(save_parse_artifacts, response, staged.filename)
         if not response.markdown:
             raise HTTPException(status_code=422, detail="No markdown output produced.")

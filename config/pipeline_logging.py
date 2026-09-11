@@ -7,6 +7,7 @@ from contextvars import ContextVar
 
 
 _request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
+_source_document: ContextVar[str | None] = ContextVar("source_document", default=None)
 
 
 @contextmanager
@@ -20,6 +21,25 @@ def request_logging_context(request_id: str) -> Iterator[None]:
 
 def current_request_id() -> str | None:
     return _request_id.get()
+
+
+@contextmanager
+def source_document_context(filename: str) -> Iterator[None]:
+    """Carry the uploaded document's own name down into the engines.
+
+    Uploads are staged under a UUID, so by the time a page reaches OCR its path
+    says nothing about which document it came from. Diagnostics that end up on
+    disk need the real name to be worth anything.
+    """
+    token = _source_document.set(filename)
+    try:
+        yield
+    finally:
+        _source_document.reset(token)
+
+
+def current_source_document() -> str | None:
+    return _source_document.get()
 
 
 def pipeline_message(

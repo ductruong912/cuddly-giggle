@@ -13,7 +13,11 @@ from typing import Protocol
 import uuid
 
 from config.config import Settings, settings
-from config.pipeline_logging import pipeline_message, request_logging_context
+from config.pipeline_logging import (
+    pipeline_message,
+    request_logging_context,
+    source_document_context,
+)
 from core.domain.schemas import (
     ExtractionValidation,
     LLMExtractionOCRMetadata,
@@ -69,11 +73,12 @@ class DocumentExtractionService:
         total_start = time.perf_counter()
         try:
             ocr_start = time.perf_counter()
-            parse_response = await self.limiters.ocr.run(
-                self.parser.parse,
-                str(source_path),
-                request_id=request_id,
-            )
+            with source_document_context(filename):
+                parse_response = await self.limiters.ocr.run(
+                    self.parser.parse,
+                    str(source_path),
+                    request_id=request_id,
+                )
             ocr_elapsed = time.perf_counter() - ocr_start
 
             llm_start = time.perf_counter()

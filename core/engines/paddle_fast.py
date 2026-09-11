@@ -6,6 +6,8 @@ import json
 import logging
 import os
 from pathlib import Path
+import shutil
+import tempfile
 import threading
 import time
 from typing import Any
@@ -13,6 +15,7 @@ from typing import Any
 from config.config import Settings, settings
 from core.engines.base import EngineParseResult
 from core.engines.normalizer import normalize_engine_output
+from core.preprocess import preprocess_file
 from services.model_assets import require_model_profile
 
 
@@ -36,7 +39,7 @@ class PaddleOCRFastEngine:
             "text_detection_model_name": self.settings.fast_ocr_detection_model_name,
             "text_recognition_model_name": self.settings.fast_ocr_recognition_model_name,
             "text_recognition_batch_size": self.settings.fast_ocr_recognition_batch_size,
-            "use_doc_orientation_classify": False,
+            "use_doc_orientation_classify": self.settings.fast_ocr_auto_rotate,
             "use_doc_unwarping": False,
             "use_textline_orientation": False,
         }
@@ -49,7 +52,9 @@ class PaddleOCRFastEngine:
 
     def parse(self, input_path: str, lang_hint: str = "auto") -> EngineParseResult:
         del lang_hint
+        staged_dir: str | None = None
         try:
+            input_path, staged_dir = self._preprocessed_input(input_path)
             pipeline = self._get_or_create_pipeline()
             page_count = self._get_input_page_count(input_path)
             total_start = time.perf_counter()
@@ -89,6 +94,38 @@ class PaddleOCRFastEngine:
             )
         except Exception as exc:
             raise RuntimeError(f"Fast PaddleOCR is unavailable: {exc}") from exc
+        finally:
+            if staged_dir is not None:
+                shutil.rmtree(staged_dir, ignore_errors=True)
+
+    def _preprocessed_input(self, input_path: str) -> tuple[str, str | None]:
+        """Clean an image input into a temp copy. Returns the path and any dir to remove.
+
+        PDFs are passed through untouched: this engine hands the document to
+        PaddleOCR whole rather than rasterizing it, so there is no page image to
+        clean. On this CPU path preprocessing competes with OCR for the same
+        cores, unlike the GPU path where it overlaps with inference.
+        """
+        if not self.settings.preprocess_enabled or Path(input_path).suffix.lower() == ".pdf":
+            return input_path, None
+
+        staged_dir = tempfile.mkdtemp(prefix=f"{self.name}_pre_")
+        destination = Path(staged_dir) / f"page_0000{Path(input_path).suffix or '.png'}"
+        result = preprocess_file(
+            input_path,
+            output_path=str(destination),
+            app_settings=self.settings,
+            debug_name=f"{Path(input_path).stem}/page_0001",
+        )
+        if not result.changed:
+            shutil.rmtree(staged_dir, ignore_errors=True)
+            return input_path, None
+        logger.info(
+            "fast-ocr preprocess duration=%.3fs steps=%s",
+            result.total_seconds,
+            result.summary(),
+        )
+        return result.path, staged_dir
 
     def warmup(self) -> None:
         self._get_or_create_pipeline()

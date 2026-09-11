@@ -15,6 +15,12 @@ slowapi==0.1.9
 # Transitive pin: paddleocr / onnxruntime are sensitive to the numpy 2.x line.
 numpy==2.3.5
 
+# Pinned at the version paddlex already resolves. Declared explicitly because
+# core/preprocess imports cv2 directly rather than only through paddleocr; the
+# preprocessing chain degrades to a no-op if it is missing, so this is not
+# mirrored into requirements-ci.txt.
+opencv-contrib-python==4.10.0.84
+
 # Extraction history (optional at runtime: no DATABASE_URL, no database).
 # [binary] ships libpq, so no system PostgreSQL client is needed.
 psycopg[binary]==3.2.10
