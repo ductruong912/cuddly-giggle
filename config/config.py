@@ -85,11 +85,11 @@ class Settings:
 
     # --- OpenAI structured extraction ---
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "").strip()
-    openai_model: str = _get_str("OPENAI_MODEL", "gpt-5-mini")
+    openai_model: str = _get_str("OPENAI_MODEL", "gpt-6-luna")
     openai_timeout_seconds: float = _get_float("OPENAI_TIMEOUT_SECONDS", 60.0)
     openai_max_retries: int = _get_int("OPENAI_MAX_RETRIES", 2)
     llm_max_input_chars: int = _get_int("LLM_MAX_INPUT_CHARS", 120_000)
-    llm_reasoning_effort: str = _get_str("LLM_REASONING_EFFORT", "low").lower()
+    llm_reasoning_effort: str = _get_str("LLM_REASONING_EFFORT", "medium").lower()
 
     # --- Extraction validation & self-healing ---
     # Extra extraction calls allowed when a record fails validation. Each retry
