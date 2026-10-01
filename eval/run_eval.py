@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--source",
-        choices=(REPLAY_SOURCE, "local", "online"),
+        choices=(REPLAY_SOURCE, "local"),
         default=REPLAY_SOURCE,
         help=(
             "replay recorded answers (default, needs no API key), or run the real "

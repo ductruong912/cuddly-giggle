@@ -14,7 +14,6 @@ from api.dependencies import (
     ensure_gpu_gguf_runtime,
     get_database_pool,
     get_local_extraction_service,
-    get_online_extraction_service,
     get_orchestrator,
     get_pipeline_limiters,
     get_upload_stager,
@@ -52,15 +51,11 @@ SUPPORTED_INPUT_SUFFIXES = frozenset(
         ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff",
     }
 )
-FAST_OCR_INPUT_SUFFIXES = frozenset(
-    {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
-)
 _MARKDOWN_BODY_CONTENT_TYPES = ("text/markdown", "text/plain", "application/json")
 
 _LOCAL_UNSUPPORTED_MESSAGE = (
     "Unsupported input type. Use PDF, Word, Excel, Markdown, or image files."
 )
-_ONLINE_UNSUPPORTED_MESSAGE = "Online OCR supports PDF and image files only."
 
 
 # =====================================================================================
@@ -224,25 +219,6 @@ async def extract_local_document(
     raise UnsupportedContentType(
         "Unsupported Content-Type. Use multipart/form-data, text/markdown, "
         "text/plain, or application/json."
-    )
-
-
-@doc_router.post("/online", response_model=LLMExtractionResponse)
-@limiter.limit(settings.rate_limit_extract)
-async def extract_online_document(
-    request: Request,
-    file: UploadFile | None = File(None),
-    service: DocumentExtractionService = Depends(get_online_extraction_service),
-    stager: UploadStager = Depends(get_upload_stager),
-) -> LLMExtractionResponse:
-    """Run DataLab SuryaOCR plus structured extraction on an uploaded PDF or image."""
-    upload = await resolve_upload(request, file)
-    return await _extract_upload(
-        service,
-        stager,
-        upload,
-        allowed_suffixes=FAST_OCR_INPUT_SUFFIXES,
-        unsupported_message=_ONLINE_UNSUPPORTED_MESSAGE,
     )
 
 

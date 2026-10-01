@@ -11,7 +11,6 @@ import logging
 
 from api.dependencies import (
     get_llm_extractor,
-    get_online_orchestrator,
     get_orchestrator,
     warmup_primary_engine,
 )
@@ -24,8 +23,6 @@ from services.vl_runtime import build_vl_runtime_manager
 logger = logging.getLogger(__name__)
 
 LOCAL_ROUTE = "local"
-ONLINE_ROUTE = "online"
-LIVE_ROUTES = (LOCAL_ROUTE, ONLINE_ROUTE)
 
 
 @contextmanager
@@ -37,22 +34,22 @@ def live_extraction_source(route: str) -> Iterator[LiveExtractionSource]:
     to be running alongside it.
 
     Args:
-        route: ``local`` for the on-box OCR pipeline, ``online`` for DataLab.
+        route: ``local`` for the on-box OCR pipeline.
 
     Raises:
         ValueError: the route is not one this harness knows how to build.
     """
-    if route not in LIVE_ROUTES:
-        raise ValueError(f"unknown route {route!r}; expected one of {', '.join(LIVE_ROUTES)}")
+    if route != LOCAL_ROUTE:
+        raise ValueError(f"unknown route {route!r}; expected {LOCAL_ROUTE}")
 
     runtime_manager = None
-    if route == LOCAL_ROUTE and has_usable_gpu() and settings.paddleocr_vl_use_gguf:
+    if has_usable_gpu() and settings.paddleocr_vl_use_gguf:
         logger.info("starting the local VL runtime for the evaluation run")
         runtime_manager = build_vl_runtime_manager(warmup=warmup_primary_engine)
         runtime_manager.ensure_ready()
 
     try:
-        parser = get_orchestrator() if route == LOCAL_ROUTE else get_online_orchestrator()
+        parser = get_orchestrator()
         yield LiveExtractionSource(
             parser, get_llm_extractor(), route_label=route, app_settings=settings
         )

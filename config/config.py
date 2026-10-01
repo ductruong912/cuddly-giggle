@@ -130,9 +130,6 @@ class Settings:
     fast_ocr_inference_engine: str = _get_str("FAST_OCR_INFERENCE_ENGINE", "onnxruntime")
     fast_ocr_enable_mkldnn: bool = _get_bool("FAST_OCR_ENABLE_MKLDNN", False)
     fast_ocr_auto_rotate: bool = _get_bool("FAST_OCR_AUTO_ROTATE", False)
-    fast_ocr_datalab_mode: str = _get_str("FAST_OCR_DATALAB_MODE", "balanced").lower()
-    fast_ocr_datalab_timeout_seconds: float = _get_float("FAST_OCR_DATALAB_TIMEOUT_SECONDS", 120.0)
-    datalab_api_key: str = os.getenv("DATALAB_API_KEY", "").strip()
     warmup_models_on_startup: bool     = _get_bool("WARMUP_MODELS_ON_STARTUP", False)
 
     # --- llama.cpp / GGUF bootstrap ---
@@ -250,12 +247,6 @@ class Settings:
     paddlex_disable_model_source_check: bool = _get_bool("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", True)
 
     def __post_init__(self) -> None:
-        if self.fast_ocr_datalab_mode not in {"fast", "balanced", "accurate"}:
-            raise ValueError(
-                "FAST_OCR_DATALAB_MODE must be one of: fast, balanced, accurate"
-            )
-        if self.fast_ocr_datalab_timeout_seconds <= 0:
-            raise ValueError("FAST_OCR_DATALAB_TIMEOUT_SECONDS must be greater than zero")
         if self.ocr_max_concurrency < 1:
             raise ValueError("OCR_MAX_CONCURRENCY must be at least 1")
         if self.llm_max_concurrency < 1:

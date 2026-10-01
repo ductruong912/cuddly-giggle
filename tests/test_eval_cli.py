@@ -157,6 +157,29 @@ def test_a_live_run_with_no_documents_exits_distinctly() -> None:
     assert main(["--source", "local"]) == EXIT_COULD_NOT_RUN
 
 
+def test_the_removed_online_source_is_rejected(capsys: pytest.CaptureFixture) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(["--source", "online"])
+
+    assert exc.value.code == EXIT_COULD_NOT_RUN
+    assert "invalid choice: 'online'" in capsys.readouterr().err
+
+
+def test_live_wiring_rejects_an_unsupported_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    from eval import wiring
+
+    def unexpected_call():
+        pytest.fail("unsupported route must not initialize OCR or LLM dependencies")
+
+    monkeypatch.setattr(wiring, "get_orchestrator", unexpected_call)
+    monkeypatch.setattr(wiring, "get_llm_extractor", unexpected_call)
+    monkeypatch.setattr(wiring, "has_usable_gpu", unexpected_call)
+
+    with pytest.raises(ValueError, match="unknown route 'online'"):
+        with wiring.live_extraction_source("online"):
+            pytest.fail("unsupported route must not yield a live source")
+
+
 def test_the_shipped_set_still_reports_its_known_blind_spots(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:

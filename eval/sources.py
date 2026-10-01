@@ -21,7 +21,7 @@ REPLAY_MARKDOWN = "# Replayed case\n\nNo document was read; answers are scripted
 
 
 class DocumentParser(Protocol):
-    """The parse contract shared by the local and online orchestrators."""
+    """The parse contract used by the local orchestrator."""
 
     def parse(self, input_path: str, *, request_id: str | None = None) -> ParseResponse: ...
 
