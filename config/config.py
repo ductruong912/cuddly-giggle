@@ -385,9 +385,10 @@ _prepend_windows_cuda_paths()
 # ---------------------------------------------------------------------------
 
 def configure_third_party_logging() -> None:
-    """Quieten paddlex's logger where it is installed, and carry on where it is not."""
+    """Quieten HTTPX and PaddleX logs, whether or not PaddleX is installed."""
     if not settings.quiet_third_party_logs:
         return
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
         from paddlex.utils import logging as paddlex_logging  # type: ignore
     except ImportError:
