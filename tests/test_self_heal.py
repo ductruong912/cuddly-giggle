@@ -54,19 +54,9 @@ def test_a_failed_answer_is_retried_and_recovers(
     assert outcome.is_valid
     assert outcome.healed is True
     assert outcome.data == valid_order
-
-
-def test_the_correction_names_the_field_and_the_arithmetic(
-    valid_order: dict, shifted_order: dict, parse_response: ParseResponse
-) -> None:
-    extractor = ScriptedExtractor([shifted_order, valid_order])
-
-    SelfHealingExtractor(extractor).extract(parse_response)
-
     correction = extractor.corrections[1] or ""
     assert "items.0" in correction
     assert "5000000.00" in correction and "500000.00" in correction
-    # Without this, the model "fixes" a column shift by inventing a quantity.
     assert "column was read" in correction
 
 
@@ -80,14 +70,6 @@ def test_retries_stop_at_the_configured_budget(
     assert outcome.attempts == 3, "1 initial attempt + LLM_SELF_HEAL_MAX_RETRIES"
     assert not outcome.is_valid
     assert outcome.healed is False
-
-
-def test_an_exhausted_case_still_returns_its_data(
-    shifted_order: dict, parse_response: ParseResponse
-) -> None:
-    """The caller decides whether to route it to a human, so it needs the record."""
-    outcome = SelfHealingExtractor(ScriptedExtractor([shifted_order])).extract(parse_response)
-
     assert outcome.data == shifted_order
     assert outcome.blocking_violations
     assert outcome.record is None

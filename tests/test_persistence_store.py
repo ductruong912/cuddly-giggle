@@ -1,19 +1,101 @@
-"""Store logic, checked against a fake connection.
-
-No database is needed here: these cover the mapping from an extraction to rows
-and parameters. The SQL itself is exercised by ``test_persistence_database.py``,
-which runs only when DATABASE_URL points at a real Postgres.
-"""
+"""Database pool failures, credential masking and record mapping without PostgreSQL."""
 from __future__ import annotations
 
+import dataclasses
 from datetime import date
 import json
 from typing import Any
 
 import pytest
 
-from services.persistence import ExtractionQuery, ExtractionRecord, ExtractionStore
+from config.config import Settings, mask_database_url, settings
+from services.persistence import (
+    DatabasePool,
+    DatabaseUnavailable,
+    ExtractionQuery,
+    ExtractionRecord,
+    ExtractionStore,
+)
 from services.persistence.extraction_store import MAX_PAGE_SIZE
+
+
+def configured(url: str, **overrides: object) -> Settings:
+    return dataclasses.replace(settings, database_url=url, **overrides)
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("postgresql://docpipe:secret@db:5432/app", "postgresql://docpipe:***@db:5432/app"),
+        ("postgresql://docpipe@db:5432/app", "postgresql://docpipe@db:5432/app"),
+        ("postgresql://db:5432/app", "postgresql://db:5432/app"),
+        ("", ""),
+    ],
+)
+def test_the_password_never_reaches_a_log_line(url: str, expected: str) -> None:
+    """Connection strings routinely land in startup lines and error messages."""
+    assert mask_database_url(url) == expected
+
+
+def test_a_password_with_an_at_sign_is_still_masked() -> None:
+    masked = mask_database_url("postgresql://user:p@ss@db:5432/app")
+
+    assert "p@ss" not in masked
+    assert masked.endswith("@db:5432/app")
+
+
+def test_settings_expose_the_masked_url() -> None:
+    app_settings = configured("postgresql://u:hunter2@db:5432/app")
+
+    assert "hunter2" not in app_settings.masked_database_url
+
+
+def test_persistence_is_off_without_a_url() -> None:
+    assert configured("").persistence_enabled is False
+    assert configured("postgresql://db/app").persistence_enabled is True
+
+
+def test_an_unopened_pool_refuses_to_hand_out_connections() -> None:
+    pool = DatabasePool(configured("postgresql://u:p@127.0.0.1:5432/db"))
+
+    assert pool.is_open is False
+    assert pool.check() is False
+    pool.close()
+    with pytest.raises(DatabaseUnavailable, match="not open"):
+        with pool.connection():
+            pass
+
+
+def test_an_unreachable_database_fails_at_startup() -> None:
+    """Better to fail on boot than on the first upload."""
+    pytest.importorskip("psycopg_pool", reason="the driver is needed to attempt a connection")
+    # Port 1 is reserved and never listening.
+    pool = DatabasePool(
+        configured("postgresql://u:p@127.0.0.1:1/db", database_connect_timeout_seconds=1)
+    )
+
+    with pytest.raises(DatabaseUnavailable, match="unreachable"):
+        pool.open()
+
+    assert pool.is_open is False
+
+
+def test_a_missing_driver_is_reported_clearly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DATABASE_URL set but psycopg absent must say so, not raise ImportError."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def blocked(name, *args, **kwargs):
+        if name.startswith(("psycopg", "psycopg_pool")):
+            raise ImportError(f"no module named {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked)
+    pool = DatabasePool(configured("postgresql://u:p@db:5432/app"))
+
+    with pytest.raises(DatabaseUnavailable, match="psycopg is not installed"):
+        pool.open()
 
 
 class FakeCursor:
@@ -115,32 +197,18 @@ def store_with(connection: FakeConnection) -> ExtractionStore:
     return ExtractionStore(FakePool(connection))
 
 
-def test_saving_returns_the_row_id() -> None:
+def test_the_header_is_denormalised_for_lookup() -> None:
     connection = FakeConnection(results=[[{"id": 77}]])
 
     assert store_with(connection).save(record()) == 77
 
-
-def test_the_header_is_denormalised_for_lookup() -> None:
-    connection = FakeConnection(results=[[{"id": 1}]])
-
-    store_with(connection).save(record())
-
-    _, params = connection.statements[0]
-    assert params["po_number"] == "215497"
-    assert params["po_date"] == date(2026, 6, 5), "DD-MM-YYYY parsed into a real DATE"
-
-
-def test_json_columns_are_serialised() -> None:
-    """psycopg does not adapt a bare dict to jsonb without an adapter."""
-    connection = FakeConnection(results=[[{"id": 1}]])
-
-    store_with(connection).save(record())
-
-    _, params = connection.statements[0]
+    sql, params = connection.statements[0]
+    assert "ON CONFLICT (request_id) DO UPDATE" in sql
     assert isinstance(params["data"], str)
     assert json.loads(params["data"])["po_number"] == "215497"
     assert json.loads(params["issues"]) == []
+    assert params["po_number"] == "215497"
+    assert params["po_date"] == date(2026, 6, 5), "DD-MM-YYYY parsed into a real DATE"
 
 
 def test_an_unparseable_date_is_stored_as_null() -> None:
@@ -159,22 +227,13 @@ def test_line_items_are_written_relationally() -> None:
 
     store_with(connection).save(record())
 
+    assert any(sql.startswith("DELETE") for sql, _ in connection.statements)
     assert connection.cursors, "line items go through executemany"
     _, rows = connection.cursors[0].executemany_calls[0]
     assert [row[0] for row in rows] == [42, 42], "each row carries the extraction id"
     assert [row[1] for row in rows] == [1, 2], "line numbers are 1-based"
     assert [row[2] for row in rows] == ["TX703AR", "CW823RJ"]
     assert rows[1][6] is None, "a null extension stays null"
-
-
-def test_old_line_items_are_cleared_before_rewrite() -> None:
-    """Re-processing a request must not leave rows from the previous attempt."""
-    connection = FakeConnection(results=[[{"id": 42}]])
-
-    store_with(connection).save(record())
-
-    deletes = [sql for sql, _ in connection.statements if sql.startswith("DELETE")]
-    assert deletes, "the previous line items are removed first"
 
 
 def test_a_record_with_no_items_writes_no_item_rows() -> None:
@@ -195,16 +254,6 @@ def test_items_without_a_code_are_skipped() -> None:
     assert connection.cursors == []
 
 
-def test_the_insert_is_idempotent_per_request() -> None:
-    """A retry of the same request updates rather than duplicating."""
-    connection = FakeConnection(results=[[{"id": 1}]])
-
-    store_with(connection).save(record())
-
-    insert_sql = connection.statements[0][0]
-    assert "ON CONFLICT (request_id) DO UPDATE" in insert_sql
-
-
 def test_listing_filters_by_purchase_order() -> None:
     connection = FakeConnection(results=[[]])
 
@@ -213,6 +262,7 @@ def test_listing_filters_by_purchase_order() -> None:
     sql, params = connection.statements[0]
     assert "WHERE po_number = %s" in sql
     assert params[0] == "215497"
+    assert "ORDER BY created_at DESC" in sql
 
 
 def test_listing_filters_by_item_code_without_duplicating_rows() -> None:
@@ -225,26 +275,15 @@ def test_listing_filters_by_item_code_without_duplicating_rows() -> None:
     assert params[0] == "TX703AR"
 
 
-def test_listing_is_newest_first(monkeypatch: pytest.MonkeyPatch) -> None:
-    connection = FakeConnection(results=[[]])
-
-    store_with(connection).list(ExtractionQuery())
-
-    sql, _ = connection.statements[0]
-    assert "ORDER BY created_at DESC" in sql
-
-
 @pytest.mark.parametrize(
     ("requested", "expected"),
     [(0, 1), (-5, 1), (10, 10), (MAX_PAGE_SIZE + 1000, MAX_PAGE_SIZE)],
 )
 def test_paging_is_clamped(requested: int, expected: int) -> None:
     """A caller must not be able to ask for the whole table in one request."""
-    assert ExtractionQuery(limit=requested).normalised().limit == expected
-
-
-def test_a_negative_offset_is_clamped() -> None:
-    assert ExtractionQuery(offset=-10).normalised().offset == 0
+    query = ExtractionQuery(limit=requested, offset=-10).normalised()
+    assert query.limit == expected
+    assert query.offset == 0
 
 
 def test_getting_a_missing_record_returns_none() -> None:

@@ -26,9 +26,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Pin the CUDA build of PaddlePaddle first; requirements.txt then resolves it as satisfied.
+# Install the CUDA build separately from the common application dependencies.
 RUN python3.11 -m pip install --no-cache-dir ${PADDLE_PKG} -i ${PADDLE_INDEX}
-COPY requirements.txt .
+COPY requirements.txt ./
 RUN python3.11 -m pip install --no-cache-dir -r requirements.txt
 
 COPY . .

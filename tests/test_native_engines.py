@@ -163,20 +163,10 @@ def test_the_engine_reads_a_real_text_layer(text_pdf: Path) -> None:
     assert "HOA DON MUA HANG" in combined
     assert "TT-0012" in combined
     assert "Trang hai" in combined
-
-
-def test_a_generated_text_pdf_is_judged_usable(text_pdf: Path) -> None:
-    """The whole point of the tier: this document must never reach OCR."""
-    assert is_pdf_text_result_usable(PdfTextEngine(settings).parse(str(text_pdf))) is True
-
-
-def test_the_engine_preserves_every_table_row(text_pdf: Path) -> None:
-    """A dropped row here becomes a dropped line item downstream."""
-    blocks = PdfTextEngine(settings).parse(str(text_pdf)).pages[0].blocks
-
-    combined = "\n".join(block.content for block in blocks)
+    assert is_pdf_text_result_usable(result) is True
+    first_page = "\n".join(block.content for block in result.pages[0].blocks)
     for code in ("TT-0012", "TT-0099", "TT-1234"):
-        assert code in combined
+        assert code in first_page
 
 
 def test_a_document_with_one_sparse_page_falls_back_to_ocr(tmp_path: Path) -> None:

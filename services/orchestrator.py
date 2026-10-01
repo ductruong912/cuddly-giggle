@@ -7,8 +7,8 @@ import time
 import uuid
 
 from config.config import Settings, settings
-from config.pipeline_logging import pipeline_message, request_logging_context
-from core.domain.schemas import ParseDecision, ParseOptions, ParseResponse
+from config.pipeline_logging import pipeline_message
+from core.domain.schemas import ParseDecision, ParseResponse
 from core.engines.base import EngineParseResult, ParseEngine
 from core.engines.native import (
     ExcelTextEngine,
@@ -45,16 +45,14 @@ class ParseOrchestrator:
     def parse(
         self,
         input_path: str,
-        options: ParseOptions | None = None,
         *,
         request_id: str | None = None,
     ) -> ParseResponse:
         """Route the file to the cheapest engine that can read it, then normalize."""
         resolved_request_id = request_id or f"req_{uuid.uuid4().hex[:12]}"
-        with request_logging_context(resolved_request_id):
-            return self._parse(input_path, options or ParseOptions(), resolved_request_id)
+        return self._parse(input_path, resolved_request_id)
 
-    def _parse(self, input_path: str, options: ParseOptions, request_id: str) -> ParseResponse:
+    def _parse(self, input_path: str, request_id: str) -> ParseResponse:
         total_start = time.perf_counter()
         primary_elapsed = 0.0
         pdf_text_elapsed = 0.0
@@ -64,10 +62,10 @@ class ParseOrchestrator:
         if self._should_try_word_text(input_path):
             logger.info(pipeline_message("PHASE 1", "route=word_text"))
             stage_start = time.perf_counter()
-            word_text = self.word_text_engine.parse(input_path, options.lang_hint.value)
+            word_text = self.word_text_engine.parse(input_path)
             word_text_elapsed = time.perf_counter() - stage_start
             decision = self._build_decision()
-            response = self._build_response(request_id, word_text, options, decision)
+            response = self._build_response(request_id, word_text, decision)
             logger.info(
                 "parse timings request_id=%s word_text=%.3fs total=%.3fs word_text_score=%.3f",
                 request_id,
@@ -80,10 +78,10 @@ class ParseOrchestrator:
         if self._should_try_excel_text(input_path):
             logger.info(pipeline_message("PHASE 1", "route=excel_text"))
             stage_start = time.perf_counter()
-            excel_text = self.excel_text_engine.parse(input_path, options.lang_hint.value)
+            excel_text = self.excel_text_engine.parse(input_path)
             excel_text_elapsed = time.perf_counter() - stage_start
             decision = self._build_decision()
-            response = self._build_response(request_id, excel_text, options, decision)
+            response = self._build_response(request_id, excel_text, decision)
             logger.info(
                 "parse timings request_id=%s excel_text=%.3fs total=%.3fs excel_text_score=%.3f",
                 request_id,
@@ -97,11 +95,11 @@ class ParseOrchestrator:
             logger.info(pipeline_message("PHASE 1", "route=pdf_text"))
             try:
                 stage_start = time.perf_counter()
-                pdf_text = self.pdf_text_engine.parse(input_path, options.lang_hint.value)
+                pdf_text = self.pdf_text_engine.parse(input_path)
                 pdf_text_elapsed = time.perf_counter() - stage_start
                 if is_pdf_text_result_usable(pdf_text):
                     decision = ParseDecision(reason="PDF text layer parsed without OCR.")
-                    response = self._build_response(request_id, pdf_text, options, decision)
+                    response = self._build_response(request_id, pdf_text, decision)
                     logger.info(
                         "parse timings request_id=%s pdf_text=%.3fs total=%.3fs pdf_text_score=%.3f",
                         request_id,
@@ -121,11 +119,11 @@ class ParseOrchestrator:
         self._guard_ocr_page_count(input_path)
         logger.info(pipeline_message("PHASE 1", "route=ocr engine=%s"), self.primary_engine.name)
         stage_start = time.perf_counter()
-        result = self.primary_engine.parse(input_path, options.lang_hint.value)
+        result = self.primary_engine.parse(input_path)
         primary_elapsed = time.perf_counter() - stage_start
         decision = self._build_decision()
 
-        response = self._build_response(request_id, result, options, decision)
+        response = self._build_response(request_id, result, decision)
         logger.info(
             pipeline_message(
                 "PHASE 2",
@@ -177,7 +175,6 @@ class ParseOrchestrator:
         self,
         request_id: str,
         result: EngineParseResult,
-        options: ParseOptions,
         decision: ParseDecision,
     ) -> ParseResponse:
         pages = result.pages

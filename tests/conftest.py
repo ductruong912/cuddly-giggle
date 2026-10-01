@@ -18,6 +18,7 @@ _TEST_TEMP_ROOT = Path(tempfile.mkdtemp(prefix="cuddly-giggle-tests-"))
 # cannot change what the suite measures.
 os.environ.update(
     OPENAI_API_KEY="test-key-never-used",
+    DATABASE_URL="",
     PARSE_OUTPUT_DIR=str(_TEST_TEMP_ROOT / "outputs"),
     DOC_TEMP_DIR=str(_TEST_TEMP_ROOT / "staging"),
     LLM_SELF_HEAL_MAX_RETRIES="2",

@@ -7,7 +7,6 @@ without downloading models or requiring a GPU.
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 import platform
 import subprocess
@@ -61,7 +60,9 @@ def selected_steps(args: argparse.Namespace) -> list[str]:
     if args.check:
         return [CHECK_STEP]
     if args.all:
-        return list(SETUP_STEPS)
+        from services.local_ocr_selector import has_usable_gpu
+
+        return list(SETUP_STEPS if has_usable_gpu() else SETUP_STEPS[:2])
     return [name for name in SETUP_STEPS if getattr(args, name.replace("-", "_"))]
 
 
@@ -92,6 +93,18 @@ def install_dependencies() -> None:
             "Dependency installation must run from the project's virtual environment. "
             "Activate venv or run venv\\Scripts\\python.exe scripts\\setup_runtime.py --dependencies."
         )
+    from services.local_ocr_selector import has_usable_gpu
+
+    gpu = has_usable_gpu()
+    paddle_package = "paddlepaddle-gpu==3.3.0" if gpu else "paddlepaddle==3.3.0"
+    paddle_index = "cu126" if gpu else "cpu"
+    subprocess.run(
+        [
+            sys.executable, "-m", "pip", "install", paddle_package,
+            "-i", f"https://www.paddlepaddle.org.cn/packages/stable/{paddle_index}/",
+        ],
+        check=True,
+    )
     command = [
         sys.executable,
         "-m",
@@ -103,53 +116,13 @@ def install_dependencies() -> None:
     subprocess.run(command, check=True)
 
 
-def warmup_ocr_models(
-    app_settings: object | None = None,
-    engine_factory: Callable[[str, object], object] | None = None,
-) -> None:
-    """Warm the configured primary OCR engine pipeline.
+def warmup_ocr_models() -> None:
+    """Use the same explicit model setup command for CPU and GPU machines."""
+    from config.config import settings
+    from scripts.setup_models import main as setup_models
 
-    The optional arguments keep this adapter independent from concrete OCR
-    runtimes during tests while the normal CLI path uses the app's registry.
-    """
-    if app_settings is None:
-        from config.config import settings
-
-        app_settings = settings
-    if engine_factory is None:
-        from core.engines.registry import create_engine
-
-        engine_factory = create_engine
-
-    from services.model_assets import write_model_profile
-
-    previous_setup_mode = os.environ.get("CUDDLY_GIGGLE_MODEL_SETUP")
-    os.environ["CUDDLY_GIGGLE_MODEL_SETUP"] = "1"
-    try:
-        engine_name = getattr(app_settings, "primary_engine")
-        normalized_name = (engine_name or "").strip().lower()
-        engine = engine_factory(engine_name, app_settings)
-        warmup = getattr(engine, "warmup", None)
-        if not callable(warmup):
-            raise RuntimeError(
-                f"Configured OCR engine {engine_name!r} does not support warmup."
-            )
-        warmup()
-        if hasattr(app_settings, "paddlex_cache_home"):
-            write_model_profile(app_settings, normalized_name.replace("_", "-"))
-    finally:
-        if previous_setup_mode is None:
-            os.environ.pop("CUDDLY_GIGGLE_MODEL_SETUP", None)
-        else:
-            os.environ["CUDDLY_GIGGLE_MODEL_SETUP"] = previous_setup_mode
-    verify_warmed_ocr_models(app_settings)
-
-
-def verify_warmed_ocr_models(app_settings: object) -> None:
-    cache_home = getattr(app_settings, "paddlex_cache_home", None)
-    if not cache_home:
-        return
-    model_root = Path(cache_home) / "official_models"
+    setup_models(["--auto"])
+    model_root = Path(settings.paddlex_cache_home) / "official_models"
     if not model_root.is_dir() or not any(model_root.iterdir()):
         raise RuntimeError("OCR model cache is empty after warmup; retry --ocr-models.")
 

@@ -78,6 +78,13 @@ def build_preflight_payload() -> dict[str, Any]:
     llama_dir = _repo_relative_path(getattr(app_settings, "llama_cpp_dir", "llama"))
     models_dir = _repo_relative_path(getattr(app_settings, "llama_cpp_models_dir", "models"))
     from services.llama import default_model_artifacts, is_artifact_ready, is_llama_cpp_ready
+    from services.local_ocr_selector import has_usable_gpu
+
+    llama_required = bool(
+        has_usable_gpu()
+        and getattr(app_settings, "paddleocr_vl_use_gguf", False)
+        and getattr(app_settings, "llama_server_autostart", False)
+    )
 
     packages = {
         "paddle": _find_spec("paddle"),
@@ -120,6 +127,7 @@ def build_preflight_payload() -> dict[str, Any]:
             "models": sorted([p.name for p in model_root.iterdir()]) if model_root.exists() else [],
         },
         "llama_runtime": {
+            "required": llama_required,
             "path": str(llama_dir),
             "ready": llama_runtime_ready,
             "models": [
@@ -129,7 +137,11 @@ def build_preflight_payload() -> dict[str, Any]:
         },
         "nvidia_smi": _nvidia_smi(),
     }
-    payload["ok"] = bool(all(packages.values()) and paddle_models_ready and llama_runtime_ready and llama_models_ready)
+    payload["ok"] = bool(
+        all(packages.values())
+        and paddle_models_ready
+        and (not llama_required or (llama_runtime_ready and llama_models_ready))
+    )
     return payload
 
 

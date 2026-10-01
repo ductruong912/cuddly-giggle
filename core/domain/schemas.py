@@ -6,10 +6,6 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-class LangHint(str, Enum):
-    auto = "auto"
-
-
 class BlockType(str, Enum):
     text = "text"
     table = "table"
@@ -74,10 +70,6 @@ class ParseResponse(BaseModel):
     reading_order: list[str]
     markdown: str | None = None
     engine_name: str = ""
-
-
-class ParseOptions(BaseModel):
-    lang_hint: LangHint = LangHint.auto
 
 
 class LLMExtractionOCRMetadata(BaseModel):

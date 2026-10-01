@@ -83,23 +83,23 @@ python --version
 python -m pip install --upgrade pip
 ```
 
-Open `.env` and set `OPENAI_API_KEY` if you need PO extraction. Choose **one**
-of the following profiles and update the existing values in `.env` accordingly.
+Open `.env` and set `OPENAI_API_KEY` if you need PO extraction.
+
+`requirements.txt` contains all application and test dependencies, grouped by
+function. Choose the CPU/GPU installation recipe below; both use this same file
+and install the matching Paddle wheel separately.
+Update the existing values in `.env` for your chosen recipe.
 
 ### 2A. Local CPU OCR — no usable GPU
 
-`requirements.txt` pins PaddlePaddle GPU. Create a CPU dependency file inside
-`venv/` while preserving the original file. This works in PowerShell and Bash:
+Install the CPU runtime profile:
+
+If Paddle GPU is already installed, uninstall `paddlepaddle-gpu` first to avoid
+keeping both Paddle packages in the same environment.
 
 ```bash
-python -c "from pathlib import Path
-src = Path('requirements.txt').read_text(encoding='utf-8')
-Path('venv/requirements-cpu.txt').write_text(
-    src.replace('paddlepaddle-gpu==3.3.0', 'paddlepaddle==3.3.0'),
-    encoding='utf-8'
-)"
 python -m pip install "paddlepaddle==3.3.0" -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
-python -m pip install -r venv/requirements-cpu.txt
+python -m pip install -r requirements.txt
 ```
 
 Update `.env` before downloading models:
@@ -113,11 +113,12 @@ LLAMA_SERVER_AUTOSTART=false
 ```
 
 ```bash
-python scripts/setup_models.py --fast-onnx
+python scripts/setup_models.py --auto
 ```
 
-The command downloads models and writes a manifest into `.paddlex/`; keep
-both the cache and manifest. No llama.cpp/GGUF is needed. The API selects its
+`--auto` uses the same hardware check as the API. The command downloads models
+and writes a manifest into `.paddlex/`; keep both the cache and manifest.
+No llama.cpp/GGUF is needed. The API selects its
 engine based on hardware; `FAST_OCR_DEVICE=cpu` does not force the CPU path
 on a machine with a detected GPU.
 
@@ -127,7 +128,7 @@ In the virtual environment, install Paddle CUDA before the full dependencies.
 If Paddle CPU is installed, uninstall `paddlepaddle` first to avoid keeping
 both CPU and GPU packages.
 
-```powershell
+```bash
 nvidia-smi
 python -m pip install "paddlepaddle-gpu==3.3.0" -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
 python -m pip install -r requirements.txt
@@ -145,17 +146,24 @@ LLAMA_SERVER_AUTOSTART=true
 
 Download the runtime, GGUF files, and OCR models, then check the setup:
 
-```powershell
+```bash
 python scripts/setup_runtime.py --llama
-python scripts/setup_models.py --paddleocr-vl
+python scripts/setup_models.py --auto
 python -c "import paddle; print(paddle.device.is_compiled_with_cuda()); print(paddle.device.cuda.device_count())"
 python scripts/setup_runtime.py --check
 ```
 
 The Paddle check must print `True` and a GPU count greater than `0`.
 `setup_runtime.py` supports Windows only; it downloads binaries into `llama/`
-and GGUF files into `models/`. The API starts llama-server on port `8080`
-when a local route is first called.
+and GGUF files into `models/`. `setup_runtime.py --ocr-models` delegates to
+`setup_models.py --auto`,
+and `--dependencies` installs the matching Paddle wheel, then `requirements.txt`.
+The script uses the official CPU index or CUDA 12.6 index. For other CUDA builds,
+use the manual installation commands with the matching official wheel index.
+`--all` skips llama.cpp on CPU machines. `--check` requires local llama assets
+only when GPU GGUF autostart is configured.
+
+The API starts llama-server on port `8080` when a local route is first called.
 
 See the Paddle installation guides for
 [Windows](https://www.paddlepaddle.org.cn/documentation/docs/install/pip/windows-pip_en.html)
@@ -282,10 +290,12 @@ Leave `DATABASE_URL` empty before running tests to avoid using a real database
 configured in `.env`.
 
 ```bash
-python -m pip install -r requirements-ci.txt
+python -m pip install -r requirements.txt
 python -m pytest
 python -m eval.run_eval --fail-under 0.92
 ```
+
+CI reads the same file and skips the OCR/image groups for mocked tests.
 
 Tests use mocked providers. Default evaluation scores recorded answers against
 synthetic data; it does not measure real OCR accuracy. See the

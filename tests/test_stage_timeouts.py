@@ -36,19 +36,6 @@ def test_work_inside_the_budget_is_unaffected() -> None:
     assert asyncio.run(body()) == "done"
 
 
-def test_overrunning_work_fails_the_request() -> None:
-    stage = limiter()
-    release = threading.Event()
-
-    async def body() -> None:
-        with pytest.raises(StageTimedOut, match="did not finish"):
-            await stage.run(release.wait, 5)
-        release.set()
-        await settle(stage)
-
-    asyncio.run(body())
-
-
 def test_an_abandoned_slot_is_not_handed_back_early() -> None:
     """The thread is still running, so releasing the slot would over-admit work."""
     stage = limiter(slots=1)
@@ -66,27 +53,10 @@ def test_an_abandoned_slot_is_not_handed_back_early() -> None:
 
         release.set()
         await settle(stage)
+        assert (stage.abandoned, stage.in_flight) == (0, 0)
+        assert await stage.run(lambda: "recovered") == "recovered"
 
     asyncio.run(body())
-
-
-def test_the_slot_returns_once_the_call_finally_completes() -> None:
-    """Restarting the wedged dependency makes the call return; capacity recovers."""
-    stage = limiter(slots=1)
-    release = threading.Event()
-
-    async def body() -> str:
-        with pytest.raises(StageTimedOut):
-            await stage.run(release.wait, 5)
-
-        release.set()  # stands in for the dependency being restarted
-        await settle(stage)
-
-        assert stage.abandoned == 0
-        assert stage.in_flight == 0
-        return await stage.run(lambda: "recovered")
-
-    assert asyncio.run(body()) == "recovered"
 
 
 def test_a_failing_call_releases_its_slot() -> None:
@@ -104,23 +74,6 @@ def test_a_failing_call_releases_its_slot() -> None:
         return await stage.run(lambda: "still working")
 
     assert asyncio.run(body()) == "still working"
-
-
-def test_the_stage_reports_that_it_is_degraded() -> None:
-    """Readiness depends on this: a held slot must be visible, not silent."""
-    stage = limiter(slots=2)
-    release = threading.Event()
-
-    async def body() -> None:
-        with pytest.raises(StageTimedOut):
-            await stage.run(release.wait, 5)
-
-        assert stage.abandoned == 1
-        release.set()
-        await settle(stage)
-        assert stage.abandoned == 0
-
-    asyncio.run(body())
 
 
 def test_the_snapshot_exposes_abandoned_slots() -> None:

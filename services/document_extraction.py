@@ -15,7 +15,6 @@ import uuid
 from config.config import Settings, settings
 from config.pipeline_logging import (
     pipeline_message,
-    request_logging_context,
     source_document_context,
 )
 from core.domain.schemas import (
@@ -103,7 +102,7 @@ class DocumentExtractionService:
             raise
         except Exception as exc:
             logger.exception(
-                pipeline_message("FAILED", "%s extraction request error", request_id=request_id),
+                pipeline_message("FAILED", "%s extraction request error"),
                 self.route_label,
             )
             raise DocumentExtractionFailed(f"Unexpected extraction error: {exc}") from exc
@@ -112,7 +111,6 @@ class DocumentExtractionService:
             pipeline_message(
                 "COMPLETED route=%s pages=%s markdown_chars=%s ocr=%.3fs llm=%.3fs "
                 "save=%.3fs total=%.3fs validation=%s attempts=%s saved=%s",
-                request_id=parse_response.request_id,
             ),
             self.route_label,
             len(parse_response.pages),
@@ -186,7 +184,6 @@ class DocumentExtractionService:
             logger.exception(
                 pipeline_message(
                     "FAILED", "could not persist the extraction",
-                    request_id=parse_response.request_id,
                 )
             )
             if self.settings.database_persistence_required:
@@ -197,11 +194,7 @@ class DocumentExtractionService:
 
     async def _extract(self, parse_response: ParseResponse) -> ExtractionOutcome:
         """Extract and validate inside one LLM slot, so retries cost latency only."""
-        return await self.limiters.llm.run(self._extract_blocking, parse_response)
-
-    def _extract_blocking(self, parse_response: ParseResponse) -> ExtractionOutcome:
-        with request_logging_context(parse_response.request_id):
-            return self.validator.extract(parse_response)
+        return await self.limiters.llm.run(self.validator.extract, parse_response)
 
     @staticmethod
     def _save_artifacts(

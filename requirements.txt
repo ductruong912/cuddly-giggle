@@ -1,39 +1,34 @@
-# Base API & Web Runtime
+# Paddle CPU/GPU: install separately (README).
+
+# API
 fastapi==0.115.12
 uvicorn[standard]==0.34.2
 pydantic==2.13.4
 python-multipart==0.0.20
-python-dotenv==1.1.0
-httpx==0.28.1
-# Bounded rather than exact: v2's only breaking change is the type of
-# ResponseFunctionToolCallOutputItem.output, which this code never touches.
-openai>=1.78,<3
 slowapi==0.1.9
 
-# Transitive pin: paddleocr / onnxruntime are sensitive to the numpy 2.x line.
-numpy==2.3.5
+# Configuration
+python-dotenv==1.1.0
 
-# Pinned at the version paddlex already resolves. Declared explicitly because
-# core/preprocess imports cv2 directly rather than only through paddleocr; the
-# preprocessing chain degrades to a no-op if it is missing, so this is not
-# mirrored into requirements-ci.txt.
-opencv-contrib-python==4.10.0.84
+# OpenAI
+openai>=1.78,<3
+httpx==0.28.1
 
-# Extraction history (optional at runtime: no DATABASE_URL, no database).
-# [binary] ships libpq, so no system PostgreSQL client is needed.
+# Documents
+PyMuPDF==1.27.2.3
+
+# PostgreSQL
 psycopg[binary]==3.2.10
 psycopg-pool==3.2.6
 
-# Testing
-pytest==8.3.5
-
-# Document & OCR Parsers (shared CPU/GPU packages)
-PyMuPDF==1.27.2.3
+# OCR
 paddleocr[doc-parser]==3.7.0
 paddlex[ocr]==3.7.0
 onnxruntime==1.23.2
 
-# Framework PaddlePaddle GPU
-# --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu130/
-# --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
-paddlepaddle-gpu==3.3.0
+# Image preprocessing
+numpy==2.3.5
+opencv-contrib-python==4.10.0.84
+
+# Tests
+pytest==8.3.5

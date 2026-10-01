@@ -61,6 +61,9 @@ def test_the_runtime_starts_once_for_repeated_calls() -> None:
     harness = RuntimeHarness()
     manager = harness.manager()
 
+    assert manager.was_started is False
+    manager.shutdown()
+    assert manager.is_ready is False
     manager.ensure_ready()
     manager.ensure_ready()
     manager.ensure_ready()
@@ -70,30 +73,14 @@ def test_the_runtime_starts_once_for_repeated_calls() -> None:
     assert manager.is_ready
 
 
-def test_an_untouched_runtime_is_not_reported_as_started() -> None:
-    """Readiness must not call a runtime that was never needed a failure."""
-    manager = RuntimeHarness().manager()
-
-    assert manager.was_started is False
-
-
-def test_a_dead_process_makes_the_runtime_unready() -> None:
-    harness = RuntimeHarness()
-    manager = harness.manager()
-    manager.ensure_ready()
-
-    harness.processes[0].die()
-
-    assert manager.is_ready is False
-    assert manager.was_started is True, "distinguishes 'never started' from 'died'"
-
-
 def test_a_dead_process_is_restarted_on_next_use() -> None:
     """The fix: the next request revives the backend instead of failing forever."""
     harness = RuntimeHarness()
     manager = harness.manager()
     manager.ensure_ready()
     harness.processes[0].die()
+    assert manager.is_ready is False
+    assert manager.was_started is True
 
     manager.ensure_ready()
 
@@ -126,14 +113,6 @@ def test_shutdown_stops_a_process_this_manager_started() -> None:
     assert harness.processes[0].stopped is True
     assert manager.is_ready is False
     assert manager.was_started is False
-
-
-def test_shutdown_is_safe_when_nothing_was_started() -> None:
-    manager = RuntimeHarness().manager()
-
-    manager.shutdown()
-
-    assert manager.is_ready is False
 
 
 def test_an_external_server_is_judged_by_the_probe() -> None:

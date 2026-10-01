@@ -41,42 +41,17 @@ def artifact_dir(outputs: Path, name: str, *, age_days: float) -> Path:
     return directory
 
 
-def test_expired_artifacts_are_removed(outputs: Path) -> None:
-    old = artifact_dir(outputs, "old-po", age_days=30)
-
-    result = ArtifactRetentionSweeper(configured(outputs, retention_days=14)).sweep()
-
-    assert not old.exists()
-    assert result.removed == 1
-
-
-def test_recent_artifacts_are_kept(outputs: Path) -> None:
-    recent = artifact_dir(outputs, "recent-po", age_days=1)
-
-    result = ArtifactRetentionSweeper(configured(outputs, retention_days=14)).sweep()
-
-    assert recent.exists()
-    assert result.removed == 0
-
-
 def test_only_the_expired_ones_go(outputs: Path) -> None:
     keep = artifact_dir(outputs, "keep", age_days=2)
     drop = artifact_dir(outputs, "drop", age_days=40)
+    edge = artifact_dir(outputs, "edge", age_days=13.9)
 
     result = ArtifactRetentionSweeper(configured(outputs, retention_days=14)).sweep()
 
     assert keep.exists()
     assert not drop.exists()
-    assert (result.removed, result.scanned) == (1, 2)
-
-
-def test_a_boundary_age_is_kept(outputs: Path) -> None:
-    """Exactly at the window is inside it; only strictly older is removed."""
-    edge = artifact_dir(outputs, "edge", age_days=13.9)
-
-    ArtifactRetentionSweeper(configured(outputs, retention_days=14)).sweep()
-
     assert edge.exists()
+    assert (result.removed, result.scanned) == (1, 3)
 
 
 def test_retention_can_be_disabled(outputs: Path) -> None:

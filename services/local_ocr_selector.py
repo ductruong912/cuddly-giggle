@@ -5,11 +5,11 @@ from collections.abc import Callable
 from functools import lru_cache
 import logging
 import subprocess
+from typing import TYPE_CHECKING
 
-from config.config import Settings, settings
-from core.engines.base import ParseEngine
-from core.engines.paddle_fast import PaddleOCRFastEngine
-from core.engines.paddle import PaddleOCRVLEngine
+if TYPE_CHECKING:
+    from config.config import Settings
+    from core.engines.base import ParseEngine
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +18,16 @@ class LocalOCRSelector:
 
     def __init__(
         self,
-        app_settings: Settings = settings,
+        app_settings: Settings | None = None,
         *,
         gpu_available: Callable[[], bool] | None = None,
-        vlm_factory: Callable[[Settings], ParseEngine] = PaddleOCRVLEngine,
-        cpu_factory: Callable[[Settings], ParseEngine] = PaddleOCRFastEngine,
+        vlm_factory: Callable[[Settings], ParseEngine] | None = None,
+        cpu_factory: Callable[[Settings], ParseEngine] | None = None,
     ) -> None:
+        if app_settings is None:
+            from config.config import settings
+
+            app_settings = settings
         self.settings = app_settings
         self._gpu_available = gpu_available or has_usable_gpu
         self._vlm_factory = vlm_factory
@@ -31,8 +35,16 @@ class LocalOCRSelector:
 
     def select(self) -> ParseEngine:
         if self._gpu_available():
-            return self._vlm_factory(self.settings)
-        return self._cpu_factory(self.settings)
+            if self._vlm_factory is not None:
+                return self._vlm_factory(self.settings)
+            from core.engines.paddle import PaddleOCRVLEngine
+
+            return PaddleOCRVLEngine(self.settings)
+        if self._cpu_factory is not None:
+            return self._cpu_factory(self.settings)
+        from core.engines.paddle_fast import PaddleOCRFastEngine
+
+        return PaddleOCRFastEngine(self.settings)
 
 
 @lru_cache(maxsize=1)
