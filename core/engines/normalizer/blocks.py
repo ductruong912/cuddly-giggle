@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from core.domain.schemas import Block
+from core.domain.schemas import Block, ConfidenceSource
 from core.engines.normalizer.coercion import (
     bbox_to_polygon,
     centroid,
@@ -32,12 +32,20 @@ def build_blocks_from_layout_boxes(
             continue
         label = str(box.get("label", "")).strip() or "other"
         poly = to_polygon(box.get("coordinate") or box.get("bbox") or box.get("box"))
+        raw_score = box.get("score")
+        score = safe_float(raw_score, 0.0)
+        conf_source = (
+            ConfidenceSource.real_engine
+            if (raw_score is not None and score > 0.0)
+            else ConfidenceSource.unknown
+        )
         block = Block(
             block_id=new_block_id("blk"),
             type=map_label_to_type(label),
             content=str(box.get("text", "")).strip(),
             bbox=poly,
-            confidence=safe_float(box.get("score"), 0.0),
+            confidence=score,
+            confidence_source=conf_source,
             page_index=page_index,
             source_engine=source_engine,
             extra={"label": label},
@@ -62,13 +70,21 @@ def build_blocks_from_parsing_res_list(
             poly = bbox_to_polygon(item.get("bbox"))
         block_id = str(item.get("block_id") or new_block_id("blk"))
         block_order = item.get("block_order")
+        raw_score = item.get("score")
+        score = safe_float(raw_score, 0.0)
+        conf_source = (
+            ConfidenceSource.real_engine
+            if (raw_score is not None and score > 0.0)
+            else ConfidenceSource.unknown
+        )
         blocks.append(
             Block(
                 block_id=block_id,
                 type=map_label_to_type(label),
                 content=content,
                 bbox=poly,
-                confidence=safe_float(item.get("score"), 0.0),
+                confidence=score,
+                confidence_source=conf_source,
                 page_index=page_index,
                 source_engine=source_engine,
                 extra={

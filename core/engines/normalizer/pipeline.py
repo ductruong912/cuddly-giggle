@@ -2,7 +2,15 @@
 from __future__ import annotations
 
 from config.config import Settings, settings
-from core.domain.schemas import Block, BlockType, PageParseResult, Table
+from core.domain.schemas import (
+    Block,
+    BlockType,
+    ConfidenceSource,
+    CoordinateSpace,
+    PageGeometry,
+    PageParseResult,
+    Table,
+)
 from core.engines.normalizer.blocks import (
     build_blocks_from_layout_boxes,
     build_blocks_from_parsing_res_list,
@@ -120,21 +128,51 @@ def _build_pages(
 
         # No explicit blocks from the engine: create one text block fallback.
         if not blocks and isinstance(page.get("text"), str):
+            raw_sc = page.get("score")
+            sc = safe_float(raw_sc, 0.0)
+            conf_src = ConfidenceSource.synthesized if (raw_sc is not None and sc > 0.0) else ConfidenceSource.unknown
             blocks = [
                 Block(
                     block_id=new_block_id("blk"),
                     type=BlockType.text,
                     content=page["text"],
                     bbox=[],
-                    confidence=safe_float(page.get("score"), 0.0),
+                    confidence=sc,
+                    confidence_source=conf_src,
                     page_index=page_index,
                     source_engine=source_engine,
                 )
             ]
 
+        # Extract page dimensions if available
+        width = safe_float(page.get("width"), 0.0)
+        height = safe_float(page.get("height"), 0.0)
+        if width == 0.0 or height == 0.0:
+            doc_prep = page.get("doc_preprocessor_res")
+            if isinstance(doc_prep, dict):
+                out_img = doc_prep.get("output_img") or doc_prep.get("input_img")
+                if hasattr(out_img, "shape") and len(out_img.shape) >= 2:
+                    height = float(out_img.shape[0])
+                    width = float(out_img.shape[1])
+            elif hasattr(page.get("input_img"), "shape"):
+                img = page["input_img"]
+                height = float(img.shape[0])
+                width = float(img.shape[1])
+
+        coord_space = CoordinateSpace.none
+        if width > 0 and height > 0:
+            coord_space = (
+                CoordinateSpace.pdf_points
+                if source_engine == "pdf_text"
+                else CoordinateSpace.processed_image_pixels
+            )
+
+        geometry = PageGeometry(width=width, height=height, coordinate_space=coord_space)
+
         pages.append(
             PageParseResult(
                 page_index=page_index,
+                geometry=geometry,
                 blocks=blocks,
                 tables=tables,
                 reading_order=reading_order(blocks),

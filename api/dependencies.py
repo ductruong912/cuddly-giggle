@@ -15,7 +15,7 @@ from typing import Callable, TypeVar
 from fastapi import HTTPException, Request
 
 from api.uploads import UploadStager
-from config.config import settings
+from config.config import Settings, settings
 from services.concurrency import PipelineLimiters
 from services.document_extraction import DocumentExtractionService
 from services.llm_extraction import LLMExtractionService
@@ -51,6 +51,11 @@ def _singleton(key: str, factory: Callable[[], T]) -> T:
 # =====================================================================================
 # Pipeline components
 # =====================================================================================
+
+def get_settings() -> Settings:
+    """Process-wide settings."""
+    return settings
+
 
 def get_pipeline_limiters() -> PipelineLimiters:
     """Bounded stage semaphores shared by every request."""

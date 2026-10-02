@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from config.config import Settings, settings
-from core.domain.schemas import Block, BlockType, PageParseResult, Table, TableCell
+from core.domain.schemas import Block, BlockType, ConfidenceSource, PageParseResult, Table, TableCell
 from core.engines.base import EngineParseResult, ParseEngine
 from core.engines.native.office_shared import clean_text, convert_office, rows_to_markdown
 
@@ -81,6 +81,7 @@ class WordTextEngine(ParseEngine):
                         type=BlockType.text,
                         content=text,
                         confidence=WORD_TEXT_CONFIDENCE,
+                        confidence_source=ConfidenceSource.synthesized,
                         page_index=0,
                         source_engine=self.name,
                     )
@@ -103,6 +104,7 @@ class WordTextEngine(ParseEngine):
                         type=BlockType.table,
                         content=table_markdown,
                         confidence=WORD_TEXT_CONFIDENCE,
+                        confidence_source=ConfidenceSource.synthesized,
                         page_index=0,
                         source_engine=self.name,
                         extra={"table_id": table.table_id},

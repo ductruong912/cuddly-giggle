@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 from config.config import Settings, settings
 from config.pipeline_logging import current_source_document, pipeline_message
-from core.domain.schemas import PageParseResult
+from core.domain.schemas import PageParseResult, PageVisualDTO
 from core.engines.base import EngineParseResult, ParseEngine
 from core.engines.normalizer import normalize_engine_output
 from core.preprocess import preprocess_file
@@ -121,7 +121,36 @@ class PaddlePipelineEngine(ParseEngine):
             raise RuntimeError(self._unavailable_message(py_error, cli_error))
 
         pages, markdown, normalized_raw = normalize_engine_output(raw, self.name, self.settings)
+        page_img = self._extract_page_image_from_raw(raw, input_path)
+        page_images = [page_img] if page_img is not None else []
+        normalized_raw["page_images"] = page_images
+        if page_images and pages:
+            pages = [
+                p.model_copy(update={"visual": PageVisualDTO(available=True, kind="processed_page")})
+                for p in pages
+            ]
         return EngineParseResult(engine_name=self.name, pages=pages, markdown=markdown, raw=normalized_raw)
+
+    def _extract_page_image_from_raw(self, raw: object, input_path: str) -> Any | None:
+        item = raw[0] if isinstance(raw, list) and raw else raw
+        res_dict = getattr(item, "res", item)
+        if isinstance(res_dict, dict):
+            doc_prep = res_dict.get("doc_preprocessor_res")
+            if isinstance(doc_prep, dict):
+                for key in ("output_img", "rot_img", "input_img"):
+                    img = doc_prep.get(key)
+                    if hasattr(img, "shape") and len(img.shape) >= 2:
+                        return img
+            img = res_dict.get("input_img")
+            if hasattr(img, "shape") and len(img.shape) >= 2:
+                return img
+        if Path(input_path).is_file():
+            try:
+                import cv2
+                return cv2.imread(input_path)
+            except Exception:
+                pass
+        return None
 
     def _prepare_page_images(self, input_path: str) -> tuple[list[str] | None, Callable[[], None]]:
         """Produce the page images OCR should read, cleaned up if preprocessing is on.
@@ -239,17 +268,38 @@ class PaddlePipelineEngine(ParseEngine):
     def _merge_page_results(self, results: list[EngineParseResult]) -> EngineParseResult:
         merged_pages: list[PageParseResult] = []
         markdown_parts: list[str] = []
+        merged_images: list[Any] = []
         page_no = 0
         for result in results:
+            result_images = result.raw.get("page_images") or []
+            merged_images.extend(result_images)
             for page in result.pages:
                 blocks = [block.model_copy(update={"page_index": page_no}) for block in page.blocks]
                 tables = [table.model_copy(update={"page_index": page_no}) for table in page.tables]
-                merged_pages.append(page.model_copy(update={"page_index": page_no, "blocks": blocks, "tables": tables}))
+                has_img = page_no < len(merged_images) and merged_images[page_no] is not None
+                merged_pages.append(
+                    page.model_copy(
+                        update={
+                            "page_index": page_no,
+                            "blocks": blocks,
+                            "tables": tables,
+                            "visual": PageVisualDTO(
+                                available=has_img,
+                                kind="processed_page" if has_img else None,
+                            ),
+                        }
+                    )
+                )
                 page_no += 1
             if result.markdown and result.markdown.strip():
                 markdown_parts.append(result.markdown)
         markdown = "\n\n".join(markdown_parts) or None
-        return EngineParseResult(engine_name=self.name, pages=merged_pages, markdown=markdown, raw={})
+        return EngineParseResult(
+            engine_name=self.name,
+            pages=merged_pages,
+            markdown=markdown,
+            raw={"page_images": merged_images},
+        )
 
     def _try_python_api(self, input_path: str, lang_hint: str) -> tuple[dict[str, Any] | None, str]:
         try:

@@ -8,7 +8,7 @@ import uuid
 
 from config.config import Settings, settings
 from config.pipeline_logging import pipeline_message
-from core.domain.schemas import ParseDecision, ParseResponse
+from core.domain.schemas import PageVisualDTO, ParseDecision, ParseResponse
 from core.engines.base import EngineParseResult, ParseEngine
 from core.engines.native import (
     ExcelTextEngine,
@@ -17,7 +17,7 @@ from core.engines.native import (
     is_pdf_text_result_usable,
 )
 from services.local_ocr_selector import LocalOCRSelector
-from services.output import filter_tables_markdown
+from services.output import filter_tables_markdown, save_page_visual_image
 
 
 logger = logging.getLogger(__name__)
@@ -178,6 +178,26 @@ class ParseOrchestrator:
         decision: ParseDecision,
     ) -> ParseResponse:
         pages = result.pages
+        page_images = result.raw.get("page_images") or []
+        if page_images:
+            updated_pages = []
+            for idx, page in enumerate(pages):
+                if idx < len(page_images) and page_images[idx] is not None:
+                    try:
+                        save_page_visual_image(request_id, idx, page_images[idx], self.settings)
+                        kind = page.visual.kind or ("processed_page" if "ocr" in result.engine_name else "rendered_page")
+                        url = f"/v1/doc/parse/{request_id}/pages/{idx}/image"
+                        updated_pages.append(
+                            page.model_copy(update={"visual": PageVisualDTO(available=True, kind=kind, url=url)})
+                        )
+                    except Exception:
+                        logger.warning("failed to save page visual image request_id=%s page=%s", request_id, idx, exc_info=True)
+                        updated_pages.append(page)
+                else:
+                    updated_pages.append(page)
+            pages = updated_pages
+            result.raw.pop("page_images", None)
+
         blocks = list(itertools.chain.from_iterable(page.blocks for page in pages))
         tables = list(itertools.chain.from_iterable(page.tables for page in pages))
         reading_order = list(itertools.chain.from_iterable(page.reading_order for page in pages))
@@ -189,6 +209,7 @@ class ParseOrchestrator:
         return ParseResponse(
             request_id=request_id,
             decision=decision,
+            engine_name=result.engine_name,
             pages=pages,
             blocks=blocks,
             tables=tables,

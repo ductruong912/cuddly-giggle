@@ -16,7 +16,7 @@ from services.document_extraction import DocumentExtractionService
 def test_the_expected_routes_are_registered() -> None:
     paths = {getattr(route, "path", None) for route in app.routes}
 
-    assert {"/healthz", "/v1/extract/local", "/v1/doc/ocr"} <= paths
+    assert {"/healthz", "/v1/extract/local", "/v1/doc/ocr", "/v1/doc/parse"} <= paths
     assert "/v1/extract/online" not in app.openapi()["paths"]
 
 

@@ -14,7 +14,18 @@ from typing import Any
 import unicodedata
 
 from config.config import Settings, settings
-from core.domain.schemas import Block, BlockType, PageParseResult, Point, Table, TableCell
+from core.domain.schemas import (
+    Block,
+    BlockType,
+    ConfidenceSource,
+    CoordinateSpace,
+    PageGeometry,
+    PageParseResult,
+    PageVisualDTO,
+    Point,
+    Table,
+    TableCell,
+)
 from core.engines.base import EngineParseResult, ParseEngine
 
 
@@ -85,6 +96,7 @@ class PdfTextEngine(ParseEngine):
             pages: list[PageParseResult] = []
             markdown_parts: list[str] = []
             raw_pages: list[dict[str, Any]] = []
+            page_images: list[bytes] = []
             for page_index, page in enumerate(doc):
                 text_dict = page.get_text("dict") or {}
                 raw_blocks = text_dict.get("blocks", [])
@@ -96,14 +108,32 @@ class PdfTextEngine(ParseEngine):
                     markdown_parts.append(
                         page_markdown or "\n".join(block.content for block in blocks if block.content.strip())
                     )
+                geometry = PageGeometry(
+                    width=float(page.rect.width),
+                    height=float(page.rect.height),
+                    coordinate_space=CoordinateSpace.pdf_points,
+                )
+                has_visual = False
+                try:
+                    pix = page.get_pixmap(dpi=150)
+                    page_images.append(pix.tobytes("png"))
+                    has_visual = True
+                except Exception:
+                    pass
+
                 pages.append(
                     PageParseResult(
                         page_index=page_index,
+                        geometry=geometry,
                         blocks=blocks,
                         tables=tables,
                         reading_order=[block.block_id for block in blocks],
                         confidence=PDF_TEXT_CONFIDENCE if blocks else 0.0,
                         source_engine=self.name,
+                        visual=PageVisualDTO(
+                            available=has_visual,
+                            kind="rendered_page" if has_visual else None,
+                        ),
                     )
                 )
                 raw_pages.append({"page_index": page_index, "blocks": raw_blocks, "words": raw_words})
@@ -115,7 +145,7 @@ class PdfTextEngine(ParseEngine):
             engine_name=self.name,
             pages=pages,
             markdown=markdown,
-            raw={"pages": raw_pages},
+            raw={"pages": raw_pages, "page_images": page_images},
         )
 
     def _extract_page_blocks(self, raw_blocks: object, page_index: int) -> list[Block]:
@@ -138,6 +168,7 @@ class PdfTextEngine(ParseEngine):
                     content=content,
                     bbox=_bbox_to_polygon(raw_block.get("bbox")),
                     confidence=PDF_TEXT_CONFIDENCE,
+                    confidence_source=ConfidenceSource.synthesized,
                     page_index=page_index,
                     source_engine=self.name,
                     extra={"block_order": block_index},

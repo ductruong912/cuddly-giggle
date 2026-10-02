@@ -8,7 +8,7 @@ import logging
 
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from api.dependencies import (
     ensure_gpu_gguf_runtime,
@@ -16,6 +16,7 @@ from api.dependencies import (
     get_local_extraction_service,
     get_orchestrator,
     get_pipeline_limiters,
+    get_settings,
     get_upload_stager,
     require_extraction_store,
 )
@@ -31,16 +32,20 @@ from api.uploads import (
     resolve_upload,
     upload_suffix,
 )
-from config.config import settings
+from config.config import Settings, settings
 from config.pipeline_logging import pipeline_message, source_document_context
-from core.domain.schemas import LLMExtractionResponse
+from core.domain.schemas import (
+    DocumentParseResponse,
+    LLMExtractionResponse,
+    to_document_parse_response,
+)
 from services.concurrency import PipelineLimiters
 from services.document_extraction import DocumentExtractionService
 from services.local_ocr_selector import has_usable_gpu
 from services.persistence import ExtractionQuery, ExtractionStore
 from services.persistence.extraction_store import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from services.orchestrator import ParseOrchestrator
-from services.output import save_parse_artifacts
+from services.output import get_page_visual_image_path, save_parse_artifacts
 
 
 logger = logging.getLogger(__name__)
@@ -248,6 +253,54 @@ async def ocr_document(
         return PlainTextResponse(response.markdown, media_type="text/markdown")
     finally:
         stager.discard(staged)
+
+
+@ocr_router.post("/parse", response_model=DocumentParseResponse)
+@limiter.limit(settings.rate_limit_extract)
+async def parse_document(
+    request: Request,
+    file: UploadFile | None = File(None),
+    orchestrator: ParseOrchestrator = Depends(get_orchestrator),
+    stager: UploadStager = Depends(get_upload_stager),
+    limiters: PipelineLimiters = Depends(get_pipeline_limiters),
+    _: None = Depends(ensure_gpu_gguf_runtime),
+) -> DocumentParseResponse:
+    """Run local document parsing and return structured pages, geometry, blocks, and Markdown."""
+    upload = await resolve_upload(request, file)
+    staged = await stager.stage(
+        upload,
+        allowed_suffixes=SUPPORTED_INPUT_SUFFIXES,
+        unsupported_message=_LOCAL_UNSUPPORTED_MESSAGE,
+    )
+    try:
+        with source_document_context(staged.filename):
+            response = await limiters.ocr.run(orchestrator.parse, str(staged.path))
+        await limiters.io.run(save_parse_artifacts, response, staged.filename)
+        return to_document_parse_response(response)
+    finally:
+        stager.discard(staged)
+
+
+@ocr_router.get("/parse/{request_id}/pages/{page_index}/image")
+@limiter.limit(settings.rate_limit_default)
+async def get_parsed_page_image(
+    request: Request,
+    request_id: str,
+    page_index: int,
+    app_settings: Settings = Depends(get_settings),
+) -> FileResponse:
+    """Return the processed/rendered page visualization image matching the parse bounding boxes."""
+    image_path = get_page_visual_image_path(request_id, page_index, app_settings)
+    if not image_path:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Visual image for request {request_id} page {page_index} was not found or is unavailable.",
+        )
+    return FileResponse(
+        path=str(image_path),
+        media_type="image/png",
+        filename=f"page_{page_index}.png",
+    )
 
 
 # =====================================================================================
