@@ -179,3 +179,20 @@ export interface DocumentParseResponse {
   markdown: string | null
   pages: ParsePage[]
 }
+
+export const OCR_REVIEW_LOW_CONFIDENCE_THRESHOLD = 0.75
+
+export function isReviewIssue(
+  confidence: number,
+  confidenceSource: ConfidenceSource,
+  threshold: number = OCR_REVIEW_LOW_CONFIDENCE_THRESHOLD
+): boolean {
+  if (confidenceSource === 'real_engine') {
+    return confidence < threshold
+  }
+  if (confidenceSource === 'unknown') {
+    return true
+  }
+  // Synthesized is never marked as a review issue
+  return false
+}

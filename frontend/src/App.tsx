@@ -251,6 +251,17 @@ export default function App() {
     }
   }, [])
 
+  const handleNavigateIssue = useCallback(
+    (targetPageIndex: number, blockId: string) => {
+      if (targetPageIndex !== activePageIndex) {
+        setActivePageIndex(targetPageIndex)
+      }
+      setSelectedBlockId(blockId)
+      setOcrTab('blocks')
+    },
+    [activePageIndex]
+  )
+
   // Select historical record
   const handleSelectHistoryRecord = useCallback((record: ExtractionRecord) => {
     setSourceViewMode('original')
@@ -414,6 +425,7 @@ export default function App() {
                 onBlockHover={setHoveredBlockId}
                 activeOcrTab={ocrTab}
                 onOcrTabChange={setOcrTab}
+                onNavigateIssue={handleNavigateIssue}
               />
             }
           />

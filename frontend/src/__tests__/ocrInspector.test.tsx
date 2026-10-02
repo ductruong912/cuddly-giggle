@@ -340,7 +340,7 @@ describe('Phase 2B — OCR Visual Inspector Frontend', () => {
       />
     )
 
-    const buttons = screen.getAllByRole('button')
+    const buttons = screen.getAllByTestId('block-card')
     // reading_order is ['block-2', 'block-1', 'block-3']
     expect(buttons[0]).toHaveTextContent('Header Title Block 2')
     expect(buttons[1]).toHaveTextContent('First content line for block 1')

@@ -40,6 +40,7 @@ interface OutputPanelProps {
   onBlockHover?: (blockId: string | null) => void
   activeOcrTab?: 'markdown' | 'preview' | 'blocks'
   onOcrTabChange?: (tab: 'markdown' | 'preview' | 'blocks') => void
+  onNavigateIssue?: (pageIndex: number, blockId: string) => void
 }
 
 function getErrorDetails(
@@ -147,6 +148,7 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
   onBlockHover,
   activeOcrTab,
   onOcrTabChange,
+  onNavigateIssue,
 }) => {
   // Tab states
   const [internalOcrTab, setInternalOcrTab] = useState<'markdown' | 'preview' | 'blocks'>('markdown')
@@ -443,6 +445,9 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                     hoveredBlockId={hoveredBlockId}
                     onBlockSelect={onBlockSelect ?? (() => {})}
                     onBlockHover={onBlockHover ?? (() => {})}
+                    allPages={result.parseResponse.pages}
+                    activePageIndex={activePageIndex}
+                    onNavigateIssue={onNavigateIssue}
                   />
                 )}
               </div>

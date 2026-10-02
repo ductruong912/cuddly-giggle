@@ -8,6 +8,7 @@ import {
   Loader2,
   AlertTriangle,
 } from 'lucide-react'
+import { isReviewIssue } from '@/types/api'
 import type { ParseBlock, ParsePage } from '@/types/api'
 
 interface OcrInspectorProps {
@@ -77,11 +78,13 @@ export const OcrInspector: React.FC<OcrInspectorProps> = ({
   const getBlockPolygonStyle = (block: ParseBlock) => {
     const isSelected = block.block_id === selectedBlockId
     const isHovered = block.block_id === hoveredBlockId
+    const isIssue = isReviewIssue(block.confidence, block.confidence_source)
 
     if (isSelected) {
       return {
         stroke: '#f59e0b', // amber-500
         strokeWidth: 2.5,
+        strokeDasharray: undefined,
         fill: 'rgba(245, 158, 11, 0.22)',
       }
     }
@@ -90,7 +93,17 @@ export const OcrInspector: React.FC<OcrInspectorProps> = ({
       return {
         stroke: '#3b82f6', // blue-500
         strokeWidth: 2,
+        strokeDasharray: undefined,
         fill: 'rgba(59, 130, 246, 0.20)',
+      }
+    }
+
+    if (isIssue) {
+      return {
+        stroke: '#d97706', // amber-600
+        strokeWidth: 1.8,
+        strokeDasharray: '4 2',
+        fill: 'rgba(245, 158, 11, 0.08)',
       }
     }
 
@@ -99,6 +112,7 @@ export const OcrInspector: React.FC<OcrInspectorProps> = ({
       return {
         stroke: 'rgba(99, 102, 241, 0.45)', // indigo
         strokeWidth: 1.2,
+        strokeDasharray: undefined,
         fill: 'rgba(99, 102, 241, 0.05)',
       }
     }
@@ -106,6 +120,7 @@ export const OcrInspector: React.FC<OcrInspectorProps> = ({
       return {
         stroke: 'rgba(168, 85, 247, 0.45)', // purple
         strokeWidth: 1.2,
+        strokeDasharray: undefined,
         fill: 'rgba(168, 85, 247, 0.05)',
       }
     }
@@ -113,6 +128,7 @@ export const OcrInspector: React.FC<OcrInspectorProps> = ({
     return {
       stroke: 'rgba(14, 165, 233, 0.35)', // sky
       strokeWidth: 1,
+      strokeDasharray: undefined,
       fill: 'rgba(14, 165, 233, 0.03)',
     }
   }
@@ -257,6 +273,7 @@ export const OcrInspector: React.FC<OcrInspectorProps> = ({
                       fill={style.fill}
                       stroke={style.stroke}
                       strokeWidth={style.strokeWidth}
+                      strokeDasharray={style.strokeDasharray}
                       className="cursor-pointer pointer-events-auto transition-all duration-150"
                       onClick={() => onBlockSelect(block.block_id)}
                       onMouseEnter={() => onBlockHover(block.block_id)}
