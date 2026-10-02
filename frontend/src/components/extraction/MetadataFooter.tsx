@@ -11,9 +11,17 @@ export const MetadataFooter: React.FC<MetadataFooterProps> = ({ result }) => {
   if (!result) return null
 
   const requestId =
-    result.mode === 'extraction' ? result.response.request_id : undefined
+    result.mode === 'extraction'
+      ? result.response.request_id
+      : result.parseResponse?.request_id
   const pageCount =
-    result.mode === 'extraction' ? result.response.ocr.page_count : undefined
+    result.mode === 'extraction'
+      ? result.response.ocr.page_count
+      : result.parseResponse?.pages?.length
+  const engineName =
+    result.mode === 'extraction'
+      ? 'Local Extraction'
+      : result.parseResponse?.engine_name || 'Local OCR'
 
   return (
     <div className="h-8 px-4 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 flex items-center justify-between text-[11px] font-mono text-zinc-500 shrink-0 select-none overflow-x-auto">
@@ -26,9 +34,7 @@ export const MetadataFooter: React.FC<MetadataFooterProps> = ({ result }) => {
 
         <div className="flex items-center gap-1 text-zinc-600 dark:text-zinc-400">
           <Cpu className="w-3 h-3 text-zinc-400" />
-          <span>
-            {result.mode === 'ocr' ? 'Local OCR' : 'Local Extraction'}
-          </span>
+          <span>{engineName}</span>
         </div>
 
         {pageCount !== undefined && (

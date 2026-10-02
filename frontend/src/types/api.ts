@@ -107,3 +107,75 @@ export interface ApiErrorDetail {
   detail?: string | Array<{ msg: string; loc: string[] }>
   message?: string
 }
+
+// =====================================================================================
+// Phase 2: Document Parse & Visual Inspector Types
+// =====================================================================================
+
+export type CoordinateSpace = 'processed_image_pixels' | 'pdf_points' | 'none'
+
+export type ConfidenceSource = 'real_engine' | 'synthesized' | 'unknown'
+
+export type BlockType =
+  | 'text'
+  | 'title'
+  | 'table'
+  | 'figure'
+  | 'header'
+  | 'footer'
+  | 'page_number'
+  | 'caption'
+  | 'equation'
+  | 'code'
+  | 'reference'
+  | 'other'
+
+export interface Point {
+  x: number
+  y: number
+}
+
+export interface PageGeometry {
+  width: number
+  height: number
+  coordinate_space: CoordinateSpace
+}
+
+export interface PageVisual {
+  available: boolean
+  kind: string | null
+  url: string | null
+}
+
+export interface ParseBlock {
+  block_id: string
+  type: BlockType
+  content: string
+  confidence: number
+  confidence_source: ConfidenceSource
+  bbox: Point[]
+  bbox_normalized: Point[]
+  page_index: number
+  source_engine: string
+  extra: Record<string, unknown>
+}
+
+export interface ParsePage {
+  page_index: number
+  geometry: PageGeometry
+  visual: PageVisual
+  blocks: ParseBlock[]
+  tables: unknown[]
+  reading_order: string[]
+  confidence: number
+}
+
+export interface DocumentParseResponse {
+  request_id: string
+  decision: {
+    reason: string
+  }
+  engine_name: string
+  markdown: string | null
+  pages: ParsePage[]
+}

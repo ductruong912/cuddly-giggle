@@ -25,6 +25,7 @@ export interface OCRResult {
   requestTime: number
   filename: string
   elapsedSeconds: number
+  parseResponse?: import('./api').DocumentParseResponse
 }
 
 export interface ExtractionResult {

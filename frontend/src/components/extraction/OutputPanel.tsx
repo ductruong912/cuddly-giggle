@@ -11,12 +11,14 @@ import {
   RotateCcw,
   ArrowRight,
   Info,
+  Boxes,
 } from 'lucide-react'
 import { MarkdownTab } from './MarkdownTab'
 import { PoFieldsTab } from './PoFieldsTab'
 import { JsonTab } from './JsonTab'
 import { ValidationTab } from './ValidationTab'
 import { MetadataFooter } from './MetadataFooter'
+import { BlocksView } from './BlocksView'
 import { Button } from '@/components/common/Button'
 import type { ProcessingMode, ProcessingState, ResultData } from '@/types/document'
 import { formatDuration } from '@/lib/utils'
@@ -31,6 +33,13 @@ interface OutputPanelProps {
   mode?: ProcessingMode
   onRetry?: () => void
   onSwitchToOcr?: () => void
+  activePageIndex?: number
+  selectedBlockId?: string | null
+  hoveredBlockId?: string | null
+  onBlockSelect?: (blockId: string | null) => void
+  onBlockHover?: (blockId: string | null) => void
+  activeOcrTab?: 'markdown' | 'preview' | 'blocks'
+  onOcrTabChange?: (tab: 'markdown' | 'preview' | 'blocks') => void
 }
 
 function getErrorDetails(
@@ -131,16 +140,30 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
   mode = 'ocr',
   onRetry,
   onSwitchToOcr,
+  activePageIndex = 0,
+  selectedBlockId = null,
+  hoveredBlockId = null,
+  onBlockSelect,
+  onBlockHover,
+  activeOcrTab,
+  onOcrTabChange,
 }) => {
   // Tab states
-  const [ocrTab, setOcrTab] = useState<'markdown' | 'preview'>('markdown')
+  const [internalOcrTab, setInternalOcrTab] = useState<'markdown' | 'preview' | 'blocks'>('markdown')
   const [extractTab, setExtractTab] = useState<'fields' | 'json' | 'validation'>('fields')
   const [prevResult, setPrevResult] = useState<ResultData>(null)
+
+  const currentOcrTab = activeOcrTab ?? internalOcrTab
+
+  const setOcrTab = (tab: 'markdown' | 'preview' | 'blocks') => {
+    setInternalOcrTab(tab)
+    onOcrTabChange?.(tab)
+  }
 
   // React pattern for resetting state on prop change during render
   if (result !== prevResult) {
     setPrevResult(result)
-    setOcrTab('markdown')
+    setInternalOcrTab('markdown')
     setExtractTab('fields')
   }
 
@@ -169,10 +192,10 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                 <button
                   type="button"
                   role="tab"
-                  aria-selected={ocrTab === 'markdown'}
+                  aria-selected={currentOcrTab === 'markdown'}
                   onClick={() => setOcrTab('markdown')}
                   className={`px-3 py-1 rounded-md font-medium inline-flex items-center gap-1.5 transition-all ${
-                    ocrTab === 'markdown'
+                    currentOcrTab === 'markdown'
                       ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 shadow-2xs'
                       : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200'
                   }`}
@@ -183,10 +206,10 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                 <button
                   type="button"
                   role="tab"
-                  aria-selected={ocrTab === 'preview'}
+                  aria-selected={currentOcrTab === 'preview'}
                   onClick={() => setOcrTab('preview')}
                   className={`px-3 py-1 rounded-md font-medium inline-flex items-center gap-1.5 transition-all ${
-                    ocrTab === 'preview'
+                    currentOcrTab === 'preview'
                       ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 shadow-2xs'
                       : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200'
                   }`}
@@ -194,6 +217,22 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                   <Eye className="w-3.5 h-3.5" />
                   <span>Preview</span>
                 </button>
+                {result.parseResponse && (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={currentOcrTab === 'blocks'}
+                    onClick={() => setOcrTab('blocks')}
+                    className={`px-3 py-1 rounded-md font-medium inline-flex items-center gap-1.5 transition-all ${
+                      currentOcrTab === 'blocks'
+                        ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 shadow-2xs'
+                        : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200'
+                    }`}
+                  >
+                    <Boxes className="w-3.5 h-3.5" />
+                    <span>Blocks</span>
+                  </button>
+                )}
               </div>
             )}
 
@@ -373,9 +412,10 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
           <div className="w-full h-full overflow-hidden flex flex-col">
             {result.mode === 'ocr' ? (
               <div className="flex-1 w-full h-full overflow-hidden">
-                {ocrTab === 'markdown' ? (
+                {currentOcrTab === 'markdown' && (
                   <MarkdownTab markdown={result.markdown} filename={filename} />
-                ) : (
+                )}
+                {currentOcrTab === 'preview' && (
                   <Suspense
                     fallback={
                       <div className="w-full h-full flex flex-col items-center justify-center p-8 bg-zinc-50/50 dark:bg-zinc-950 text-center select-none text-zinc-500">
@@ -386,6 +426,24 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                   >
                     <MarkdownPreview markdown={result.markdown} />
                   </Suspense>
+                )}
+                {currentOcrTab === 'blocks' && result.parseResponse && (
+                  <BlocksView
+                    blocks={
+                      result.parseResponse.pages[activePageIndex]?.blocks ||
+                      result.parseResponse.pages[0]?.blocks ||
+                      []
+                    }
+                    readingOrder={
+                      result.parseResponse.pages[activePageIndex]?.reading_order ||
+                      result.parseResponse.pages[0]?.reading_order ||
+                      []
+                    }
+                    selectedBlockId={selectedBlockId}
+                    hoveredBlockId={hoveredBlockId}
+                    onBlockSelect={onBlockSelect ?? (() => {})}
+                    onBlockHover={onBlockHover ?? (() => {})}
+                  />
                 )}
               </div>
             ) : (

@@ -19,14 +19,26 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 interface PdfViewerProps {
   url: string
   name: string
+  currentPage?: number
+  onPageChange?: (page: number) => void
 }
 
-export const PdfViewer: React.FC<PdfViewerProps> = ({ url, name }) => {
+export const PdfViewer: React.FC<PdfViewerProps> = ({
+  url,
+  name,
+  currentPage: externalPage,
+  onPageChange,
+}) => {
   const [numPages, setNumPages] = useState<number>(1)
-  const [currentPage, setCurrentPage] = useState<number>(1)
+  const [internalPage, setInternalPage] = useState<number>(1)
   const [scale, setScale] = useState<number>(1.2)
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
+
+  const currentPage =
+    externalPage !== undefined && externalPage >= 1 && externalPage <= numPages
+      ? externalPage
+      : internalPage
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -43,7 +55,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ url, name }) => {
         if (isCancelled) return
         pdfDocRef.current = pdf
         setNumPages(pdf.numPages)
-        setCurrentPage(1)
+        setInternalPage(1)
         setLoading(false)
         setError(null)
       })
@@ -119,11 +131,15 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ url, name }) => {
   }, [currentPage, scale, loading, renderPage])
 
   const prevPage = () => {
-    setCurrentPage((p) => Math.max(p - 1, 1))
+    const next = Math.max(currentPage - 1, 1)
+    setInternalPage(next)
+    onPageChange?.(next)
   }
 
   const nextPage = () => {
-    setCurrentPage((p) => Math.min(p + 1, numPages))
+    const next = Math.min(currentPage + 1, numPages)
+    setInternalPage(next)
+    onPageChange?.(next)
   }
 
   const zoomIn = () => {

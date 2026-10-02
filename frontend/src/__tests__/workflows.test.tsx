@@ -24,6 +24,13 @@ vi.mock('../api/client', () => ({
       stages: {},
     }),
     ocrDocument: vi.fn(),
+    parseDocument: vi.fn().mockResolvedValue({
+      request_id: 'test-req-1',
+      decision: { reason: 'local' },
+      engine_name: 'PaddleOCR-VL',
+      markdown: '# DEFAULT MARKDOWN',
+      pages: [],
+    }),
     extractLocal: vi.fn(),
     getExtractions: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 }),
     getExtraction: vi.fn(),
@@ -117,9 +124,13 @@ describe('Frontend Workflows and Error Hardening', () => {
 
   // 4. OCR success
   it('4. displays markdown result on OCR success', async () => {
-    vi.mocked(apiClient.ocrDocument).mockResolvedValueOnce(
-      '# PURCHASE ORDER\nPO Number: PO-9988\nAmount: $1,250.00'
-    )
+    vi.mocked(apiClient.parseDocument).mockResolvedValueOnce({
+      request_id: 'test-req-4',
+      decision: { reason: 'local' },
+      engine_name: 'PaddleOCR-VL',
+      markdown: '# PURCHASE ORDER\nPO Number: PO-9988\nAmount: $1,250.00',
+      pages: [],
+    })
 
     const { container } = render(<App />)
     const file = new File(['dummy pdf'], 'order.pdf', { type: 'application/pdf' })
@@ -139,7 +150,13 @@ describe('Frontend Workflows and Error Hardening', () => {
   // 4b. OCR result with HTML table switches between raw Markdown tab and rendered Preview tab
   it('4b. switches seamlessly between raw Markdown tab and rendered Preview tab with HTML table', async () => {
     const ocrWithTable = `# PHIẾU XUẤT KHO\n\n<table border=1><tr><th>Mã SP</th><th>SL</th></tr><tr><td>SP-01</td><td>50</td></tr></table>`
-    vi.mocked(apiClient.ocrDocument).mockResolvedValueOnce(ocrWithTable)
+    vi.mocked(apiClient.parseDocument).mockResolvedValueOnce({
+      request_id: 'test-req-4b',
+      decision: { reason: 'local' },
+      engine_name: 'PaddleOCR-VL',
+      markdown: ocrWithTable,
+      pages: [],
+    })
 
     const { container } = render(<App />)
     const file = new File(['dummy pdf'], 'order.pdf', { type: 'application/pdf' })
@@ -180,7 +197,7 @@ describe('Frontend Workflows and Error Hardening', () => {
 
   // 5. OCR error response
   it('5. displays error UI with Try again button on OCR error response', async () => {
-    vi.mocked(apiClient.ocrDocument).mockRejectedValueOnce(
+    vi.mocked(apiClient.parseDocument).mockRejectedValueOnce(
       new ApiError(504, 'OCR process timed out', 'Server took too long to parse document')
     )
 
@@ -201,7 +218,7 @@ describe('Frontend Workflows and Error Hardening', () => {
 
   // 6. Request cancellation
   it('6. safely handles request cancellation without crashing', async () => {
-    vi.mocked(apiClient.ocrDocument).mockImplementation(
+    vi.mocked(apiClient.parseDocument).mockImplementation(
       () =>
         new Promise((_, reject) => {
           setTimeout(() => {

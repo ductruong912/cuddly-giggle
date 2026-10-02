@@ -1,5 +1,6 @@
 import { ApiError, parseErrorResponse } from './errors'
 import type {
+  DocumentParseResponse,
   ExtractionListResponse,
   ExtractionRecord,
   HealthzResponse,
@@ -51,6 +52,21 @@ async function request<T>(
 }
 
 export const apiClient = {
+  /**
+   * Run document parsing (OCR + layout/blocks + visual artifact).
+   * Route: POST /v1/doc/parse
+   */
+  async parseDocument(file: File, signal?: AbortSignal): Promise<DocumentParseResponse> {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    return request<DocumentParseResponse>('/v1/doc/parse', {
+      method: 'POST',
+      body: formData,
+      signal,
+    })
+  },
+
   /**
    * Run local OCR on the document and return Markdown.
    * Route: POST /v1/doc/ocr

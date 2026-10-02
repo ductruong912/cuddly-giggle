@@ -67,6 +67,13 @@ export default function App() {
     isLlmError?: boolean
   } | null>(null)
 
+  // Phase 2: Visual Inspector & Block synchronization states
+  const [sourceViewMode, setSourceViewMode] = useState<'original' | 'inspector'>('original')
+  const [activePageIndex, setActivePageIndex] = useState<number>(0)
+  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null)
+  const [hoveredBlockId, setHoveredBlockId] = useState<string | null>(null)
+  const [ocrTab, setOcrTab] = useState<'markdown' | 'preview' | 'blocks'>('markdown')
+
   // Drawer state
   const [isHistoryOpen, setIsHistoryOpen] = useState(false)
   const timerRef = useRef<number | null>(null)
@@ -84,6 +91,11 @@ export default function App() {
     setHistoricalDoc(null)
     setResult(null)
     setError(null)
+    setSourceViewMode('original')
+    setActivePageIndex(0)
+    setSelectedBlockId(null)
+    setHoveredBlockId(null)
+    setOcrTab('markdown')
   }, [clearDocument, processing.abortController])
 
   const handleSelectFile = useCallback(
@@ -93,6 +105,11 @@ export default function App() {
       if (ok) {
         setResult(null)
         setError(null)
+        setSourceViewMode('original')
+        setActivePageIndex(0)
+        setSelectedBlockId(null)
+        setHoveredBlockId(null)
+        setOcrTab('markdown')
       }
     },
     [selectFile]
@@ -138,15 +155,19 @@ export default function App() {
 
     try {
       if (mode === 'ocr') {
-        const markdown = await apiClient.ocrDocument(document.file, controller.signal)
+        const parseResponse = await apiClient.parseDocument(document.file, controller.signal)
         const totalElapsed = (performance.now() - startTime) / 1000
         setResult({
           mode: 'ocr',
-          markdown,
+          markdown: parseResponse.markdown || '',
           requestTime: Date.now(),
           filename: document.name,
           elapsedSeconds: totalElapsed,
+          parseResponse,
         })
+        setActivePageIndex(0)
+        setSelectedBlockId(null)
+        setHoveredBlockId(null)
       } else {
         const extractionResponse = await apiClient.extractLocal(document.file, controller.signal)
         const totalElapsed = (performance.now() - startTime) / 1000
@@ -204,8 +225,38 @@ export default function App() {
     }))
   }, [processing.abortController])
 
+  // Phase 2: Page and Block navigation handlers
+  const handlePageChange = useCallback(
+    (newIndex: number) => {
+      setActivePageIndex(newIndex)
+      setHoveredBlockId(null)
+      // Clear selectedBlockId if it does not belong to the new page
+      setSelectedBlockId((prevSelected) => {
+        if (!prevSelected) return null
+        if (result?.mode === 'ocr' && result.parseResponse) {
+          const newPageBlocks = result.parseResponse.pages[newIndex]?.blocks || []
+          const exists = newPageBlocks.some((b) => b.block_id === prevSelected)
+          return exists ? prevSelected : null
+        }
+        return null
+      })
+    },
+    [result]
+  )
+
+  const handleBlockSelect = useCallback((blockId: string | null) => {
+    setSelectedBlockId(blockId)
+    if (blockId) {
+      setOcrTab('blocks')
+    }
+  }, [])
+
   // Select historical record
   const handleSelectHistoryRecord = useCallback((record: ExtractionRecord) => {
+    setSourceViewMode('original')
+    setActivePageIndex(0)
+    setSelectedBlockId(null)
+    setHoveredBlockId(null)
     // If no file is currently uploaded, build a safe placeholder for split view
     if (!document) {
       const ext = record.source_filename.split('.').pop()?.toLowerCase() || 'pdf'
@@ -333,7 +384,20 @@ export default function App() {
           />
         ) : (
           <SplitPane
-            left={<DocumentViewer document={activeDoc} />}
+            left={
+              <DocumentViewer
+                document={activeDoc}
+                parseResponse={result?.mode === 'ocr' ? result.parseResponse : undefined}
+                viewMode={sourceViewMode}
+                onViewModeChange={setSourceViewMode}
+                activePageIndex={activePageIndex}
+                selectedBlockId={selectedBlockId}
+                hoveredBlockId={hoveredBlockId}
+                onPageChange={handlePageChange}
+                onBlockSelect={handleBlockSelect}
+                onBlockHover={setHoveredBlockId}
+              />
+            }
             right={
               <OutputPanel
                 result={result}
@@ -343,6 +407,13 @@ export default function App() {
                 mode={mode}
                 onRetry={document ? handleRun : undefined}
                 onSwitchToOcr={() => setMode('ocr')}
+                activePageIndex={activePageIndex}
+                selectedBlockId={selectedBlockId}
+                hoveredBlockId={hoveredBlockId}
+                onBlockSelect={handleBlockSelect}
+                onBlockHover={setHoveredBlockId}
+                activeOcrTab={ocrTab}
+                onOcrTabChange={setOcrTab}
               />
             }
           />
