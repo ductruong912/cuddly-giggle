@@ -74,7 +74,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ url, name }) => {
         const viewport = page.getViewport({ scale: currentScale })
 
         const canvas = canvasRef.current
-        const context = canvas.getContext('2d')
+        if (!canvas) return
+        const context = canvas.getContext ? canvas.getContext('2d') : null
         if (!context) return
 
         const dpr = window.devicePixelRatio || 1
@@ -261,3 +262,5 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ url, name }) => {
     </div>
   )
 }
+
+export default PdfViewer

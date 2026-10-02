@@ -95,48 +95,48 @@ export const TopBar: React.FC<TopBarProps> = ({
               <span className="text-zinc-600 dark:text-zinc-400">VL Runtime</span>
               <span
                 className={
-                  readiness.checks.vl_runtime === 'ok'
+                  readiness.checks?.vl_runtime === 'ok'
                     ? 'text-emerald-600 font-medium'
                     : 'text-amber-600 font-medium'
                 }
               >
-                {readiness.checks.vl_runtime}
+                {readiness.checks?.vl_runtime || 'unknown'}
               </span>
             </div>
             <div className="flex items-center justify-between p-1.5 rounded bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
               <span className="text-zinc-600 dark:text-zinc-400">LLM Key</span>
               <span
                 className={
-                  readiness.checks.llm_credentials === 'ok'
+                  readiness.checks?.llm_credentials === 'ok'
                     ? 'text-emerald-600 font-medium'
                     : 'text-rose-600 font-medium'
                 }
               >
-                {readiness.checks.llm_credentials}
+                {readiness.checks?.llm_credentials || 'unknown'}
               </span>
             </div>
             <div className="flex items-center justify-between p-1.5 rounded bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
               <span className="text-zinc-600 dark:text-zinc-400">Stages</span>
               <span
                 className={
-                  readiness.checks.stages === 'ok'
+                  readiness.checks?.stages === 'ok'
                     ? 'text-emerald-600 font-medium'
                     : 'text-amber-600 font-medium'
                 }
               >
-                {readiness.checks.stages}
+                {readiness.checks?.stages || 'unknown'}
               </span>
             </div>
             <div className="flex items-center justify-between p-1.5 rounded bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
               <span className="text-zinc-600 dark:text-zinc-400">Database</span>
               <span
                 className={
-                  readiness.checks.database === 'ok'
+                  readiness.checks?.database === 'ok'
                     ? 'text-emerald-600 font-medium'
                     : 'text-zinc-500 font-medium'
                 }
               >
-                {readiness.checks.database}
+                {readiness.checks?.database || 'unknown'}
               </span>
             </div>
           </div>

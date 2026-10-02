@@ -81,20 +81,7 @@ export const apiClient = {
     })
   },
 
-  /**
-   * Run online OCR + structured extraction (if supported).
-   * Route: POST /v1/extract/online
-   */
-  async extractOnline(file: File, signal?: AbortSignal): Promise<LLMExtractionResponse> {
-    const formData = new FormData()
-    formData.append('file', file)
 
-    return request<LLMExtractionResponse>('/v1/extract/online', {
-      method: 'POST',
-      body: formData,
-      signal,
-    })
-  },
 
   /**
    * Check liveness.

@@ -44,6 +44,8 @@ export const Dropzone: React.FC<DropzoneProps> = ({
         <input
           ref={inputRef}
           type="file"
+          data-testid="dropzone-file-input"
+          aria-label="Upload document file"
           className="hidden"
           accept={SUPPORTED_EXTENSIONS_STRING}
           onChange={handleInputChange}

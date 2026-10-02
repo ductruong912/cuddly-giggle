@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   FileText,
   Calendar,
@@ -9,6 +9,8 @@ import {
   Loader2,
   RefreshCw,
   Hash,
+  Search,
+  X,
 } from 'lucide-react'
 import { Drawer } from '@/components/common/Drawer'
 import { Badge } from '@/components/common/Badge'
@@ -22,6 +24,8 @@ interface HistoryDrawerProps {
   onSelectExtraction: (record: ExtractionRecord) => void
 }
 
+type StatusFilter = 'all' | 'valid' | 'needs_review'
+
 export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
   isOpen,
   onClose,
@@ -31,48 +35,54 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
   const [records, setRecords] = useState<ExtractionRecord[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loadingRecordId, setLoadingRecordId] = useState<string | null>(null)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
 
-  const fetchHistory = () => {
+  const fetchHistory = useCallback(async () => {
     setLoading(true)
     setError(null)
-    apiClient
-      .getExtractions({ limit: 20 })
-      .then((response) => {
-        setRecords(response.items || [])
-        setLoading(false)
-      })
-      .catch((err: unknown) => {
-        setError(
-          err instanceof Error
-            ? err.message
-            : 'Extraction history is not available (persistence disabled).'
-        )
-        setLoading(false)
-      })
-  }
+    try {
+      const response = await apiClient.getExtractions({ limit: 50 })
+      setRecords(response.items || [])
+    } catch (err: unknown) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Extraction history is not available (persistence disabled).'
+      )
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
     if (!isOpen) return
     let isCancelled = false
 
-    apiClient
-      .getExtractions({ limit: 20 })
-      .then((response) => {
+    const load = async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const response = await apiClient.getExtractions({ limit: 50 })
         if (!isCancelled) {
           setRecords(response.items || [])
-          setLoading(false)
         }
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         if (!isCancelled) {
           setError(
             err instanceof Error
               ? err.message
               : 'Extraction history is not available (persistence disabled).'
           )
+        }
+      } finally {
+        if (!isCancelled) {
           setLoading(false)
         }
-      })
+      }
+    }
+
+    load()
 
     return () => {
       isCancelled = true
@@ -92,6 +102,29 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
     }
   }
 
+  // Filter records by search term and validation status
+  const filteredRecords = useMemo(() => {
+    return records.filter((rec) => {
+      // 1. Status filter
+      if (statusFilter === 'valid' && rec.validation_status !== 'valid') {
+        return false
+      }
+      if (statusFilter === 'needs_review' && rec.validation_status === 'valid') {
+        return false
+      }
+
+      // 2. Search query filter (filename or PO number)
+      if (searchTerm.trim()) {
+        const query = searchTerm.toLowerCase().trim()
+        const matchName = rec.source_filename?.toLowerCase().includes(query)
+        const matchPo = rec.po_number?.toLowerCase().includes(query)
+        if (!matchName && !matchPo) return false
+      }
+
+      return true
+    })
+  }, [records, searchTerm, statusFilter])
+
   return (
     <Drawer
       isOpen={isOpen}
@@ -101,19 +134,83 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
       width="max-w-lg"
     >
       <div className="space-y-4">
-        {/* Refresh button */}
-        <div className="flex items-center justify-between text-xs text-zinc-500">
-          <span>{records.length} recent records</span>
-          <button
-            type="button"
-            onClick={fetchHistory}
-            disabled={loading}
-            className="inline-flex items-center gap-1 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors"
-          >
-            <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
-            <span>Refresh</span>
-          </button>
-        </div>
+        {/* Search & Filter Toolbar */}
+        {!error && (
+          <div className="space-y-2.5">
+            {/* Search Input */}
+            <div className="relative flex items-center">
+              <Search className="w-3.5 h-3.5 absolute left-3 text-zinc-400 pointer-events-none" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search filename or PO number..."
+                aria-label="Filter history"
+                className="w-full pl-8 pr-8 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:outline-hidden focus:ring-1 focus:ring-zinc-400 dark:focus:ring-zinc-600"
+              />
+              {searchTerm && (
+                <button
+                  type="button"
+                  onClick={() => setSearchTerm('')}
+                  aria-label="Clear search"
+                  className="absolute right-2.5 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Status Filter Pills & Refresh */}
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <div className="inline-flex p-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('all')}
+                  className={`px-2.5 py-0.5 rounded font-medium transition-colors ${
+                    statusFilter === 'all'
+                      ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 shadow-2xs'
+                      : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
+                  }`}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('valid')}
+                  className={`px-2.5 py-0.5 rounded font-medium transition-colors ${
+                    statusFilter === 'valid'
+                      ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 shadow-2xs'
+                      : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
+                  }`}
+                >
+                  Valid
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('needs_review')}
+                  className={`px-2.5 py-0.5 rounded font-medium transition-colors ${
+                    statusFilter === 'needs_review'
+                      ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 shadow-2xs'
+                      : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
+                  }`}
+                >
+                  Needs review
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={fetchHistory}
+                disabled={loading}
+                aria-label="Refresh history"
+                className="inline-flex items-center gap-1 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors"
+              >
+                <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
+                <span className="text-[11px]">Refresh</span>
+              </button>
+            </div>
+          </div>
+        )}
 
         {loading && records.length === 0 && (
           <div className="py-12 flex flex-col items-center justify-center text-zinc-400 gap-2">
@@ -134,9 +231,15 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
           </div>
         )}
 
-        {records.length > 0 && (
+        {!loading && !error && records.length > 0 && filteredRecords.length === 0 && (
+          <div className="py-12 text-center text-xs text-zinc-400">
+            No extractions match your search or filter.
+          </div>
+        )}
+
+        {filteredRecords.length > 0 && (
           <div className="space-y-2.5">
-            {records.map((rec) => (
+            {filteredRecords.map((rec) => (
               <div
                 key={rec.request_id}
                 onClick={() => handleSelect(rec.request_id)}

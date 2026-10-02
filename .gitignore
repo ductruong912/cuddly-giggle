@@ -55,5 +55,6 @@ docs/
 .superpowers/
 AGENTS.md
 /.codegraph/
+.agents/
 # Written by `python -m eval.run_eval --json`.
 /eval-report.json

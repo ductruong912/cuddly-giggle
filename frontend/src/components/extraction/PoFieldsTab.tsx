@@ -8,15 +8,25 @@ interface PoFieldsTabProps {
 }
 
 export const PoFieldsTab: React.FC<PoFieldsTabProps> = ({ response }) => {
-  const { data, ocr, validation } = response
+  const data = response?.data
+  const ocr = response?.ocr
+  const validation = response?.validation
   const items = Array.isArray(data?.items) ? data.items : []
 
-  // Calculate sum of line items if present
-  const totalAmount = items.reduce(
-    (sum, item) =>
-      sum + (item.extension ?? (item.quantity || 0) * (item.unit_price || 0)),
-    0
-  )
+  // Calculate sum of line items safely without NaN or crash
+  const totalAmount = items.reduce((sum, item) => {
+    if (!item) return sum
+    if (typeof item.extension === 'number' && !isNaN(item.extension)) {
+      return sum + item.extension
+    }
+    const q = typeof item.quantity === 'number' && !isNaN(item.quantity) ? item.quantity : 0
+    const p = typeof item.unit_price === 'number' && !isNaN(item.unit_price) ? item.unit_price : 0
+    return sum + q * p
+  }, 0)
+
+  const validationStatus = validation?.status === 'valid' ? 'valid' : 'needs_review'
+  const isValid = validationStatus === 'valid'
+  const pageCount = typeof ocr?.page_count === 'number' ? ocr.page_count : 1
 
   return (
     <div className="w-full h-full p-6 overflow-auto bg-zinc-50/40 dark:bg-zinc-950 space-y-6">
@@ -33,7 +43,7 @@ export const PoFieldsTab: React.FC<PoFieldsTabProps> = ({ response }) => {
               <span>PO Number</span>
             </div>
             <div className="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate">
-              {data.po_number || (
+              {data?.po_number || (
                 <span className="text-zinc-400 italic font-sans font-normal text-xs">
                   Not found
                 </span>
@@ -48,7 +58,7 @@ export const PoFieldsTab: React.FC<PoFieldsTabProps> = ({ response }) => {
               <span>PO Date</span>
             </div>
             <div className="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate">
-              {data.po_date || (
+              {data?.po_date || (
                 <span className="text-zinc-400 italic font-sans font-normal text-xs">
                   Not found
                 </span>
@@ -63,7 +73,7 @@ export const PoFieldsTab: React.FC<PoFieldsTabProps> = ({ response }) => {
               <span>Pages</span>
             </div>
             <div className="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-              {ocr.page_count} {ocr.page_count === 1 ? 'page' : 'pages'}
+              {pageCount} {pageCount === 1 ? 'page' : 'pages'}
             </div>
           </div>
 
@@ -72,18 +82,18 @@ export const PoFieldsTab: React.FC<PoFieldsTabProps> = ({ response }) => {
             <div className="text-zinc-500 text-xs mb-1">Validation</div>
             <div>
               <Badge
-                variant={validation.status === 'valid' ? 'success' : 'warning'}
+                variant={isValid ? 'success' : 'warning'}
                 className="text-xs"
               >
-                {validation.status === 'valid' ? (
+                {isValid ? (
                   <>
                     <CheckCircle2 className="w-3 h-3" />
-                    <span>Valid</span>
+                    <span>valid</span>
                   </>
                 ) : (
                   <>
                     <AlertTriangle className="w-3 h-3" />
-                    <span>Needs Review</span>
+                    <span>needs_review</span>
                   </>
                 )}
               </Badge>
@@ -140,22 +150,26 @@ export const PoFieldsTab: React.FC<PoFieldsTabProps> = ({ response }) => {
                       {idx + 1}
                     </td>
                     <td className="py-2 px-3 font-medium text-zinc-900 dark:text-zinc-100">
-                      {item.toto_number}
+                      {item?.toto_number || '—'}
                     </td>
                     <td className="py-2 px-3 text-zinc-500 dark:text-zinc-400">
-                      {item.customer_number || '—'}
+                      {item?.customer_number || '—'}
                     </td>
                     <td className="py-2 px-3 text-right text-zinc-800 dark:text-zinc-200">
-                      {item.quantity.toLocaleString()}
+                      {typeof item?.quantity === 'number' && !isNaN(item.quantity)
+                        ? item.quantity.toLocaleString()
+                        : '—'}
                     </td>
                     <td className="py-2 px-3 text-right text-zinc-800 dark:text-zinc-200">
-                      {item.unit_price.toLocaleString(undefined, {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}
+                      {typeof item?.unit_price === 'number' && !isNaN(item.unit_price)
+                        ? item.unit_price.toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })
+                        : '—'}
                     </td>
                     <td className="py-2 px-3 text-right font-semibold text-zinc-900 dark:text-zinc-100">
-                      {item.extension !== null
+                      {typeof item?.extension === 'number' && !isNaN(item.extension)
                         ? item.extension.toLocaleString(undefined, {
                             minimumFractionDigits: 2,
                             maximumFractionDigits: 2,

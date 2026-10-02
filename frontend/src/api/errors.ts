@@ -2,6 +2,7 @@ export class ApiError extends Error {
   public status: number
   public detail?: string
   public isAborted: boolean
+  public isLlmError: boolean
 
   constructor(status: number, message: string, detail?: string, isAborted = false) {
     super(message)
@@ -9,6 +10,17 @@ export class ApiError extends Error {
     this.status = status
     this.detail = detail
     this.isAborted = isAborted
+
+    const lowerDetail = (detail || '').toLowerCase()
+    const lowerMessage = String(message || '').toLowerCase()
+    this.isLlmError =
+      lowerDetail.includes('llm') ||
+      lowerDetail.includes('openai') ||
+      lowerDetail.includes('credentials') ||
+      lowerDetail.includes('model') ||
+      lowerMessage.includes('llm') ||
+      lowerMessage.includes('openai') ||
+      (status === 422 && lowerDetail.includes('extraction'))
   }
 }
 
@@ -43,7 +55,7 @@ export function parseErrorResponse(status: number, responseBody: unknown): ApiEr
       message = detail || 'Unsupported file format or Content-Type.'
       break
     case 422:
-      message = detail || 'Document could not be processed by the extraction engine.'
+      message = detail || 'Document could not be processed by the structured extraction engine.'
       break
     case 429:
       message = detail || 'Rate limit exceeded. Please wait a moment before trying again.'

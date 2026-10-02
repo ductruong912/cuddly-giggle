@@ -1,9 +1,59 @@
 import React from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
+import type { Schema } from 'hast-util-sanitize'
 
 interface MarkdownPreviewProps {
   markdown: string
+}
+
+// Strict sanitization schema for raw HTML in OCR output:
+// - Strips executable & dangerous elements: <script>, <iframe>, <object>, <embed>
+// - Strips arbitrary inline style attributes (no inline style injection)
+// - Strips all event handlers (onclick, onerror, onload, etc.)
+// - Restricts protocols to safe URLs (no javascript: URLs)
+// - Preserves table semantic structure (table, thead, tbody, tfoot, tr, th, td, caption, colgroup, col)
+// - Allows safe table attributes: colSpan, rowSpan, colspan, rowspan, scope, align
+const sanitizeSchema: Schema = {
+  ...defaultSchema,
+  tagNames: [
+    ...(defaultSchema.tagNames || []),
+    'caption',
+    'colgroup',
+    'col',
+  ],
+  ancestors: {
+    ...defaultSchema.ancestors,
+    caption: ['table'],
+    colgroup: ['table'],
+    col: ['colgroup', 'table'],
+  },
+  attributes: {
+    ...defaultSchema.attributes,
+    th: [
+      ...(defaultSchema.attributes?.th || []),
+      'colSpan',
+      'rowSpan',
+      'colspan',
+      'rowspan',
+      'scope',
+      'align',
+    ],
+    td: [
+      ...(defaultSchema.attributes?.td || []),
+      'colSpan',
+      'rowSpan',
+      'colspan',
+      'rowspan',
+      'align',
+    ],
+    table: [
+      ...(defaultSchema.attributes?.table || []),
+      'border',
+    ],
+  },
 }
 
 export const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({ markdown }) => {
@@ -12,6 +62,7 @@ export const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({ markdown }) =>
       <div className="max-w-4xl mx-auto prose dark:prose-invert prose-zinc prose-sm sm:prose-base leading-normal">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
+          rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema]]}
           components={{
             h1: ({ ...props }) => (
               <h1
@@ -41,21 +92,32 @@ export const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({ markdown }) =>
               <ol className="list-decimal list-inside space-y-1 my-2 text-xs sm:text-sm text-zinc-700 dark:text-zinc-300 pl-2" {...props} />
             ),
             table: ({ ...props }) => (
-              <div className="my-4 overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800 shadow-2xs">
-                <table className="w-full text-left text-xs border-collapse divide-y divide-zinc-200 dark:divide-zinc-800" {...props} />
+              <div className="my-4 max-w-full overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800 shadow-2xs">
+                <table className="min-w-full text-left text-xs border-collapse divide-y divide-zinc-200 dark:divide-zinc-800 border-0" {...props} />
               </div>
             ),
             thead: ({ ...props }) => (
               <thead className="bg-zinc-50 dark:bg-zinc-900 text-zinc-800 dark:text-zinc-200 font-semibold" {...props} />
             ),
+            tbody: ({ ...props }) => (
+              <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/80 bg-white dark:bg-zinc-950" {...props} />
+            ),
             th: ({ ...props }) => (
-              <th className="px-3 py-2 font-medium tracking-tight border-r last:border-r-0 border-zinc-200 dark:border-zinc-800" {...props} />
+              <th className="px-3.5 py-2 font-semibold text-xs tracking-tight border-y-0 border-l-0 border-r last:border-r-0 border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-800 dark:text-zinc-200 whitespace-nowrap" {...props} />
             ),
             td: ({ ...props }) => (
-              <td className="px-3 py-2 text-zinc-700 dark:text-zinc-300 border-r last:border-r-0 border-zinc-200 dark:border-zinc-800/80 font-mono text-[11px]" {...props} />
+              <td className="px-3.5 py-2 text-xs text-zinc-700 dark:text-zinc-300 border-y-0 border-l-0 border-r last:border-r-0 border-zinc-200 dark:border-zinc-800/80 align-top leading-normal" {...props} />
             ),
             tr: ({ ...props }) => (
-              <tr className="hover:bg-zinc-50/60 dark:hover:bg-zinc-900/40 transition-colors" {...props} />
+              <tr className="hover:bg-zinc-50/70 dark:hover:bg-zinc-900/50 transition-colors" {...props} />
+            ),
+            a: ({ ...props }) => (
+              <a
+                className="text-blue-600 dark:text-blue-400 underline underline-offset-2 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
+                target="_blank"
+                rel="noopener noreferrer"
+                {...props}
+              />
             ),
             code: ({ className, children, ...props }) => {
               const isInline = !className
@@ -88,3 +150,5 @@ export const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({ markdown }) =>
     </div>
   )
 }
+
+export default MarkdownPreview

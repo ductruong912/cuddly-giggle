@@ -27,11 +27,7 @@ export const MetadataFooter: React.FC<MetadataFooterProps> = ({ result }) => {
         <div className="flex items-center gap-1 text-zinc-600 dark:text-zinc-400">
           <Cpu className="w-3 h-3 text-zinc-400" />
           <span>
-            {result.mode === 'ocr'
-              ? 'Local OCR'
-              : result.engine === 'local'
-              ? 'Local Pipeline'
-              : 'Online Engine'}
+            {result.mode === 'ocr' ? 'Local OCR' : 'Local Extraction'}
           </span>
         </div>
 

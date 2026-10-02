@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, lazy, Suspense } from 'react'
 import {
   FileCode,
   Eye,
@@ -8,21 +8,119 @@ import {
   AlertCircle,
   Loader2,
   Terminal,
+  RotateCcw,
+  ArrowRight,
+  Info,
 } from 'lucide-react'
 import { MarkdownTab } from './MarkdownTab'
-import { MarkdownPreview } from './MarkdownPreview'
 import { PoFieldsTab } from './PoFieldsTab'
 import { JsonTab } from './JsonTab'
 import { ValidationTab } from './ValidationTab'
 import { MetadataFooter } from './MetadataFooter'
-import type { ProcessingState, ResultData } from '@/types/document'
+import { Button } from '@/components/common/Button'
+import type { ProcessingMode, ProcessingState, ResultData } from '@/types/document'
 import { formatDuration } from '@/lib/utils'
+
+const MarkdownPreview = lazy(() => import('./MarkdownPreview'))
 
 interface OutputPanelProps {
   result: ResultData
   processing: ProcessingState
-  error: { status?: number; message: string; detail?: string } | null
+  error: { status?: number; message: string; detail?: string; isLlmError?: boolean } | null
   filename?: string
+  mode?: ProcessingMode
+  onRetry?: () => void
+  onSwitchToOcr?: () => void
+}
+
+function getErrorDetails(
+  status?: number,
+  mode: ProcessingMode = 'ocr',
+  isLlm?: boolean,
+  message?: string
+) {
+  // If it's an LLM/OpenAI error during structured extraction
+  if (
+    mode === 'extraction' &&
+    (isLlm ||
+      status === 503 ||
+      message?.toLowerCase().includes('openai') ||
+      message?.toLowerCase().includes('llm') ||
+      message?.toLowerCase().includes('structured extraction is unavailable'))
+  ) {
+    return {
+      title: 'Structured extraction is unavailable',
+      description:
+        'The backend OpenAI/LLM service is currently unavailable or unconfigured. OCR-only mode may still be available.',
+      isLlmFailure: true,
+    }
+  }
+
+  const prefix = mode === 'ocr' ? 'OCR' : 'Extraction'
+
+  switch (status) {
+    case 400:
+      return {
+        title: `${prefix} request invalid`,
+        description: 'The uploaded file or request parameters are malformed.',
+        isLlmFailure: false,
+      }
+    case 404:
+      return {
+        title: 'Resource not found',
+        description: 'The requested extraction record or file could not be found.',
+        isLlmFailure: false,
+      }
+    case 413:
+      return {
+        title: 'File exceeds size limit',
+        description: 'The uploaded file exceeds the 50 MB server limit. Please upload a smaller document.',
+        isLlmFailure: false,
+      }
+    case 415:
+      return {
+        title: 'Unsupported file format',
+        description:
+          'This file format is not supported. Please upload a PDF, image (PNG, JPG, TIFF, WEBP, BMP), Word, or Excel document.',
+        isLlmFailure: false,
+      }
+    case 422:
+      return {
+        title: 'Validation failed',
+        description: 'The document data could not be validated or processed according to schema constraints.',
+        isLlmFailure: false,
+      }
+    case 429:
+      return {
+        title: 'Rate limit exceeded',
+        description: 'Too many requests were sent in a short period. Please wait a moment before trying again.',
+        isLlmFailure: false,
+      }
+    case 500:
+      return {
+        title: `${prefix} internal error`,
+        description: 'An unexpected server error occurred while processing the document.',
+        isLlmFailure: false,
+      }
+    case 503:
+      return {
+        title: 'Service temporarily unavailable',
+        description: 'The processing engine or backing service is temporarily unable to handle requests.',
+        isLlmFailure: false,
+      }
+    case 504:
+      return {
+        title: `${prefix} timed out`,
+        description: 'The document processing timed out. The document may be too large or complex.',
+        isLlmFailure: false,
+      }
+    default:
+      return {
+        title: `${prefix} failed`,
+        description: message || 'An error occurred during processing.',
+        isLlmFailure: false,
+      }
+  }
 }
 
 export const OutputPanel: React.FC<OutputPanelProps> = ({
@@ -30,18 +128,25 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
   processing,
   error,
   filename = 'document',
+  mode = 'ocr',
+  onRetry,
+  onSwitchToOcr,
 }) => {
   // Tab states
   const [ocrTab, setOcrTab] = useState<'markdown' | 'preview'>('markdown')
   const [extractTab, setExtractTab] = useState<'fields' | 'json' | 'validation'>('fields')
   const [prevResult, setPrevResult] = useState<ResultData>(null)
 
-  // React-recommended pattern for resetting state on prop change during render
+  // React pattern for resetting state on prop change during render
   if (result !== prevResult) {
     setPrevResult(result)
     setOcrTab('markdown')
     setExtractTab('fields')
   }
+
+  const errorInfo = error
+    ? getErrorDetails(error.status, mode, error.isLlmError, error.message)
+    : null
 
   return (
     <div className="w-full h-full flex flex-col bg-white dark:bg-zinc-950 overflow-hidden relative">
@@ -56,9 +161,15 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
 
             {/* OCR Tabs */}
             {result.mode === 'ocr' && (
-              <div className="inline-flex p-0.5 rounded-lg bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs">
+              <div
+                role="tablist"
+                aria-label="OCR output views"
+                className="inline-flex p-0.5 rounded-lg bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs"
+              >
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={ocrTab === 'markdown'}
                   onClick={() => setOcrTab('markdown')}
                   className={`px-3 py-1 rounded-md font-medium inline-flex items-center gap-1.5 transition-all ${
                     ocrTab === 'markdown'
@@ -71,6 +182,8 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                 </button>
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={ocrTab === 'preview'}
                   onClick={() => setOcrTab('preview')}
                   className={`px-3 py-1 rounded-md font-medium inline-flex items-center gap-1.5 transition-all ${
                     ocrTab === 'preview'
@@ -86,9 +199,15 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
 
             {/* Structured Extraction Tabs */}
             {result.mode === 'extraction' && (
-              <div className="inline-flex p-0.5 rounded-lg bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs">
+              <div
+                role="tablist"
+                aria-label="Extraction views"
+                className="inline-flex p-0.5 rounded-lg bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs"
+              >
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={extractTab === 'fields'}
                   onClick={() => setExtractTab('fields')}
                   className={`px-3 py-1 rounded-md font-medium inline-flex items-center gap-1.5 transition-all ${
                     extractTab === 'fields'
@@ -101,6 +220,8 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                 </button>
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={extractTab === 'json'}
                   onClick={() => setExtractTab('json')}
                   className={`px-3 py-1 rounded-md font-medium inline-flex items-center gap-1.5 transition-all ${
                     extractTab === 'json'
@@ -113,6 +234,8 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                 </button>
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={extractTab === 'validation'}
                   onClick={() => setExtractTab('validation')}
                   className={`px-3 py-1 rounded-md font-medium inline-flex items-center gap-1.5 transition-all ${
                     extractTab === 'validation'
@@ -163,17 +286,27 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
         {/* State 2: Error State */}
         {!processing.isProcessing && error && (
           <div className="w-full h-full flex flex-col items-center justify-center p-8 bg-zinc-50/50 dark:bg-zinc-950">
-            <div className="max-w-md w-full p-6 rounded-xl bg-white dark:bg-zinc-900 border border-rose-200 dark:border-rose-900/60 shadow-xs space-y-3">
+            <div className="max-w-md w-full p-6 rounded-xl bg-white dark:bg-zinc-900 border border-rose-200 dark:border-rose-900/60 shadow-xs space-y-4">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-900 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
-                  <AlertCircle className="w-5 h-5" />
+                <div
+                  className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                    errorInfo?.isLlmFailure
+                      ? 'bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-900 text-amber-600 dark:text-amber-400'
+                      : 'bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-900 text-rose-600 dark:text-rose-400'
+                  }`}
+                >
+                  {errorInfo?.isLlmFailure ? (
+                    <Info className="w-5 h-5" />
+                  ) : (
+                    <AlertCircle className="w-5 h-5" />
+                  )}
                 </div>
                 <div>
                   <h4 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                    Processing Request Failed
+                    {errorInfo?.title || 'Processing Request Failed'}
                   </h4>
                   {error.status && (
-                    <span className="text-[11px] font-mono text-rose-600 dark:text-rose-400">
+                    <span className="text-[11px] font-mono text-zinc-500 dark:text-zinc-400">
                       HTTP {error.status}
                     </span>
                   )}
@@ -181,14 +314,41 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
               </div>
 
               <p className="text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed">
-                {error.message}
+                {errorInfo?.description || error.message}
               </p>
 
               {error.detail && error.detail !== error.message && (
-                <div className="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 font-mono text-[11px] text-zinc-600 dark:text-zinc-400 max-h-36 overflow-y-auto whitespace-pre-wrap">
+                <div className="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 font-mono text-[11px] text-zinc-600 dark:text-zinc-400 max-h-32 overflow-y-auto whitespace-pre-wrap">
                   {error.detail}
                 </div>
               )}
+
+              {/* Actions / Recovery */}
+              <div className="flex items-center gap-2 pt-1 border-t border-zinc-100 dark:border-zinc-800/80">
+                {errorInfo?.isLlmFailure && onSwitchToOcr && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={onSwitchToOcr}
+                    icon={<ArrowRight className="w-3.5 h-3.5" />}
+                    aria-label="Switch to OCR mode"
+                  >
+                    Switch to OCR Mode
+                  </Button>
+                )}
+
+                {onRetry && (
+                  <Button
+                    variant={errorInfo?.isLlmFailure ? 'outline' : 'primary'}
+                    size="sm"
+                    onClick={onRetry}
+                    icon={<RotateCcw className="w-3.5 h-3.5" />}
+                    aria-label="Try again"
+                  >
+                    Try again
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -216,7 +376,16 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                 {ocrTab === 'markdown' ? (
                   <MarkdownTab markdown={result.markdown} filename={filename} />
                 ) : (
-                  <MarkdownPreview markdown={result.markdown} />
+                  <Suspense
+                    fallback={
+                      <div className="w-full h-full flex flex-col items-center justify-center p-8 bg-zinc-50/50 dark:bg-zinc-950 text-center select-none text-zinc-500">
+                        <Loader2 className="w-5 h-5 animate-spin text-zinc-400 mb-2" />
+                        <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Loading preview...</span>
+                      </div>
+                    }
+                  >
+                    <MarkdownPreview markdown={result.markdown} />
+                  </Suspense>
                 )}
               </div>
             ) : (

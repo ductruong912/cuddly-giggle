@@ -11,7 +11,6 @@ import {
 import { Button } from '@/components/common/Button'
 import { formatBytes, formatDuration } from '@/lib/utils'
 import type {
-  ExtractionEngine,
   ProcessingMode,
   ProcessingState,
   UploadedDocument,
@@ -22,8 +21,6 @@ interface ToolbarProps {
   onClearDocument: () => void
   mode: ProcessingMode
   onChangeMode: (mode: ProcessingMode) => void
-  engine: ExtractionEngine
-  onChangeEngine: (engine: ExtractionEngine) => void
   processing: ProcessingState
   onRun: () => void
   onCancel: () => void
@@ -34,8 +31,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onClearDocument,
   mode,
   onChangeMode,
-  engine,
-  onChangeEngine,
   processing,
   onRun,
   onCancel,
@@ -79,7 +74,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 type="button"
                 onClick={onClearDocument}
                 className="p-1 rounded text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-200/60 dark:hover:bg-zinc-800 transition-colors"
-                title="Remove file"
+                title="Remove file (Ctrl+O to choose new file)"
                 aria-label="Remove file"
               >
                 <X className="w-3.5 h-3.5" />
@@ -88,17 +83,22 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </div>
         ) : (
           <span className="text-xs text-zinc-400 dark:text-zinc-500 italic">
-            No document selected
+            No document selected (Ctrl+O to choose file)
           </span>
         )}
       </div>
 
-      {/* Middle: Mode & Engine selectors */}
+      {/* Middle: Mode selector [ OCR | Structured Extraction ] */}
       <div className="flex items-center gap-2">
-        {/* Mode Segmented Control */}
-        <div className="inline-flex p-0.5 rounded-lg bg-zinc-200/80 dark:bg-zinc-800 border border-zinc-300/60 dark:border-zinc-700/60 text-xs">
+        <div
+          role="tablist"
+          aria-label="Processing mode"
+          className="inline-flex p-0.5 rounded-lg bg-zinc-200/80 dark:bg-zinc-800 border border-zinc-300/60 dark:border-zinc-700/60 text-xs"
+        >
           <button
             type="button"
+            role="tab"
+            aria-selected={mode === 'ocr'}
             disabled={processing.isProcessing}
             onClick={() => onChangeMode('ocr')}
             className={`px-3 py-1 rounded-md font-medium transition-all ${
@@ -111,6 +111,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={mode === 'extraction'}
             disabled={processing.isProcessing}
             onClick={() => onChangeMode('extraction')}
             className={`px-3 py-1 rounded-md font-medium transition-all ${
@@ -122,33 +124,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             Structured Extraction
           </button>
         </div>
-
-        {/* Engine selector (only visible for Structured Extraction) */}
-        {mode === 'extraction' && (
-          <div className="inline-flex p-0.5 rounded-lg bg-zinc-200/80 dark:bg-zinc-800 border border-zinc-300/60 dark:border-zinc-700/60 text-xs animate-in fade-in duration-150">
-            <button
-              type="button"
-              disabled={processing.isProcessing}
-              onClick={() => onChangeEngine('local')}
-              className={`px-2.5 py-1 rounded-md font-medium transition-all ${
-                engine === 'local'
-                  ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs'
-                  : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
-              }`}
-              title="Local OCR engine + LLM structured PO extraction"
-            >
-              Local
-            </button>
-            <button
-              type="button"
-              disabled={true}
-              className="px-2.5 py-1 rounded-md font-medium text-zinc-400 dark:text-zinc-600 cursor-not-allowed"
-              title="Online extraction engine is not configured on this server"
-            >
-              Online
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Right: Run / Cancel Button & Timer */}
@@ -163,7 +138,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               size="sm"
               onClick={onCancel}
               icon={<StopCircle className="w-3.5 h-3.5 text-rose-500" />}
-              title="Cancel current processing request"
+              title="Cancel current processing request (Esc)"
+              aria-label="Cancel processing"
             >
               Cancel
             </Button>
@@ -176,6 +152,13 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           disabled={!document || processing.isProcessing}
           loading={processing.isProcessing}
           onClick={onRun}
+          title={
+            !document
+              ? 'Select a document first (Ctrl+O)'
+              : mode === 'ocr'
+              ? 'Run OCR on document (Ctrl+Enter)'
+              : 'Run Purchase Order extraction (Ctrl+Enter)'
+          }
           icon={!processing.isProcessing ? <Play className="w-3.5 h-3.5 fill-current" /> : undefined}
         >
           {processing.isProcessing

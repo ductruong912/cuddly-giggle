@@ -1,5 +1,4 @@
 export type ProcessingMode = 'ocr' | 'extraction'
-export type ExtractionEngine = 'local' | 'online'
 
 export type DocumentType = 'pdf' | 'image' | 'office' | 'markdown' | 'unknown'
 
@@ -30,7 +29,6 @@ export interface OCRResult {
 
 export interface ExtractionResult {
   mode: 'extraction'
-  engine: ExtractionEngine
   response: import('./api').LLMExtractionResponse
   requestTime: number
   filename: string

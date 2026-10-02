@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { TopBar } from '@/components/layout/TopBar'
 import { Toolbar } from '@/components/layout/Toolbar'
 import { SplitPane } from '@/components/layout/SplitPane'
@@ -12,10 +12,10 @@ import { useDocument } from '@/hooks/useDocument'
 import { apiClient } from '@/api/client'
 import { ApiError } from '@/api/errors'
 import type {
-  ExtractionEngine,
   ProcessingMode,
   ProcessingState,
   ResultData,
+  UploadedDocument,
 } from '@/types/document'
 import type { ExtractionRecord } from '@/types/api'
 
@@ -40,9 +40,14 @@ export default function App() {
     onDrop,
   } = useDocument()
 
-  // Processing configuration
+  // Processing configuration (single local pipeline)
   const [mode, setMode] = useState<ProcessingMode>('ocr')
-  const [engine, setEngine] = useState<ExtractionEngine>('local')
+
+  // Supporting historical document display when viewing past records
+  const [historicalDoc, setHistoricalDoc] = useState<UploadedDocument | null>(null)
+
+  // Active document representation (uploaded or historical)
+  const activeDoc = document || historicalDoc
 
   // Processing & telemetry state
   const [processing, setProcessing] = useState<ProcessingState>({
@@ -59,11 +64,13 @@ export default function App() {
     status?: number
     message: string
     detail?: string
+    isLlmError?: boolean
   } | null>(null)
 
   // Drawer state
   const [isHistoryOpen, setIsHistoryOpen] = useState(false)
   const timerRef = useRef<number | null>(null)
+  const hiddenFileInputRef = useRef<HTMLInputElement>(null)
 
   // Check if database history is available (via live endpoint verification)
   const hasHistory = hasPersistence
@@ -74,12 +81,14 @@ export default function App() {
       processing.abortController.abort()
     }
     clearDocument()
+    setHistoricalDoc(null)
     setResult(null)
     setError(null)
   }, [clearDocument, processing.abortController])
 
   const handleSelectFile = useCallback(
     (file: File) => {
+      setHistoricalDoc(null)
       const ok = selectFile(file)
       if (ok) {
         setResult(null)
@@ -89,8 +98,18 @@ export default function App() {
     [selectFile]
   )
 
+  const handleHiddenFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      handleSelectFile(file)
+    }
+    // Reset so the same file can be selected again
+    e.target.value = ''
+  }
+
   // Run execution
   const handleRun = useCallback(async () => {
+    // Only real uploaded files can be processed
     if (!document) return
 
     const controller = new AbortController()
@@ -129,15 +148,10 @@ export default function App() {
           elapsedSeconds: totalElapsed,
         })
       } else {
-        const extractionResponse =
-          engine === 'local'
-            ? await apiClient.extractLocal(document.file, controller.signal)
-            : await apiClient.extractOnline(document.file, controller.signal)
-
+        const extractionResponse = await apiClient.extractLocal(document.file, controller.signal)
         const totalElapsed = (performance.now() - startTime) / 1000
         setResult({
           mode: 'extraction',
-          engine,
           response: extractionResponse,
           requestTime: Date.now(),
           filename: document.name,
@@ -155,6 +169,7 @@ export default function App() {
           status: err.status,
           message: err.message,
           detail: err.detail,
+          isLlmError: err.isLlmError,
         })
       } else {
         setError({
@@ -172,7 +187,7 @@ export default function App() {
         abortController: null,
       }))
     }
-  }, [document, mode, engine])
+  }, [document, mode])
 
   const handleCancel = useCallback(() => {
     if (processing.abortController) {
@@ -191,10 +206,27 @@ export default function App() {
 
   // Select historical record
   const handleSelectHistoryRecord = useCallback((record: ExtractionRecord) => {
+    // If no file is currently uploaded, build a safe placeholder for split view
+    if (!document) {
+      const ext = record.source_filename.split('.').pop()?.toLowerCase() || 'pdf'
+      const placeholderDoc: UploadedDocument = {
+        file: new File([], record.source_filename),
+        name: record.source_filename,
+        size: 0,
+        type: ['png', 'jpg', 'jpeg', 'tiff', 'bmp', 'webp'].includes(ext)
+          ? 'image'
+          : ['docx', 'xlsx'].includes(ext)
+          ? 'office'
+          : 'pdf',
+        extension: `.${ext}`,
+        previewUrl: undefined,
+      }
+      setHistoricalDoc(placeholderDoc)
+    }
+
     setMode('extraction')
     setResult({
       mode: 'extraction',
-      engine: 'local',
       response: {
         request_id: record.request_id,
         ocr: {
@@ -214,10 +246,57 @@ export default function App() {
       elapsedSeconds: (record.duration_ms || 0) / 1000,
     })
     setError(null)
-  }, [])
+  }, [document])
+
+  // Global Keyboard Shortcuts (Ctrl/Cmd+O, Ctrl/Cmd+Enter, Escape)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // Ctrl/Cmd + O: Open file picker
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
+        e.preventDefault()
+        hiddenFileInputRef.current?.click()
+        return
+      }
+
+      // Ctrl/Cmd + Enter: Trigger processing
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        if (document && !processing.isProcessing) {
+          e.preventDefault()
+          handleRun()
+        }
+        return
+      }
+
+      // Escape: Dismiss active states or cancel
+      if (e.key === 'Escape') {
+        if (isHistoryOpen) {
+          e.preventDefault()
+          setIsHistoryOpen(false)
+        } else if (processing.isProcessing) {
+          e.preventDefault()
+          handleCancel()
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleGlobalKeyDown)
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown)
+  }, [document, processing.isProcessing, isHistoryOpen, handleRun, handleCancel])
 
   return (
     <div className="w-full h-full flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 overflow-hidden font-sans">
+      {/* Hidden file input for Ctrl+O */}
+      <input
+        ref={hiddenFileInputRef}
+        type="file"
+        data-testid="global-file-input"
+        className="hidden"
+        accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp,.webp,.docx,.xlsx,.txt,.md"
+        onChange={handleHiddenFileInputChange}
+        tabIndex={-1}
+        aria-hidden="true"
+      />
+
       {/* 1. Top Bar */}
       <TopBar
         status={status}
@@ -232,12 +311,10 @@ export default function App() {
 
       {/* 2. Document Processing Toolbar */}
       <Toolbar
-        document={document}
+        document={activeDoc}
         onClearDocument={handleClearDocument}
         mode={mode}
         onChangeMode={setMode}
-        engine={engine}
-        onChangeEngine={setEngine}
         processing={processing}
         onRun={handleRun}
         onCancel={handleCancel}
@@ -245,7 +322,7 @@ export default function App() {
 
       {/* 3. Main Workspace */}
       <main className="flex-1 w-full h-[calc(100vh-100px)] overflow-hidden flex flex-col relative">
-        {!document ? (
+        {!activeDoc ? (
           <Dropzone
             onFileSelected={handleSelectFile}
             isDragActive={isDragActive}
@@ -256,13 +333,16 @@ export default function App() {
           />
         ) : (
           <SplitPane
-            left={<DocumentViewer document={document} />}
+            left={<DocumentViewer document={activeDoc} />}
             right={
               <OutputPanel
                 result={result}
                 processing={processing}
                 error={error}
-                filename={document.name}
+                filename={activeDoc.name}
+                mode={mode}
+                onRetry={document ? handleRun : undefined}
+                onSwitchToOcr={() => setMode('ocr')}
               />
             }
           />
