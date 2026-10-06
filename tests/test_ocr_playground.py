@@ -73,8 +73,9 @@ def test_incomplete_frontend_build_does_not_break_api(tmp_path: Path) -> None:
     assert request(application, "/").status_code == 404
 
 
+@pytest.mark.parametrize("path", ["/v1/doc/ocr", "/v1/doc/ocr/result", "/v1/doc/ocr/result?include_preview=true"])
 def test_ocr_works_without_openai_or_database_and_cleans_upload(
-    api: Any, monkeypatch: pytest.MonkeyPatch, parse_response: Any, temp_root: Path
+    api: Any, monkeypatch: pytest.MonkeyPatch, parse_response: Any, temp_root: Path, path: str
 ) -> None:
     import api.application as application_module
     import api.dependencies as dependencies
@@ -90,7 +91,23 @@ def test_ocr_works_without_openai_or_database_and_cleans_upload(
     monkeypatch.setattr(dependencies, "get_local_extraction_service", forbidden)
     monkeypatch.setattr(routes, "save_parse_artifacts", lambda *_: [])
     parser = Mock()
-    parser.parse.return_value = parse_response
+    from core.domain.schemas import Block, BlockType, PageGeometry, PageParseResult, Point, Table, TableCell
+
+    block = Block(block_id="ocr_block", type=BlockType.text, content="Synthetic",
+                  bbox=[Point(x=0, y=0), Point(x=100, y=0), Point(x=100, y=50), Point(x=0, y=50)])
+    table = Table(table_id="ocr_table", page_index=0, cells=[TableCell(row=0, col=0, text="Synthetic")])
+    parse_response.pages = [PageParseResult(page_index=0, blocks=[block], tables=[table],
+                                          reading_order=[block.block_id],
+                                          geometry=PageGeometry(width=200, height=300, coordinate_space="original"))]
+    parse_response.blocks = [block]
+    parse_response.tables = [table]
+    parse_response.reading_order = [block.block_id]
+    from core.engines.preview import preview_capture_enabled
+    captured = []
+    def parse(_):
+        captured.append(preview_capture_enabled())
+        return parse_response
+    parser.parse.side_effect = parse
 
     async def body(client):
         # Overrides are applied here because the shared fixture resets singletons first.
@@ -99,7 +116,7 @@ def test_ocr_works_without_openai_or_database_and_cleans_upload(
         health = await client.get("/healthz")
         ready = await client.get("/readyz")
         result = await client.post(
-            "/v1/doc/ocr", files={"file": ("synthetic.pdf", b"synthetic", "application/pdf")}
+            path, files={"file": ("synthetic.pdf", b"synthetic", "application/pdf")}
         )
         return health, ready, result
 
@@ -107,8 +124,39 @@ def test_ocr_works_without_openai_or_database_and_cleans_upload(
     assert health.status_code == 200
     assert ready.status_code == 503  # Full-pipeline readiness still checks LLM credentials.
     assert result.status_code == 200
-    assert result.headers["content-type"].startswith("text/markdown")
-    assert result.text == parse_response.markdown
+    if path.split("?")[0].endswith("/result"):
+        assert result.json() == parse_response.model_dump(mode="json")
+    else:
+        assert result.headers["content-type"].startswith("text/markdown")
+        assert result.text == parse_response.markdown
     parser.parse.assert_called_once()
+    assert captured == ["include_preview=true" in path]
+    assert not preview_capture_enabled()
     forbidden.assert_not_called()
+    assert list((temp_root / "staging").iterdir()) == []
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_structured_ocr_cleans_upload_on_empty_result_or_parser_error(
+    api: Any, monkeypatch: pytest.MonkeyPatch, parse_response: Any, temp_root: Path, failure: bool
+) -> None:
+    import api.routes as routes
+
+    parse_response.markdown = None
+    parser = Mock()
+    parser.parse.return_value = parse_response
+    if failure:
+        parser.parse.side_effect = RuntimeError("synthetic OCR failure")
+    saved = Mock()
+    monkeypatch.setattr(routes, "save_parse_artifacts", saved)
+
+    async def body(client):
+        app.dependency_overrides[get_orchestrator] = lambda: parser
+        app.dependency_overrides[ensure_gpu_gguf_runtime] = lambda: None
+        return await client.post("/v1/doc/ocr/result", files={"file": ("synthetic.png", b"synthetic")})
+
+    response = api(body)
+    assert response.status_code >= 400
+    if not failure:
+        assert response.status_code == 422
     assert list((temp_root / "staging").iterdir()) == []

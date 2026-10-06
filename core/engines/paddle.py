@@ -15,7 +15,8 @@ from typing import Any, Callable
 from config.config import Settings, settings
 from config.pipeline_logging import current_source_document, pipeline_message
 from core.domain.schemas import PageParseResult
-from core.engines.base import EngineParseResult, ParseEngine
+from core.engines.base import EngineParseResult, ParseEngine, image_page_geometry
+from core.engines.preview import attach_page_previews, preview_capture_enabled
 from core.engines.normalizer import normalize_engine_output
 from core.preprocess import preprocess_file
 from services.model_assets import require_model_profile
@@ -125,6 +126,19 @@ class PaddlePipelineEngine(ParseEngine):
             raise RuntimeError(self._unavailable_message(py_error, cli_error))
 
         pages, markdown, normalized_raw = normalize_engine_output(raw, self.name, self.settings)
+        geometry = None
+        if Path(input_path).suffix.lower() != ".pdf" and not self.settings.paddleocr_vl_auto_rotate:
+            geometry = image_page_geometry(
+                input_path, matches_original=not self.settings.preprocess_enabled,
+            )
+        for page in pages:
+            page.geometry = geometry
+        if preview_capture_enabled():
+            attach_page_previews(pages, raw, input_matches_original=(
+                not self.settings.preprocess_enabled
+                and (Path(input_path).suffix.lower() == ".pdf"
+                     or image_page_geometry(input_path, matches_original=True) is not None)
+            ))
         return EngineParseResult(engine_name=self.name, pages=pages, markdown=markdown, raw=normalized_raw)
 
     def _prepare_page_images(self, input_path: str) -> tuple[list[str] | None, Callable[[], None]]:

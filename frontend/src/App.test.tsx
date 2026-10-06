@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Mock } from 'vitest'
 import App from './App'
 import MarkdownResult from './MarkdownResult'
+import { ocrFixture } from '../fixtures/ocrFixture'
 
 const config = {
   supported_suffixes: ['.pdf', '.png', '.docx', '.tiff'],
@@ -15,14 +16,14 @@ let fetchMock: Mock<(url: string, options: RequestInit) => Promise<Response>>
 
 beforeEach(() => {
   ocr = vi.fn().mockResolvedValue(
-    new Response('# Tài liệu\n\n| Cột | Giá trị |\n|---|---|\n|A|2|', {
-      headers: { 'Content-Type': 'text/markdown' },
+    new Response(JSON.stringify(ocrFixture('# Tài liệu\n\n| Cột | Giá trị |\n|---|---|\n|A|2|')), {
+      headers: { 'Content-Type': 'application/json' },
     }),
   )
   fetchMock = vi.fn((url: string, options: RequestInit) => {
     if (url === '/v1/ui/config') return Promise.resolve(new Response(JSON.stringify(config)))
     if (url === '/healthz') return Promise.resolve(new Response('{"status":"ok"}'))
-    if (url === '/v1/doc/ocr') return ocr(url, options)
+    if (url === '/v1/doc/ocr/result?include_preview=true') return ocr(url, options)
     throw new Error(`Unexpected endpoint ${url}`)
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -42,6 +43,67 @@ async function upload(name = 'synthetic.docx', content = 'synthetic') {
 }
 
 describe('OCR workspace', () => {
+  it('shows and exports OCR JSON, then shows recognized title and text regions', async () => {
+    const result = ocrFixture('# OCR')
+    result.blocks = [
+      {
+        block_id: 'title',
+        page_index: 1,
+        type: 'title',
+        content: 'OCR title',
+        bbox: [],
+        confidence: 0.95,
+        source_engine: 'test',
+        extra: { label: 'paragraph_title' },
+      },
+      {
+        block_id: 'text',
+        page_index: 1,
+        type: 'text',
+        content: 'OCR text',
+        bbox: [],
+        confidence: 0.9,
+        source_engine: 'test',
+        extra: {},
+      },
+    ]
+    ocr.mockResolvedValue(
+      new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } }),
+    )
+    const user = userEvent.setup()
+    render(<App />)
+    await upload()
+    await user.click(screen.getByRole('button', { name: 'Đọc tài liệu' }))
+    await user.click(await screen.findByRole('tab', { name: 'JSON OCR' }))
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('ocr_synthetic')
+    await user.click(screen.getByRole('button', { name: 'Sao chép JSON OCR' }))
+    expect(await navigator.clipboard.readText()).toBe(JSON.stringify(result, null, 2))
+    await user.click(screen.getByRole('tab', { name: 'Blocks' }))
+    expect(screen.queryByRole('tab', { name: 'Bảng' })).not.toBeInTheDocument()
+    const title = screen.getByRole('button', { name: 'Nội dung 1 · title · Trang 2' })
+    await user.hover(title)
+    expect(title).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('heading', { name: 'OCR title' })).toBeVisible()
+    expect(title).toHaveAttribute('data-block-type', 'title')
+    expect(screen.getByText('PARAGRAPH_TITLE')).toBeVisible()
+    expect(screen.getByText('TEXT')).toBeVisible()
+    expect(screen.getByText('OCR text')).toBeVisible()
+  })
+
+  it('explains when no regions are available and navigates all four tabs', async () => {
+    render(<App />)
+    await upload()
+    await userEvent.click(screen.getByRole('button', { name: 'Đọc tài liệu' }))
+    const tab = await screen.findByRole('tab', { name: 'Trình bày' })
+    tab.focus()
+    await userEvent.keyboard('{End}')
+    expect(screen.getByRole('tab', { name: 'Blocks' })).toHaveFocus()
+    expect(screen.getByText(/Engine chưa trả block/)).toBeVisible()
+    await userEvent.keyboard('{ArrowRight}')
+    expect(tab).toHaveFocus()
+    await userEvent.keyboard('{ArrowLeft}')
+    expect(screen.getByRole('tab', { name: 'Blocks' })).toHaveFocus()
+  })
   it('starts evenly split, supports keyboard resizing and resets for a new file', async () => {
     render(<App />)
     expect(screen.queryByRole('separator')).not.toBeInTheDocument()
@@ -113,7 +175,11 @@ describe('OCR workspace', () => {
     expect(screen.getByRole('button', { name: 'Đổi file' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Mở thanh bên' })).toBeEnabled()
     expect(screen.getByText('Đã chờ 0 giây')).toBeInTheDocument()
-    finish(new Response('Done', { headers: { 'Content-Type': 'text/markdown' } }))
+    finish(
+      new Response(JSON.stringify(ocrFixture('Done')), {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
     expect(await screen.findByText('Done')).toBeInTheDocument()
   })
 

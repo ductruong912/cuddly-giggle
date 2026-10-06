@@ -13,8 +13,8 @@ the OCR Markdown to OpenAI.
 
 ## OCR Playground
 
-UI nội bộ bằng React + TypeScript, xem tài liệu cạnh kết quả Markdown. Giao diện
-chỉ gọi `POST /v1/doc/ocr`; không gọi OpenAI hoặc API trích xuất trường PO. Giữ
+UI nội bộ bằng React + TypeScript, xem tài liệu cạnh kết quả OCR có cấu trúc.
+Giao diện gọi `POST /v1/doc/ocr/result`; không gọi OpenAI hoặc API trích xuất PO. Giữ
 luồng đọc native cho Word/Excel/PDF có lớp chữ và OCR CPU/GPU cho ảnh/PDF scan.
 PaddleOCR-VL/llama.cpp vẫn có thể được sử dụng cho nhận dạng OCR theo cấu hình máy.
 
@@ -57,7 +57,35 @@ Docker Compose vẫn cần runtime/model/GPU như mô tả ở phần Docker.
 PDF có preview chuyển trang/zoom; PNG/JPEG/BMP/WebP có preview ảnh. Word, Excel và
 TIFF chỉ hiển thị thông tin file nhưng vẫn gửi để đọc/OCR được. Giới hạn upload
 đọc từ `/v1/ui/config`; giới hạn trang chỉ áp dụng cho PDF cần OCR ở backend.
-Kết quả có tab trình bày/mã Markdown, sao chép và tải `.md`. Không thực thi HTML
+Kết quả có tab **Trình bày**, **Markdown**, **JSON OCR** và **Blocks**;
+sao chép/tải `.json` khi chọn JSON OCR, `.md` ở các tab còn lại.
+
+Bbox tự bật khi đọc xong; có thể tắt bằng **Hiện bbox**. Rê chuột, chọn hoặc
+đặt focus vào bbox để mở **Blocks**, đánh dấu và cuộn đến nội dung tương
+ứng. Tương tác với nội dung làm nổi bật bbox và chuyển preview đến đúng trang.
+Blocks dùng khối viền mảnh và nhãn viết hoa, đồng bộ màu với bbox: title hồng,
+text xanh, table cam. Danh sách theo thứ tự đọc, giữ nhãn gốc trong `extra.label`
+(nếu có), hoặc loại block như `title`, `text`; không tự suy đoán
+tiêu đề nếu engine chỉ trả text. Mỗi vùng hiển thị điểm nhận dạng, có thể được tổng
+hợp hoặc gán mặc định, không phải phần trăm chính xác. Mỗi trang có `geometry`
+gồm kích thước hệ tọa độ bbox và `coordinate_space`: `original` khớp bản gốc,
+`processed` thuộc ảnh đã xử lý. Nếu kết quả có `geometry.original`, UI dùng
+ma trận affine `transform` để đưa bbox sau xoay về bản gốc; bbox trong JSON giữ
+nguyên. Nếu ảnh được uốn/chỉnh hình và không có phép chuyển ngược xác định,
+UI tự chọn ảnh OCR với bbox khớp ảnh đó; tắt **Hiện bbox** để đối chiếu
+tài liệu ban đầu. Không ước lượng kích thước trang từ phạm vi text hoặc vẽ
+bbox đã uốn lên bản gốc khi chưa có ánh xạ.
+
+Frontend gọi `/v1/doc/ocr/result?include_preview=true`. Chỉ request có cờ này
+mới lấy metadata/ảnh từ kết quả OCR đang có, không chạy lại model, không đổi
+cấu hình tự xoay và không lưu thêm ảnh ra đĩa. Tổng ảnh JPEG inline bị giới hạn
+bởi `UI_PREVIEW_MAX_BYTES` (mặc định 16 MiB), cạnh dài bởi `UI_PREVIEW_MAX_EDGE`
+(2000 px); kích thước hệ tọa độ vẫn là ảnh OCR đầy đủ. Nếu adapter/CLI không
+cung cấp ảnh hoặc hết ngân sách, UI thông báo không có bbox khớp bản gốc và
+giữ tọa độ trong JSON. `/v1/doc/ocr`, `/v1/extract/local` và request JSON không
+có cờ vẫn dùng luồng cũ, không tạo ảnh xem trước.
+
+Không thực thi HTML
 hoặc tự tải ảnh/link trong kết quả. File và kết quả giữ trong bộ nhớ trình duyệt;
 backend vẫn lưu artifact theo chính sách hiện có. Không có lịch sử OCR trong UI.
 
@@ -331,6 +359,7 @@ llama.cpp debug server listens on <http://localhost:8080>.
 | --- | --- |
 | `POST /v1/extract/local` | Local OCR plus structured extraction. Uses PaddleOCR-VL on GPU and PaddleOCR v6 on CPU. |
 | `POST /v1/doc/ocr` | Auxiliary local OCR-only debugging endpoint; returns Markdown and does not call the LLM. |
+| `POST /v1/doc/ocr/result` | OCR-only structured response: Markdown, pages, blocks/bbox, tables, reading order and engine name. Uses the same upload limits, runtime guard and cleanup as `/v1/doc/ocr`. |
 | `GET /healthz` | Liveness check plus live per-stage occupancy. |
 
 Use `multipart/form-data` with a `file` field. The local route supports PDF,

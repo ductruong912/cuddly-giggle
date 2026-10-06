@@ -33,7 +33,7 @@ from api.uploads import (
 )
 from config.config import settings
 from config.pipeline_logging import pipeline_message, source_document_context
-from core.domain.schemas import LLMExtractionResponse, UIConfigResponse
+from core.domain.schemas import LLMExtractionResponse, ParseResponse, UIConfigResponse
 from services.concurrency import PipelineLimiters
 from services.document_extraction import DocumentExtractionService
 from services.local_ocr_selector import has_usable_gpu
@@ -41,6 +41,7 @@ from services.persistence import ExtractionQuery, ExtractionStore
 from services.persistence.extraction_store import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from services.orchestrator import ParseOrchestrator
 from services.output import save_parse_artifacts
+from core.engines.preview import capture_preview_context
 
 
 logger = logging.getLogger(__name__)
@@ -242,6 +243,34 @@ async def ocr_document(
     _: None = Depends(ensure_gpu_gguf_runtime),
 ) -> PlainTextResponse:
     """Run local OCR only and return Markdown, for debugging the parse stage."""
+    response = await _parse_ocr_upload(request, file, orchestrator, stager, limiters)
+    return PlainTextResponse(response.markdown, media_type="text/markdown")
+
+
+@ocr_router.post("/ocr/result", response_model=ParseResponse)
+@limiter.limit(settings.rate_limit_extract)
+async def ocr_result(
+    request: Request,
+    file: UploadFile | None = File(None),
+    include_preview: bool = Query(default=False),
+    orchestrator: ParseOrchestrator = Depends(get_orchestrator),
+    stager: UploadStager = Depends(get_upload_stager),
+    limiters: PipelineLimiters = Depends(get_pipeline_limiters),
+    _: None = Depends(ensure_gpu_gguf_runtime),
+) -> ParseResponse:
+    """Return local OCR pages, blocks, tables and Markdown without extraction."""
+    return await _parse_ocr_upload(request, file, orchestrator, stager, limiters, include_preview=include_preview)
+
+
+async def _parse_ocr_upload(
+    request: Request,
+    file: UploadFile | None,
+    orchestrator: ParseOrchestrator,
+    stager: UploadStager,
+    limiters: PipelineLimiters,
+    *,
+    include_preview: bool = False,
+) -> ParseResponse:
     upload = await resolve_upload(request, file)
     staged = await stager.stage(
         upload,
@@ -250,13 +279,22 @@ async def ocr_document(
     )
     try:
         with source_document_context(staged.filename):
-            response = await limiters.ocr.run(orchestrator.parse, str(staged.path))
+            if include_preview:
+                response = await limiters.ocr.run(_parse_with_preview, orchestrator, str(staged.path))
+            else:
+                response = await limiters.ocr.run(orchestrator.parse, str(staged.path))
         await limiters.io.run(save_parse_artifacts, response, staged.filename)
         if not response.markdown:
             raise HTTPException(status_code=422, detail="No markdown output produced.")
-        return PlainTextResponse(response.markdown, media_type="text/markdown")
+        return response
     finally:
         stager.discard(staged)
+
+
+def _parse_with_preview(orchestrator: ParseOrchestrator, input_path: str) -> ParseResponse:
+    """Capture metadata inside the OCR worker; timeout keeps its existing slot."""
+    with capture_preview_context(settings.ui_preview_max_bytes, settings.ui_preview_max_edge):
+        return orchestrator.parse(input_path)
 
 
 # =====================================================================================

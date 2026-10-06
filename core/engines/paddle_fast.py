@@ -13,8 +13,10 @@ import time
 from typing import Any
 
 from config.config import Settings, settings
-from core.engines.base import EngineParseResult
+from core.domain.schemas import PageGeometry
+from core.engines.base import EngineParseResult, image_page_geometry
 from core.engines.normalizer import normalize_engine_output
+from core.engines.preview import attach_page_previews, preview_capture_enabled
 from core.preprocess import preprocess_file
 from services.model_assets import require_model_profile
 
@@ -77,6 +79,27 @@ class PaddleOCRFastEngine:
                 source_engine=self.name,
                 app_settings=self.settings,
             )
+            is_pdf = Path(input_path).suffix.lower() == ".pdf"
+            geometry = None
+            if not is_pdf and not self.settings.fast_ocr_auto_rotate:
+                geometry = image_page_geometry(input_path, matches_original=staged_dir is None)
+            for page, normalized_page in zip(pages, normalized["pages"]):
+                if geometry is not None:
+                    page.geometry = geometry
+                elif normalized_page.get("image_size"):
+                    width, height = normalized_page["image_size"]
+                    page.geometry = PageGeometry(
+                        width=width,
+                        height=height,
+                        coordinate_space=(
+                            "original" if is_pdf and not self.settings.fast_ocr_auto_rotate
+                            else "processed"
+                        ),
+                    )
+            if preview_capture_enabled():
+                attach_page_previews(pages, output, input_matches_original=(
+                    staged_dir is None and (is_pdf or image_page_geometry(input_path, matches_original=True) is not None)
+                ))
             logger.info(
                 "fast-ocr normalize completed duration=%.3fs",
                 time.perf_counter() - normalize_start,
@@ -213,6 +236,14 @@ class PaddleOCRFastEngine:
             texts = self._as_list(payload.get("rec_texts"))
             scores = self._as_list(payload.get("rec_scores"))
             boxes = self._as_list(payload.get("rec_boxes"))
+            polygons = self._as_list(payload.get("rec_polys"))
+            # PaddleX retains the recognition image in the live result but omits
+            # it from JSON. Its actual dimensions also cover PDFs rendered internally.
+            live = item.get("res", item) if isinstance(item, dict) else {}
+            preprocessor = live.get("doc_preprocessor_res", {})
+            image = preprocessor.get("output_img") if isinstance(preprocessor, dict) else None
+            shape = getattr(image, "shape", ())
+            image_size = [int(shape[1]), int(shape[0])] if len(shape) >= 2 else None
 
             blocks: list[dict[str, object]] = []
             lines: list[str] = []
@@ -222,7 +253,10 @@ class PaddleOCRFastEngine:
                 if not text:
                     continue
                 score = self._as_float(scores[line_index] if line_index < len(scores) else None)
-                box = boxes[line_index] if line_index < len(boxes) else []
+                if line_index < len(polygons):
+                    box = polygons[line_index]
+                else:
+                    box = boxes[line_index] if line_index < len(boxes) else []
                 blocks.append({"label": "text", "text": text, "box": self._to_list(box), "score": score})
                 lines.append(text)
                 if score > 0:
@@ -234,6 +268,7 @@ class PaddleOCRFastEngine:
                     "text": "\n".join(lines),
                     "score": sum(numeric_scores) / len(numeric_scores) if numeric_scores else 0.0,
                     "blocks": blocks,
+                    "image_size": image_size,
                 }
             )
             if lines:

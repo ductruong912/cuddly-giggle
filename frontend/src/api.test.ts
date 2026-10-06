@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fetchConfig, runOCR, validateFile } from './api'
+import { ocrFixture } from '../fixtures/ocrFixture'
 
 const config = {
   supported_suffixes: ['.pdf', '.png', '.docx'],
@@ -8,20 +9,20 @@ const config = {
 }
 
 describe('OCR requests', () => {
-  it('uploads only to OCR and preserves the exact Markdown response', async () => {
+  it('uploads only to OCR and preserves the structured result and exact Markdown', async () => {
     const text = '# Nội dung\n\n| A | B |\n|---|---|\n|1|2|\n'
-    const fetch = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(text, { headers: { 'Content-Type': 'text/markdown; charset=utf-8' } }),
-      )
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(ocrFixture(text)), {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
     vi.stubGlobal('fetch', fetch)
     const file = new File(['pdf'], 'test.pdf')
     const signal = new AbortController().signal
-    expect(await runOCR(file, signal)).toBe(text)
+    expect(await runOCR(file, signal)).toEqual(ocrFixture(text))
     expect(fetch).toHaveBeenCalledTimes(1)
     const [path, options] = fetch.mock.calls[0]
-    expect(path).toBe('/v1/doc/ocr')
+    expect(path).toBe('/v1/doc/ocr/result?include_preview=true')
     expect(options.signal).toBe(signal)
     expect(options.method).toBe('POST')
     expect((options.body as FormData).get('file')).toBe(file)
@@ -47,7 +48,11 @@ describe('OCR requests', () => {
 
   it.each([
     new Response('<html>proxy error</html>', { headers: { 'Content-Type': 'text/html' } }),
-    new Response('  ', { headers: { 'Content-Type': 'text/markdown' } }),
+    new Response(JSON.stringify(ocrFixture('  ')), {
+      headers: { 'Content-Type': 'application/json' },
+    }),
+    new Response('{"markdown":"content"}', { headers: { 'Content-Type': 'application/json' } }),
+    new Response('bad json', { headers: { 'Content-Type': 'application/json' } }),
   ])('rejects unusable successful responses', async (response) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
     await expect(

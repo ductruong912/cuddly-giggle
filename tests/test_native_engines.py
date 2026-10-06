@@ -163,6 +163,28 @@ def test_the_engine_reads_a_real_text_layer(text_pdf: Path) -> None:
     assert "HOA DON MUA HANG" in combined
     assert "TT-0012" in combined
     assert "Trang hai" in combined
+    assert result.pages[0].geometry is not None
+    assert result.pages[0].geometry.coordinate_space == "original"
+
+
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+def test_pdf_bbox_matches_rotated_preview(tmp_path: Path, rotation: int) -> None:
+    path = tmp_path / "rotated.pdf"
+    with fitz.open() as document:
+        page = document.new_page(width=300, height=400)
+        page.insert_text((40, 80), "Synthetic bbox")
+        original = page.get_text("blocks")[0][:4]
+        page.set_rotation(rotation)
+        expected = fitz.Rect(original) * page.rotation_matrix
+        document.save(path)
+    result = PdfTextEngine(settings).parse(str(path)).pages[0]
+    assert result.geometry is not None
+    assert (result.geometry.width, result.geometry.height) == ((400, 300) if rotation % 180 else (300, 400))
+    polygon = result.blocks[0].bbox
+    assert min(point.x for point in polygon) == pytest.approx(expected.x0)
+    assert max(point.x for point in polygon) == pytest.approx(expected.x1)
+    assert min(point.y for point in polygon) == pytest.approx(expected.y0)
+    assert max(point.y for point in polygon) == pytest.approx(expected.y1)
 
 
 def test_a_generated_text_pdf_is_judged_usable(text_pdf: Path) -> None:

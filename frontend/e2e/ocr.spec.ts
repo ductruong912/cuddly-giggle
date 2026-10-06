@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
+import { readFileSync } from 'node:fs'
+import { ocrFixture } from '../fixtures/ocrFixture'
 
 const markdown =
   '# Biên bản giao nhận\n\nTài liệu tổng hợp dùng để kiểm thử.\n\n| Hạng mục | Số lượng |\n|---|---:|\n| Tài liệu A | 12 |\n| Tài liệu B | 8 |\n\n**Ghi chú:** Đã kiểm tra nội dung.\n'
@@ -60,6 +62,195 @@ async function mockReadEndpoints(page: Page) {
   })
 }
 
+test('unwarped OCR preview shows linked blocks automatically and preserves original PDF', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 960 })
+  await mockReadEndpoints(page)
+  const result = ocrFixture('# Synthetic OCR')
+  const image =
+    'data:image/jpeg;base64,' +
+    readFileSync(new URL('../fixtures/ocr-preview.jpg', import.meta.url)).toString('base64')
+  result.pages = [0, 1].map((page_index) => {
+    const block = {
+      block_id: 'same-id',
+      page_index,
+      type: 'title',
+      content: `Synthetic OCR page ${page_index + 1}`,
+      confidence: 0,
+      source_engine: 'paddleocr_vl',
+      extra: { label: 'doc_title' },
+      bbox: [
+        { x: 50, y: 70 },
+        { x: 450, y: 70 },
+        { x: 450, y: 105 },
+        { x: 50, y: 105 },
+      ],
+    }
+    return {
+      page_index,
+      blocks: [block],
+      tables: [],
+      reading_order: [block.block_id],
+      confidence: 0,
+      source_engine: 'paddleocr_vl',
+      geometry: { width: 595, height: 842, coordinate_space: 'processed' },
+      preview_image: image,
+    }
+  })
+  result.blocks = result.pages.flatMap((p) => p.blocks)
+  await page.route('**/v1/doc/ocr/result*', (route) => {
+    expect(new URL(route.request().url()).searchParams.get('include_preview')).toBe('true')
+    return route.fulfill({ json: result })
+  })
+  await page.goto('/')
+  await page
+    .getByLabel('Chọn tài liệu', { exact: true })
+    .setInputFiles({ name: 'synthetic.pdf', mimeType: 'application/pdf', buffer: syntheticPDF() })
+  await page.getByRole('button', { name: 'Đọc tài liệu', exact: true }).click()
+  await expect(page.getByRole('checkbox', { name: 'Hiện bbox' })).toBeChecked()
+  const processed = page.getByRole('img', { name: 'Ảnh OCR', exact: true })
+  await expect(processed).toBeVisible()
+  await page.getByRole('button', { name: 'Vùng 1 · title', exact: true }).hover()
+  const content = page.getByRole('button', { name: 'Nội dung 1 · title · Trang 1', exact: true })
+  await expect(content).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: 'Phóng to', exact: true }).click()
+  await expect(page.getByText('125%')).toBeVisible()
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const img = document.querySelector('.image-preview')!.getBoundingClientRect()
+        const box = document.querySelector('.bbox-overlay polygon')!.getBoundingClientRect()
+        return Math.abs(box.x - img.x - (img.width * 50) / 595)
+      }),
+    )
+    .toBeLessThan(1)
+  await expect(page.getByRole('button', { name: 'Bản gốc', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Ảnh OCR', exact: true })).toHaveCount(0)
+  await page.getByRole('checkbox', { name: 'Hiện bbox' }).uncheck()
+  await expect(page.locator('.pdf-canvas')).toBeVisible()
+  await expect(page.locator('.bbox-overlay')).toHaveCount(0)
+  await page.getByRole('checkbox', { name: 'Hiện bbox' }).check()
+  await page.getByRole('button', { name: 'Trang sau', exact: true }).click()
+  await page.getByRole('button', { name: 'Vùng 1 · title', exact: true }).hover()
+  await expect(
+    page.getByRole('button', { name: 'Nội dung 2 · title · Trang 2', exact: true }),
+  ).toHaveAttribute('aria-pressed', 'true')
+  await content.hover()
+  await expect(page.getByText('Trang 1 / 2')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Vùng 1 · title', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  await page.screenshot({ path: testInfo.outputPath('ocr-processed-blocks.png'), fullPage: true })
+})
+
+test('bbox hover links title and text regions across PDF pages and zoom', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 960 })
+  await mockReadEndpoints(page)
+  const result = ocrFixture(markdown)
+  result.pages = [0, 1].map((index) => {
+    const block = {
+      block_id: 'shared-id',
+      type: index === 0 ? 'title' : 'text',
+      content: `Recognized page ${index + 1}`,
+      bbox: [
+        { x: 50, y: 70 },
+        { x: 450, y: 70 },
+        { x: 450, y: 105 },
+        { x: 50, y: 105 },
+      ],
+      confidence: 0.95,
+      page_index: index,
+      source_engine: 'test',
+      extra: {},
+    }
+    return {
+      page_index: index,
+      blocks: [block],
+      tables: [],
+      reading_order: [block.block_id],
+      confidence: 0.95,
+      source_engine: 'test',
+      geometry: { width: 595, height: 842, coordinate_space: 'original' },
+    }
+  })
+  result.blocks = result.pages.flatMap((item) => item.blocks)
+  await page.route('**/v1/doc/ocr/result*', (route) => route.fulfill({ json: result }))
+  await page.goto('/')
+  const input = page.getByLabel('Chọn tài liệu', { exact: true })
+  await expect(input).toBeEnabled()
+  await input.setInputFiles({
+    name: 'synthetic.pdf',
+    mimeType: 'application/pdf',
+    buffer: syntheticPDF(),
+  })
+  await expect(page.locator('.preview-loading')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Đọc tài liệu', exact: true }).click()
+  await page.getByRole('checkbox', { name: 'Hiện bbox' }).check()
+  await page.getByRole('button', { name: 'Vùng 1 · title' }).hover()
+  await expect(page.getByRole('tab', { name: 'Blocks' })).toHaveAttribute('aria-selected', 'true')
+  const titleContent = page.getByRole('button', { name: 'Nội dung 1 · title · Trang 1' })
+  const textContent = page.getByRole('button', { name: 'Nội dung 2 · text · Trang 2' })
+  await expect(titleContent).toHaveAttribute('aria-pressed', 'true')
+  await expect(titleContent.getByRole('heading', { name: 'Recognized page 1' })).toBeVisible()
+  await page.getByRole('button', { name: 'Trang sau' }).click()
+  await expect(page.locator('.preview-loading')).toHaveCount(0)
+  const region = page.getByRole('button', { name: 'Vùng 1 · text' })
+  await region.hover()
+  await expect(textContent).toHaveAttribute('aria-pressed', 'true')
+  await expect(region).toHaveAttribute('aria-pressed', 'true')
+  await titleContent.hover()
+  await expect(page.getByText('Trang 1 / 2')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Vùng 1 · title' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  await textContent.hover()
+  await expect(page.getByText('Trang 2 / 2')).toBeVisible()
+  await expect(region).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: 'Phóng to', exact: true }).click()
+  await expect(page.getByText('125%')).toBeVisible()
+  await expect(page.locator('.preview-loading')).toHaveCount(0)
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const canvas = document.querySelector('.pdf-canvas')!.getBoundingClientRect()
+        const overlay = document.querySelector('.bbox-overlay')!.getBoundingClientRect()
+        const region = document.querySelector('.bbox-overlay polygon')!.getBoundingClientRect()
+        return Math.max(
+          Math.abs(canvas.width - overlay.width),
+          Math.abs(canvas.height - overlay.height),
+          Math.abs(canvas.x - overlay.x),
+          Math.abs(canvas.y - overlay.y),
+          Math.abs(region.x - canvas.x - (canvas.width * 50) / 595),
+        )
+      }),
+    )
+    .toBeLessThan(1)
+  await page.getByRole('tab', { name: 'JSON OCR' }).click()
+  const downloaded = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Tải JSON OCR' }).click()
+  const download = await downloaded
+  expect(download.suggestedFilename()).toBe('synthetic.json')
+  const stream = await download.createReadStream()
+  const chunks = []
+  for await (const chunk of stream!) chunks.push(chunk)
+  expect(JSON.parse(Buffer.concat(chunks).toString('utf-8'))).toEqual(result)
+  await page.getByRole('tab', { name: 'Blocks', exact: true }).click()
+  await expect(page.getByRole('tab', { name: 'Bảng', exact: true })).toHaveCount(0)
+  await expect(page.locator('.preview-loading')).toHaveCount(0)
+  await expect(region).toBeVisible()
+  await textContent.hover()
+  await expect(textContent).toHaveAttribute('aria-pressed', 'true')
+  await expect(region).toBeVisible()
+  await expect(region).toHaveCSS('stroke', 'rgb(85, 118, 232)')
+  await expect(titleContent.locator('strong')).toHaveCSS('color', 'rgb(217, 76, 134)')
+  await page.screenshot({ path: testInfo.outputPath('ocr-blocks.png'), fullPage: true })
+})
+
 for (const width of [1440, 390]) {
   test(`theme/language settings in a collapsible sidebar at ${width}px`, async ({
     page,
@@ -68,9 +259,9 @@ for (const width of [1440, 390]) {
     await page.emulateMedia({ colorScheme: 'dark' })
     await mockReadEndpoints(page)
     let requests = 0
-    await page.route('**/v1/doc/ocr', (route) => {
+    await page.route('**/v1/doc/ocr/result*', (route) => {
       requests++
-      return route.fulfill({ contentType: 'text/markdown', body: markdown })
+      return route.fulfill({ json: ocrFixture(markdown) })
     })
     await page.goto('/')
     const root = page.locator('html')
@@ -155,13 +346,13 @@ test('OCR flow, PDF pagination/zoom, clipboard, exact download and file replacem
   const pending = new Promise<void>((resolve) => {
     finish = resolve
   })
-  await page.route('**/v1/doc/ocr', async (route) => {
+  await page.route('**/v1/doc/ocr/result*', async (route) => {
     count++
     expect(route.request().method()).toBe('POST')
     expect(route.request().headers()['content-type']).toContain('multipart/form-data; boundary=')
     expect(route.request().postDataBuffer()?.toString()).toContain('name="file"')
     await pending
-    await route.fulfill({ contentType: 'text/markdown; charset=utf-8', body: markdown })
+    await route.fulfill({ json: ocrFixture(markdown) })
   })
   await page.goto('/playground')
   await expect(page.getByRole('button', { name: 'Đọc tài liệu' })).toHaveCount(0)
@@ -226,7 +417,7 @@ test('OCR flow, PDF pagination/zoom, clipboard, exact download and file replacem
   await expect
     .poll(() =>
       page.locator('.pdf-canvas').evaluate((canvas) => {
-        const scroll = canvas.parentElement!
+        const scroll = canvas.parentElement!.parentElement!
         const style = getComputedStyle(scroll)
         const available =
           scroll.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
@@ -283,8 +474,8 @@ for (const width of [1440, 768, 390, 320]) {
   }, testInfo) => {
     await page.setViewportSize({ width, height: 960 })
     await mockReadEndpoints(page)
-    await page.route('**/v1/doc/ocr', (route) =>
-      route.fulfill({ contentType: 'text/markdown', body: markdown }),
+    await page.route('**/v1/doc/ocr/result*', (route) =>
+      route.fulfill({ json: ocrFixture(markdown) }),
     )
     await page.goto('/')
     await expect(page.getByRole('button', { name: 'Đã kết nối' })).toBeVisible()
@@ -333,13 +524,14 @@ test('HTTP failure, explicit retry, image preview and blocked remote images/HTML
     remoteRequests++
     return route.abort()
   })
-  await page.route('**/v1/doc/ocr', (route) => {
+  await page.route('**/v1/doc/ocr/result*', (route) => {
     count++
     return count === 1
       ? route.fulfill({ status: 503, json: { detail: 'busy' }, headers: { 'Retry-After': '3' } })
       : route.fulfill({
-          contentType: 'text/markdown',
-          body: '# Safe\n\n![external](https://example.com/image.png)\n\n<img src="https://example.com/html.png" onerror="window.injected=true" />\n<script>window.injected=true</script>\n\n<table onclick="window.injected=true" style="background:url(https://example.com/style)"><tr><th colspan="2">Hàng hóa</th></tr><tr><td>Tài liệu A</td><td>12</td></tr></table>',
+          json: ocrFixture(
+            '# Safe\n\n![external](https://example.com/image.png)\n\n<img src="https://example.com/html.png" onerror="window.injected=true" />\n<script>window.injected=true</script>\n\n<table onclick="window.injected=true" style="background:url(https://example.com/style)"><tr><th colspan="2">Hàng hóa</th></tr><tr><td>Tài liệu A</td><td>12</td></tr></table>',
+          ),
         })
   })
   await page.goto('/')

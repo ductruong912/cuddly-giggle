@@ -4,6 +4,17 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { fileSuffix } from './api'
 import { getMessages } from './i18n'
 import type { Language } from './i18n'
+import BBoxOverlay from './BBoxOverlay'
+import { canOverlay, previewImage } from './ocr'
+import type { OCRBlock, OCRPage, OCRResult } from './ocr'
+
+interface OverlayProps {
+  result: OCRResult | null
+  showBbox: boolean
+  selected: OCRBlock | null
+  onSelect: (block: OCRBlock) => void
+  scrollSelected: boolean
+}
 
 function ZoomControls({
   zoom,
@@ -38,16 +49,33 @@ function ZoomControls({
   )
 }
 
-function PDFPreview({ file, language }: { file: File; language: Language }) {
+function PDFPreview({
+  file,
+  language,
+  result,
+  showBbox,
+  selected,
+  onSelect,
+  scrollSelected,
+  pageIndex,
+  onPageChange,
+}: {
+  file: File
+  language: Language
+  pageIndex: number
+  onPageChange: (index: number) => void
+} & OverlayProps) {
   const t = getMessages(language)
   const canvas = useRef<HTMLCanvasElement>(null)
   const container = useRef<HTMLDivElement>(null)
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null)
-  const [page, setPage] = useState(1)
+  const page = pageIndex + 1
   const [zoom, setZoom] = useState(1)
   const [width, setWidth] = useState(600)
   const [error, setError] = useState<'' | 'pdfLoadFailed' | 'pdfRenderFailed'>('')
   const [rendering, setRendering] = useState(true)
+  const [size, setSize] = useState({ width: 0, height: 0 })
+  const ocrPage = result?.pages.find((item) => item.page_index === page - 1)
 
   useEffect(() => {
     const element = container.current
@@ -113,6 +141,7 @@ function PDFPreview({ file, language }: { file: File; language: Language }) {
           transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0],
         })
         await task.promise
+        if (!disposed) setSize({ width: viewport.width, height: viewport.height })
       } catch (cause) {
         if (
           !disposed &&
@@ -139,7 +168,7 @@ function PDFPreview({ file, language }: { file: File; language: Language }) {
             className="icon-button"
             aria-label={t.previousPage}
             disabled={!document || page === 1}
-            onClick={() => setPage(page - 1)}
+            onClick={() => onPageChange(pageIndex - 1)}
           >
             <ChevronLeft size={16} />
           </button>
@@ -148,13 +177,16 @@ function PDFPreview({ file, language }: { file: File; language: Language }) {
             className="icon-button"
             aria-label={t.nextPage}
             disabled={!document || page === document.numPages}
-            onClick={() => setPage(page + 1)}
+            onClick={() => onPageChange(pageIndex + 1)}
           >
             <ChevronRight size={16} />
           </button>
         </div>
         <ZoomControls zoom={zoom} onChange={setZoom} language={language} />
       </div>
+      {showBbox && result && !canOverlay(ocrPage) ? (
+        <p className="bbox-notice">{t.bboxUnavailable}</p>
+      ) : null}
       <div className="preview-scroll" ref={container}>
         {error ? (
           <div className="preview-notice" role="status">
@@ -168,7 +200,21 @@ function PDFPreview({ file, language }: { file: File; language: Language }) {
                 <LoaderCircle className="spin" size={16} /> {t.renderingPage}
               </span>
             )}
-            <canvas ref={canvas} className="pdf-canvas" aria-label={t.pdfPage(page)} />
+            <div
+              className="bbox-stage"
+              style={{ width: size.width || undefined, height: size.height || undefined }}
+            >
+              <canvas ref={canvas} className="pdf-canvas" aria-label={t.pdfPage(page)} />
+              {showBbox && !rendering ? (
+                <BBoxOverlay
+                  page={ocrPage}
+                  selected={selected}
+                  onSelect={onSelect}
+                  language={language}
+                  scrollSelected={scrollSelected}
+                />
+              ) : null}
+            </div>
           </>
         )}
       </div>
@@ -176,27 +222,127 @@ function PDFPreview({ file, language }: { file: File; language: Language }) {
   )
 }
 
-function ImagePreview({ file, url, language }: { file: File; url: string; language: Language }) {
+function ImagePreview({
+  file,
+  url,
+  language,
+  result,
+  showBbox,
+  selected,
+  onSelect,
+  scrollSelected,
+}: { file: File; url: string; language: Language } & OverlayProps) {
   const t = getMessages(language)
   const [zoom, setZoom] = useState(1)
   const [failed, setFailed] = useState(false)
+  const ocrPage = result?.pages.find((item) => item.page_index === 0)
   return (
     <div className="document-preview">
       <div className="preview-toolbar">
         <span>{t.original}</span>
         <ZoomControls zoom={zoom} onChange={setZoom} language={language} />
       </div>
+      {showBbox && result && !canOverlay(ocrPage) ? (
+        <p className="bbox-notice">{t.bboxUnavailable}</p>
+      ) : null}
       <div className="preview-scroll image-scroll">
         {failed ? (
           <p className="preview-notice">{t.imageFailed}</p>
         ) : (
-          <img
-            src={url}
-            alt={t.imageOriginal(file.name)}
-            className="image-preview"
-            style={{ width: `${zoom * 100}%`, maxWidth: 'none' }}
-            onError={() => setFailed(true)}
-          />
+          <div className="bbox-stage" style={{ width: `${zoom * 100}%` }}>
+            <img
+              src={url}
+              alt={t.imageOriginal(file.name)}
+              className="image-preview"
+              style={{ width: '100%', maxWidth: 'none' }}
+              onError={() => setFailed(true)}
+            />
+            {showBbox ? (
+              <BBoxOverlay
+                page={ocrPage}
+                selected={selected}
+                onSelect={onSelect}
+                language={language}
+                scrollSelected={scrollSelected}
+              />
+            ) : null}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function OCRImagePreview({
+  page,
+  result,
+  pageIndex,
+  onPageChange,
+  language,
+  selected,
+  onSelect,
+  scrollSelected,
+}: {
+  page: OCRPage
+  result: OCRResult
+  pageIndex: number
+  onPageChange: (index: number) => void
+  language: Language
+  selected: OCRBlock | null
+  onSelect: (block: OCRBlock) => void
+  scrollSelected: boolean
+}) {
+  const t = getMessages(language)
+  const [zoom, setZoom] = useState(1)
+  const [failedImage, setFailedImage] = useState<string | null>(null)
+  const image = previewImage(page)!
+  const indices = result.pages.map((item) => item.page_index).sort((a, b) => a - b)
+  const position = indices.indexOf(pageIndex)
+  return (
+    <div className="document-preview">
+      <div className="preview-toolbar">
+        <div className="page-controls">
+          <button
+            className="icon-button"
+            aria-label={t.previousPage}
+            disabled={position <= 0}
+            onClick={() => onPageChange(indices[position - 1])}
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <span>{t.page(pageIndex + 1, Math.max(...indices) + 1)}</span>
+          <button
+            className="icon-button"
+            aria-label={t.nextPage}
+            disabled={position === indices.length - 1}
+            onClick={() => onPageChange(indices[position + 1])}
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
+        <ZoomControls zoom={zoom} onChange={setZoom} language={language} />
+      </div>
+      <div className="preview-scroll image-scroll">
+        {failedImage === image ? (
+          <p className="preview-notice">{t.imageFailed}</p>
+        ) : (
+          <div className="bbox-stage" style={{ width: `${zoom * 100}%` }}>
+            <img
+              src={image}
+              alt={t.ocrImage}
+              className="image-preview"
+              style={{ width: '100%', maxWidth: 'none' }}
+              onError={() => setFailedImage(image)}
+            />
+            <BBoxOverlay
+              page={page}
+              selected={selected}
+              onSelect={onSelect}
+              language={language}
+              scrollSelected={scrollSelected}
+              space="processed"
+            />
+          </div>
         )}
       </div>
     </div>
@@ -207,16 +353,84 @@ export default function DocumentPreview({
   file,
   url,
   language = 'vi',
+  result = null,
+  selected,
+  onSelect,
+  showBbox,
+  onShowBboxChange,
+  pageIndex,
+  onPageChange,
+  scrollSelected = false,
 }: {
   file: File
   url: string
   language?: Language
+  result?: OCRResult | null
+  selected: OCRBlock | null
+  onSelect: (block: OCRBlock) => void
+  showBbox: boolean
+  onShowBboxChange: (visible: boolean) => void
+  pageIndex: number
+  onPageChange: (index: number) => void
+  scrollSelected?: boolean
 }) {
   const t = getMessages(language)
   const suffix = fileSuffix(file.name)
-  if (suffix === '.pdf') return <PDFPreview file={file} language={language} />
-  if (['.png', '.jpg', '.jpeg', '.bmp', '.webp'].includes(suffix))
-    return <ImagePreview file={file} url={url} language={language} />
+  const ocrPage = result?.pages.find((page) => page.page_index === pageIndex)
+  const hasPreview = !!previewImage(ocrPage)
+  const useProcessed = showBbox && hasPreview && !canOverlay(ocrPage)
+  const overlay = {
+    result,
+    showBbox,
+    selected:
+      result?.blocks.find(
+        (block) =>
+          block.block_id === selected?.block_id && block.page_index === selected.page_index,
+      ) ?? null,
+    onSelect,
+    scrollSelected,
+  }
+  const previewable =
+    suffix === '.pdf' || ['.png', '.jpg', '.jpeg', '.bmp', '.webp'].includes(suffix)
+  if (previewable)
+    return (
+      <>
+        {result ? (
+          <div className="bbox-toggle">
+            <label>
+              <input
+                type="checkbox"
+                checked={showBbox}
+                onChange={(event) => onShowBboxChange(event.target.checked)}
+              />
+              {t.bbox}
+            </label>
+          </div>
+        ) : null}
+        {useProcessed && ocrPage && result ? (
+          <OCRImagePreview
+            page={ocrPage}
+            result={result}
+            pageIndex={pageIndex}
+            onPageChange={onPageChange}
+            language={language}
+            selected={overlay.selected}
+            onSelect={onSelect}
+            scrollSelected={scrollSelected}
+          />
+        ) : suffix === '.pdf' ? (
+          <PDFPreview
+            file={file}
+            language={language}
+            pageIndex={pageIndex}
+            onPageChange={onPageChange}
+            {...overlay}
+          />
+        ) : (
+          <ImagePreview file={file} url={url} language={language} {...overlay} />
+        )}
+      </>
+    )
   return (
     <div className="file-fallback">
       <div className="file-sheet">

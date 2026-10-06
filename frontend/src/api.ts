@@ -1,5 +1,6 @@
 import { getMessages } from './i18n'
 import type { Language } from './i18n'
+import type { OCRResult } from './ocr'
 
 export interface UIConfig {
   supported_suffixes: string[]
@@ -73,17 +74,36 @@ export async function checkHealth(signal: AbortSignal): Promise<boolean> {
   return response.ok && (await response.json()).status === 'ok'
 }
 
-export async function runOCR(file: File, signal: AbortSignal): Promise<string> {
+export async function runOCR(file: File, signal: AbortSignal): Promise<OCRResult> {
   const body = new FormData()
   body.append('file', file)
-  const response = await fetch('/v1/doc/ocr', { method: 'POST', body, signal })
+  const response = await fetch('/v1/doc/ocr/result?include_preview=true', {
+    method: 'POST',
+    body,
+    signal,
+  })
   await assertResponse(response)
-  if (!response.headers.get('Content-Type')?.toLowerCase().startsWith('text/markdown')) {
-    throw new UIError('invalidMarkdown')
+  if (!response.headers.get('Content-Type')?.toLowerCase().startsWith('application/json')) {
+    throw new UIError('invalidOCR')
   }
-  const markdown = await response.text()
-  if (!markdown.trim()) throw new UIError('emptyOCR')
-  return markdown
+  let result: OCRResult
+  try {
+    result = await response.json()
+  } catch {
+    throw new UIError('invalidOCR')
+  }
+  if (
+    !result ||
+    typeof result.markdown !== 'string' ||
+    !Array.isArray(result.pages) ||
+    !Array.isArray(result.blocks) ||
+    !Array.isArray(result.tables) ||
+    !Array.isArray(result.reading_order)
+  ) {
+    throw new UIError('invalidOCR')
+  }
+  if (!result.markdown.trim()) throw new UIError('emptyOCR')
+  return result
 }
 
 export function fileSuffix(name: string): string {

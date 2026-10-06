@@ -196,6 +196,7 @@ class ParseOrchestrator:
             tables=tables,
             reading_order=reading_order,
             markdown=markdown,
+            engine_name=result.engine_name,
         )
 
     @staticmethod

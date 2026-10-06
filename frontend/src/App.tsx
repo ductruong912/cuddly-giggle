@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDownToLine,
   ArrowRight,
@@ -28,11 +28,14 @@ import {
 import type { UIConfig } from './api'
 import DocumentPreview from './DocumentPreview'
 import MarkdownResult from './MarkdownResult'
+import OCRBlocks from './OCRBlocks'
+import type { OCRBlock, OCRResult } from './ocr'
 import Settings from './Settings'
 import { getMessages } from './i18n'
 import { usePreferences } from './preferences'
 
 type Status = 'idle' | 'ready' | 'processing' | 'done' | 'error'
+const outputTabs = ['rendered', 'source', 'json', 'blocks'] as const
 interface Selection {
   file: File
   url: string
@@ -53,14 +56,23 @@ export default function App() {
   const [selection, setSelection] = useState<Selection | null>(null)
   const [status, setStatus] = useState<Status>('idle')
   const [markdown, setMarkdown] = useState('')
+  const [ocrResult, setOCRResult] = useState<OCRResult | null>(null)
+  const [activeBlock, setActiveBlock] = useState<OCRBlock | null>(null)
+  const [selectionSource, setSelectionSource] = useState<'preview' | 'blocks'>('preview')
+  const [previewPage, setPreviewPage] = useState(0)
+  const [showBbox, setShowBbox] = useState(false)
   const [error, setError] = useState<UIError | null>(null)
   const [elapsed, setElapsed] = useState(0)
-  const [outputTab, setOutputTab] = useState<'rendered' | 'source'>('rendered')
+  const [outputTab, setOutputTab] = useState<(typeof outputTabs)[number]>('rendered')
   const [mobileTab, setMobileTab] = useState<'document' | 'result'>('document')
   const [dragging, setDragging] = useState(false)
   const [copyFeedback, setCopyFeedback] = useState<'' | 'copied' | 'copyFailed'>('')
   const [documentShare, setDocumentShare] = useState(50)
   const [resizing, setResizing] = useState(false)
+  const jsonOCR = useMemo(
+    () => (outputTab === 'json' && ocrResult ? JSON.stringify(ocrResult, null, 2) : ''),
+    [ocrResult, outputTab],
+  )
   const input = useRef<HTMLInputElement>(null)
   const panels = useRef<HTMLDivElement>(null)
   const output = useRef<HTMLDivElement>(null)
@@ -139,6 +151,10 @@ export default function App() {
     activeURL.current = url
     setSelection({ file, url, id: ++nextID.current })
     setMarkdown('')
+    setOCRResult(null)
+    setActiveBlock(null)
+    setPreviewPage(0)
+    setShowBbox(false)
     setError(null)
     setCopyFeedback('')
     setElapsed(0)
@@ -160,14 +176,18 @@ export default function App() {
     request.current = controller
     started.current = Date.now()
     setStatus('processing')
+    setActiveBlock(null)
     setError(null)
     setMarkdown('')
+    setOCRResult(null)
     setCopyFeedback('')
     setElapsed(0)
     try {
       const result = await runOCR(selection.file, controller.signal)
       if (controller.signal.aborted) return
-      setMarkdown(result)
+      setMarkdown(result.markdown)
+      setOCRResult(result)
+      setShowBbox(true)
       setStatus('done')
       setMobileTab('result')
     } catch (cause) {
@@ -189,7 +209,7 @@ export default function App() {
 
   async function copy() {
     try {
-      await navigator.clipboard.writeText(markdown)
+      await navigator.clipboard.writeText(exportText)
       setCopyFeedback('copied')
     } catch {
       setCopyFeedback('copyFailed')
@@ -198,14 +218,29 @@ export default function App() {
     copyTimer.current = setTimeout(() => setCopyFeedback(''), 3500)
   }
 
+  function selectBlock(block: OCRBlock, source: 'preview' | 'blocks') {
+    setActiveBlock(block)
+    setSelectionSource(source)
+    setOutputTab('blocks')
+    if (source === 'blocks') {
+      setPreviewPage(block.page_index)
+      setShowBbox(true)
+    }
+  }
+
   function download() {
     if (!selection || !markdown) return
-    const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }))
+    const url = URL.createObjectURL(
+      new Blob([exportText], {
+        type:
+          outputTab === 'json' ? 'application/json;charset=utf-8' : 'text/markdown;charset=utf-8',
+      }),
+    )
     const anchor = document.createElement('a')
     const stem =
       selection.file.name.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|\p{Cc}]/gu, '_') || 'document'
     anchor.href = url
-    anchor.download = `${stem}.md`
+    anchor.download = `${stem}.${outputTab === 'json' ? 'json' : 'md'}`
     document.body.append(anchor)
     anchor.click()
     anchor.remove()
@@ -213,6 +248,9 @@ export default function App() {
   }
 
   const processing = status === 'processing'
+  const exportText = outputTab === 'json' ? jsonOCR : markdown
+  const copyLabel = outputTab === 'json' ? t.copyJSON : t.copyMarkdown
+  const downloadLabel = outputTab === 'json' ? t.downloadJSON : t.downloadMarkdown
   const statusLabel = {
     idle: t.choose,
     ready: t.ready,
@@ -443,6 +481,14 @@ export default function App() {
                   file={selection.file}
                   url={selection.url}
                   language={language}
+                  result={ocrResult}
+                  selected={activeBlock}
+                  onSelect={(block) => selectBlock(block, 'preview')}
+                  pageIndex={previewPage}
+                  onPageChange={setPreviewPage}
+                  showBbox={showBbox}
+                  onShowBboxChange={setShowBbox}
+                  scrollSelected={selectionSource === 'blocks'}
                 />
               ) : (
                 <div className="upload-empty">
@@ -553,7 +599,7 @@ export default function App() {
                   <span>{t.result}</span>
                   {markdown && (
                     <div className="output-tabs" role="tablist" aria-label={t.resultFormat}>
-                      {(['rendered', 'source'] as const).map((tab, index) => (
+                      {outputTabs.map((tab, index) => (
                         <button
                           key={tab}
                           id={`output-tab-${tab}`}
@@ -569,13 +615,27 @@ export default function App() {
                             if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
                               event.preventDefault()
                               const target =
-                                event.key === 'Home' ? 0 : event.key === 'End' ? 1 : 1 - index
-                              setOutputTab(target ? 'source' : 'rendered')
+                                event.key === 'Home'
+                                  ? 0
+                                  : event.key === 'End'
+                                    ? outputTabs.length - 1
+                                    : (index +
+                                        (event.key === 'ArrowRight' ? 1 : -1) +
+                                        outputTabs.length) %
+                                      outputTabs.length
+                              setOutputTab(outputTabs[target])
                               outputButtons.current[target]?.focus()
                             }
                           }}
                         >
-                          {tab === 'rendered' ? t.rendered : 'Markdown'}
+                          {
+                            {
+                              rendered: t.rendered,
+                              source: 'Markdown',
+                              json: t.jsonOCR,
+                              blocks: t.blocks,
+                            }[tab]
+                          }
                         </button>
                       ))}
                     </div>
@@ -594,6 +654,16 @@ export default function App() {
                   {markdown ? (
                     outputTab === 'rendered' ? (
                       <MarkdownResult markdown={markdown} language={language} />
+                    ) : outputTab === 'json' ? (
+                      <pre className="markdown-source">{jsonOCR}</pre>
+                    ) : outputTab === 'blocks' ? (
+                      <OCRBlocks
+                        result={ocrResult}
+                        selected={activeBlock}
+                        onSelect={(block) => selectBlock(block, 'blocks')}
+                        scrollSelected={selectionSource === 'preview'}
+                        language={language}
+                      />
                     ) : (
                       <pre className="markdown-source">{markdown}</pre>
                     )
@@ -654,8 +724,8 @@ export default function App() {
                   <>
                     <button
                       className="secondary-button export-button"
-                      aria-label={t.copyMarkdown}
-                      title={t.copyMarkdown}
+                      aria-label={copyLabel}
+                      title={copyLabel}
                       disabled={!markdown || processing}
                       onClick={() => void copy()}
                     >
@@ -664,8 +734,8 @@ export default function App() {
                     </button>
                     <button
                       className="primary-button export-button"
-                      aria-label={t.downloadMarkdown}
-                      title={t.downloadMarkdown}
+                      aria-label={downloadLabel}
+                      title={downloadLabel}
                       disabled={!markdown || processing}
                       onClick={download}
                     >

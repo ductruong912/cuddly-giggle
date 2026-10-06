@@ -234,6 +234,8 @@ class Settings:
 
     # --- Paths & misc ---
     frontend_dist_dir: str               = _repo_path_from_env("FRONTEND_DIST_DIR", "frontend/dist")
+    ui_preview_max_bytes: int = _get_int("UI_PREVIEW_MAX_BYTES", 16 * 1024 * 1024)
+    ui_preview_max_edge: int = _get_int("UI_PREVIEW_MAX_EDGE", 2000)
     temp_dir: str                        = _get_str("DOC_TEMP_DIR", ".tmp_doc_parse")
     parse_output_dir: str                = _get_str("PARSE_OUTPUT_DIR", "outputs")
     # Saved artifacts accumulate one directory per request forever otherwise,
@@ -273,6 +275,8 @@ class Settings:
             raise ValueError("PARSE_OUTPUT_SWEEP_MINUTES must be at least 1")
         if self.max_upload_bytes < 1:
             raise ValueError("MAX_UPLOAD_BYTES must be at least 1")
+        if self.ui_preview_max_bytes < 1 or self.ui_preview_max_edge < 1:
+            raise ValueError("UI_PREVIEW_MAX_BYTES and UI_PREVIEW_MAX_EDGE must be at least 1")
         if self.pdf_max_pages < 1:
             raise ValueError("PDF_MAX_PAGES must be at least 1")
         if self.llm_self_heal_max_retries < 0:
