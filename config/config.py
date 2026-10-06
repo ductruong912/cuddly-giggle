@@ -392,10 +392,29 @@ _prepend_windows_cuda_paths()
 # Logging helpers
 # ---------------------------------------------------------------------------
 
+class QuietAccessLogFilter(logging.Filter):
+    """Hide successful static-file and health probes, while keeping API errors."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not settings.quiet_third_party_logs or record.levelno >= logging.WARNING:
+            return True
+        if not isinstance(record.args, tuple) or len(record.args) != 5:
+            return True
+        _, method, target, _, status = record.args
+        if method not in ("GET", "HEAD") or not isinstance(status, int) or status >= 400:
+            return True
+        path = str(target).partition("?")[0]
+        return not (path.startswith("/assets/") or path in ("/healthz", "/readyz"))
+
+
 def configure_third_party_logging() -> None:
     """Quieten paddlex's logger where it is installed, and carry on where it is not."""
     if not settings.quiet_third_party_logs:
         return
+    # HTTPX logs every model-loading probe and OCR block at INFO. Keep genuine
+    # library warnings/errors without flooding the console with HTTP traffic.
+    for logger_name in ("httpx", "httpcore"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
     try:
         from paddlex.utils import logging as paddlex_logging  # type: ignore
     except ImportError:
@@ -410,6 +429,9 @@ def configure_third_party_logging() -> None:
 
 
 def configure_app_logging() -> None:
+    access_logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, QuietAccessLogFilter) for f in access_logger.filters):
+        access_logger.addFilter(QuietAccessLogFilter())
     for logger_name in ("app", "api", "config", "core", "eval", "services"):
         app_logger = logging.getLogger(logger_name)
         app_logger.setLevel(logging.INFO)
