@@ -6,8 +6,10 @@ FastAPI service for extracting Vietnamese documents into Markdown or structured 
 
 - Uses native text extraction for digital PDF, DOCX, XLSX, and XLSM files.
 - `POST /v1/extract/local` chooses PaddleOCR-VL + GGUF/llama.cpp on NVIDIA GPU, or PaddleOCR v6 on CPU.
-- `POST /v1/extract/online` sends PDFs and images to DataLab SuryaOCR.
 - Saves generated Markdown and extraction artifacts in `outputs/`.
+
+OCR runs on the local machine. Structured Purchase Order extraction still sends
+the OCR Markdown to OpenAI.
 
 ## Requirements
 
@@ -86,18 +88,15 @@ cuddly-giggle/
 │   │   └── strict_schema.py       # Pydantic model → OpenAI strict JSON Schema
 │   ├── engines/
 │   │   ├── base.py                # Engine interface
-│   │   ├── registry.py            # Config-driven engine factory (used by scripts)
 │   │   ├── native/                # PDF / Word / Excel text-layer parsers
 │   │   ├── normalizer/            # Normalizes engine output to the page schema
 │   │   ├── paddle.py              # PaddleOCR-VL adapter
 │   │   ├── paddle_fast.py         # PaddleOCR v6 CPU adapter
-│   │   └── fast_datalab.py        # DataLab SuryaOCR adapter
 │   └── prompts/prompt.py          # Extraction instructions + JSON schema
 ├── services/
 │   ├── document_extraction.py     # parse → extract → save pipeline
 │   ├── concurrency.py             # Stage limiters + worker-pool sizing
 │   ├── orchestrator.py            # Per-file-type engine selection
-│   ├── online_orchestrator.py     # DataLab parse path
 │   ├── llm_extraction.py          # OpenAI structured-output adapter
 │   ├── validation/                # Deterministic checks + the self-heal retry loop
 │   ├── local_ocr_selector.py      # GPU/CPU engine choice
@@ -229,17 +228,7 @@ python -c "import paddle; print(paddle.device.is_compiled_with_cuda()); print(pa
 
 Expected output is `True` and `gpu:0`. If it says GPU is unavailable, PaddlePaddle was installed without CUDA support or with an incompatible build.
 
-### Online OCR: DataLab SuryaOCR
-
-`POST /v1/extract/online` does not require local OCR models, llama.cpp, or a GPU. Configure only the DataLab credential:
-
-```dotenv
-DATALAB_API_KEY=your_datalab_api_key_here
-FAST_OCR_DATALAB_MODE=balanced
-```
-
-- API: <http://localhost:8000> (Swagger at `/docs`)
-- llama (debug only): <http://localhost:8080>
+The llama.cpp debug server is available at <http://localhost:8080> when running.
 
 ### Tuning / overrides
 
@@ -268,21 +257,21 @@ uvicorn api.application:app --host 0.0.0.0 --port 8000
 ```
 
 Open [Swagger UI](http://127.0.0.1:8000/docs). The health endpoint is `GET /healthz`.
+The API listens on <http://localhost:8000> by default; on GPU setups, the local
+llama.cpp debug server listens on <http://localhost:8080>.
 
 ## API routes
 
 | Route | Description |
 | --- | --- |
 | `POST /v1/extract/local` | Local OCR plus structured extraction. Uses PaddleOCR-VL on GPU and PaddleOCR v6 on CPU. |
-| `POST /v1/extract/online` | DataLab SuryaOCR plus structured extraction for PDFs and images. |
 | `POST /v1/doc/ocr` | Auxiliary local OCR-only debugging endpoint; returns Markdown and does not call the LLM. |
 | `GET /healthz` | Liveness check plus live per-stage occupancy. |
 
 Use `multipart/form-data` with a `file` field. The local route supports PDF,
 DOC/DOCX, XLS/XLSX/XLSM, PNG, JPG, BMP, WEBP, TIFF, and Markdown; it also accepts
 already-parsed Markdown as a `text/markdown`, `text/plain`, or
-`application/json` (`{"markdown": "..."}`) body. The online route supports PDFs
-and images only.
+`application/json` (`{"markdown": "..."}`) body.
 
 ### Extraction validation
 
@@ -441,9 +430,9 @@ on the first attempt and were correct by the last.
 Two kinds of case. A **replay** case supplies recorded model answers and runs
 them through the real validation loop, so the retry behaviour can be measured
 without an OCR engine, an API key or a document. A **document** case runs the
-full pipeline against a file on disk. `--source replay` runs the first kind,
-`--source local` / `--source online` the second; the report says how many cases
-were skipped.
+full local OCR and extraction pipeline against a file on disk. `--source replay`
+runs the first kind, while `--source local` runs the second; the report says how
+many cases were skipped.
 
 > The shipped `synthetic.json` is **12 hand-written cases, not real documents.**
 > It measures the validation layer only. Its accuracy figure is a property of the

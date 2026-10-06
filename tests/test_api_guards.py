@@ -5,15 +5,13 @@ import os
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from api.application import app
 
 
 def test_the_expected_routes_are_registered() -> None:
     paths = {getattr(route, "path", None) for route in app.routes}
 
-    assert {"/healthz", "/v1/extract/local", "/v1/extract/online", "/v1/doc/ocr"} <= paths
+    assert {"/healthz", "/v1/extract/local", "/v1/doc/ocr"} <= paths
 
 
 def test_healthz_reports_stage_occupancy(api: Any) -> None:
@@ -118,15 +116,6 @@ def test_an_unaccepted_content_type_is_refused(api: Any) -> None:
     assert api(body).status_code == 415
 
 
-def test_the_online_route_requires_multipart(api: Any) -> None:
-    async def body(client):
-        return await client.post(
-            "/v1/extract/online", content=b"{}", headers={"content-type": "application/json"}
-        )
-
-    assert api(body).status_code == 415
-
-
 def test_an_unsupported_file_type_is_refused(api: Any) -> None:
     async def body(client):
         return await client.post(
@@ -168,9 +157,10 @@ def test_a_rejected_upload_leaves_no_temp_file(api: Any) -> None:
     assert api(body) == []
 
 
-@pytest.mark.parametrize("route", ["/v1/extract/local", "/v1/extract/online"])
-def test_a_missing_file_field_is_refused(api: Any, route: str) -> None:
+def test_a_missing_file_field_is_refused(api: Any) -> None:
     async def body(client):
-        return await client.post(route, files={"wrong_field": ("a.pdf", b"x", "application/pdf")})
+        return await client.post(
+            "/v1/extract/local", files={"wrong_field": ("a.pdf", b"x", "application/pdf")}
+        )
 
     assert api(body).status_code == 400

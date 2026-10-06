@@ -79,7 +79,7 @@ def test_the_live_source_parses_then_validates(tmp_path: Path, valid_order: dict
         def extract(self, parse_response, *, correction=None):
             return valid_order
 
-    source = LiveExtractionSource(parser, StubExtractor(), route_label="local")
+    source = LiveExtractionSource(parser, StubExtractor())
     outcome = source.run(EvalCase(case_id="live1", expected=valid_order, document=document))
 
     assert source.name == "live-local"
@@ -88,7 +88,7 @@ def test_the_live_source_parses_then_validates(tmp_path: Path, valid_order: dict
 
 
 def test_a_missing_document_is_reported(tmp_path: Path, valid_order: dict) -> None:
-    source = LiveExtractionSource(RecordingParser(), None, route_label="local")
+    source = LiveExtractionSource(RecordingParser(), None)
 
     with pytest.raises(FileNotFoundError, match="absent.pdf"):
         source.run(

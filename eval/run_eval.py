@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--source",
-        choices=(REPLAY_SOURCE, "local", "online"),
+        choices=(REPLAY_SOURCE, "local"),
         default=REPLAY_SOURCE,
         help=(
             "replay recorded answers (default, needs no API key), or run the real "
@@ -129,7 +129,7 @@ def _source_for(source: str) -> AbstractContextManager[ExtractionSource]:
     # Imported here so a replay run never pulls in the API stack or OCR engines.
     from eval.wiring import live_extraction_source
 
-    return live_extraction_source(source)
+    return live_extraction_source()
 
 
 def _write_json(report: EvalReport, path: Path) -> None:
