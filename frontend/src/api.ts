@@ -1,26 +1,50 @@
+import { getMessages } from './i18n'
+import type { Language } from './i18n'
+
 export interface UIConfig {
   supported_suffixes: string[]
   max_upload_bytes: number
   pdf_max_pages: number
 }
 
-const errorMessages: Record<number, string> = {
-  400: 'Tài liệu hoặc yêu cầu không hợp lệ. Hãy kiểm tra file rồi thử lại.',
-  413: 'Tài liệu vượt giới hạn dung lượng hoặc số trang OCR của máy chủ.',
-  415: 'Định dạng gửi lên không được hỗ trợ.',
-  422: 'Không đọc được nội dung Markdown. Hãy kiểm tra tài liệu rồi thử lại.',
-  429: 'Bạn gửi yêu cầu quá nhanh. Hãy chờ một chút rồi thử lại.',
-  503: 'Dịch vụ OCR đang bận hoặc chưa sẵn sàng. Hãy thử lại sau.',
-  504: 'OCR đã hết thời gian chờ. Máy chủ có thể vẫn đang xử lý tài liệu.',
+type ErrorCode = keyof ReturnType<typeof getMessages>['errors']
+const errorCodes: Record<number, ErrorCode> = {
+  400: 'http400',
+  413: 'http413',
+  415: 'http415',
+  422: 'http422',
+  429: 'http429',
+  503: 'http503',
+  504: 'http504',
+}
+
+export class UIError extends Error {
+  constructor(
+    readonly code: ErrorCode,
+    readonly limitBytes?: number,
+    readonly retryAfter?: string,
+  ) {
+    super(getMessages('vi').errors[code])
+    this.message = this.localizedMessage('vi')
+  }
+
+  localizedMessage(language: Language): string {
+    const t = getMessages(language)
+    return (
+      t.errors[this.code] +
+      (this.limitBytes === undefined ? '' : ` ${formatBytes(this.limitBytes, language)}.`) +
+      (this.retryAfter ? t.retryAfter(this.retryAfter) : '')
+    )
+  }
 }
 
 async function assertResponse(response: Response): Promise<void> {
   if (response.ok) return
   const retry = response.headers.get('Retry-After')
-  const seconds =
-    retry && /^\d+$/.test(retry) ? ` Chờ ít nhất ${retry} giây trước khi thử lại.` : ''
-  throw new Error(
-    (errorMessages[response.status] ?? 'Máy chủ gặp lỗi khi xử lý yêu cầu.') + seconds,
+  throw new UIError(
+    errorCodes[response.status] ?? 'serverError',
+    undefined,
+    retry && /^\d+$/.test(retry) ? retry : undefined,
   )
 }
 
@@ -39,7 +63,7 @@ export async function fetchConfig(signal: AbortSignal): Promise<UIConfig> {
     !Number.isSafeInteger(config.pdf_max_pages) ||
     config.pdf_max_pages <= 0
   ) {
-    throw new Error('Cấu hình upload của máy chủ không hợp lệ.')
+    throw new UIError('invalidConfig')
   }
   return config
 }
@@ -55,10 +79,10 @@ export async function runOCR(file: File, signal: AbortSignal): Promise<string> {
   const response = await fetch('/v1/doc/ocr', { method: 'POST', body, signal })
   await assertResponse(response)
   if (!response.headers.get('Content-Type')?.toLowerCase().startsWith('text/markdown')) {
-    throw new Error('Máy chủ trả về nội dung không đúng định dạng Markdown.')
+    throw new UIError('invalidMarkdown')
   }
   const markdown = await response.text()
-  if (!markdown.trim()) throw new Error('Không tìm thấy nội dung trong kết quả OCR.')
+  if (!markdown.trim()) throw new UIError('emptyOCR')
   return markdown
 }
 
@@ -67,18 +91,19 @@ export function fileSuffix(name: string): string {
   return dot < 0 ? '' : name.slice(dot).toLowerCase()
 }
 
-export function formatBytes(bytes: number): string {
+export function formatBytes(bytes: number, language: Language = 'vi'): string {
+  const locale = language === 'vi' ? 'vi-VN' : 'en-US'
   return bytes >= 1024 * 1024
-    ? `${(bytes / (1024 * 1024)).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} MB`
-    : `${(bytes / 1024).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} KB`
+    ? `${(bytes / (1024 * 1024)).toLocaleString(locale, { maximumFractionDigits: 1 })} MB`
+    : `${(bytes / 1024).toLocaleString(locale, { maximumFractionDigits: 1 })} KB`
 }
 
-export function validateFile(file: File, config: UIConfig): string | null {
+export function validateFile(file: File, config: UIConfig): UIError | null {
   if (!config.supported_suffixes.includes(fileSuffix(file.name))) {
-    return 'Định dạng file chưa được hỗ trợ. Hãy chọn PDF, Word, Excel hoặc ảnh.'
+    return new UIError('fileUnsupported')
   }
-  if (file.size === 0) return 'File đang trống. Hãy chọn một tài liệu có nội dung.'
+  if (file.size === 0) return new UIError('fileEmpty')
   if (file.size > config.max_upload_bytes)
-    return `File vượt giới hạn ${formatBytes(config.max_upload_bytes)}.`
+    return new UIError('fileTooLarge', config.max_upload_bytes)
   return null
 }

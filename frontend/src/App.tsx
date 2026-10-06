@@ -8,17 +8,29 @@ import {
   Circle,
   Copy,
   FileCheck2,
-  FilePlus2,
+  PanelLeft,
+  PanelLeftClose,
   FileText,
   LoaderCircle,
   ScanLine,
   Upload,
   X,
 } from 'lucide-react'
-import { checkHealth, fetchConfig, fileSuffix, formatBytes, runOCR, validateFile } from './api'
+import {
+  checkHealth,
+  fetchConfig,
+  fileSuffix,
+  formatBytes,
+  runOCR,
+  validateFile,
+  UIError,
+} from './api'
 import type { UIConfig } from './api'
 import DocumentPreview from './DocumentPreview'
 import MarkdownResult from './MarkdownResult'
+import Settings from './Settings'
+import { getMessages } from './i18n'
+import { usePreferences } from './preferences'
 
 type Status = 'idle' | 'ready' | 'processing' | 'done' | 'error'
 interface Selection {
@@ -28,24 +40,29 @@ interface Selection {
 }
 
 export default function App() {
+  const preferences = usePreferences()
+  const { language } = preferences
+  const t = getMessages(language)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const menu = useRef<HTMLButtonElement>(null)
+  const sidebarClose = useRef<HTMLButtonElement>(null)
   const [config, setConfig] = useState<UIConfig | null>(null)
-  const [configError, setConfigError] = useState('')
+  const [configError, setConfigError] = useState(false)
   const [connection, setConnection] = useState<'checking' | 'online' | 'offline'>('checking')
   const [refresh, setRefresh] = useState(0)
   const [selection, setSelection] = useState<Selection | null>(null)
   const [status, setStatus] = useState<Status>('idle')
   const [markdown, setMarkdown] = useState('')
-  const [error, setError] = useState('')
+  const [error, setError] = useState<UIError | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [outputTab, setOutputTab] = useState<'rendered' | 'source'>('rendered')
   const [mobileTab, setMobileTab] = useState<'document' | 'result'>('document')
   const [dragging, setDragging] = useState(false)
-  const [copyFeedback, setCopyFeedback] = useState('')
+  const [copyFeedback, setCopyFeedback] = useState<'' | 'copied' | 'copyFailed'>('')
   const [documentShare, setDocumentShare] = useState(50)
   const [resizing, setResizing] = useState(false)
   const input = useRef<HTMLInputElement>(null)
   const panels = useRef<HTMLDivElement>(null)
-  const workspace = useRef<HTMLElement>(null)
   const output = useRef<HTMLDivElement>(null)
   const outputButtons = useRef<(HTMLButtonElement | null)[]>([])
   const mobileButtons = useRef<(HTMLButtonElement | null)[]>([])
@@ -61,11 +78,10 @@ export default function App() {
     void fetchConfig(controller.signal)
       .then((value) => {
         setConfig(value)
-        setConfigError('')
+        setConfigError(false)
       })
       .catch(() => {
-        if (!controller.signal.aborted)
-          setConfigError('Chưa tải được cấu hình upload. Kiểm tra API rồi kết nối lại.')
+        if (!controller.signal.aborted) setConfigError(true)
       })
     void checkHealth(controller.signal)
       .then((online) => setConnection(online ? 'online' : 'offline'))
@@ -74,6 +90,15 @@ export default function App() {
       })
     return () => controller.abort()
   }, [refresh])
+
+  useEffect(() => {
+    if (sidebarOpen) sidebarClose.current?.focus({ preventScroll: true })
+  }, [sidebarOpen])
+
+  function closeSidebar() {
+    setSidebarOpen(false)
+    menu.current?.focus({ preventScroll: true })
+  }
 
   useEffect(
     () => () => {
@@ -100,7 +125,7 @@ export default function App() {
   function chooseFiles(files: FileList | null) {
     if (busy.current || !config || !files?.length) return
     if (files.length !== 1) {
-      setError('Mỗi lần chỉ xử lý một tài liệu. Hãy chọn một file.')
+      setError(new UIError('oneFile'))
       return
     }
     const file = files[0]
@@ -114,29 +139,13 @@ export default function App() {
     activeURL.current = url
     setSelection({ file, url, id: ++nextID.current })
     setMarkdown('')
-    setError('')
+    setError(null)
     setCopyFeedback('')
     setElapsed(0)
     setStatus('ready')
     setMobileTab('document')
     setOutputTab('rendered')
     setDocumentShare(50)
-  }
-
-  function reset() {
-    if (busy.current) return
-    if (activeURL.current) URL.revokeObjectURL(activeURL.current)
-    activeURL.current = null
-    setSelection(null)
-    setMarkdown('')
-    setError('')
-    setCopyFeedback('')
-    setElapsed(0)
-    setStatus('idle')
-    setMobileTab('document')
-    setDocumentShare(50)
-    if (input.current) input.current.value = ''
-    workspace.current?.focus({ preventScroll: true })
   }
 
   async function process() {
@@ -151,7 +160,7 @@ export default function App() {
     request.current = controller
     started.current = Date.now()
     setStatus('processing')
-    setError('')
+    setError(null)
     setMarkdown('')
     setCopyFeedback('')
     setElapsed(0)
@@ -166,10 +175,10 @@ export default function App() {
       setStatus('error')
       setError(
         cause instanceof TypeError
-          ? 'Mất kết nối với máy chủ. Yêu cầu có thể vẫn đang được xử lý; hãy kiểm tra kết nối trước khi thử lại.'
-          : cause instanceof Error
-            ? cause.message
-            : 'Không xử lý được tài liệu. Hãy thử lại.',
+          ? new UIError('connectionLost')
+          : cause instanceof UIError
+            ? cause
+            : new UIError('requestFailed'),
       )
       setMobileTab('result')
     } finally {
@@ -181,9 +190,9 @@ export default function App() {
   async function copy() {
     try {
       await navigator.clipboard.writeText(markdown)
-      setCopyFeedback('Đã sao chép')
+      setCopyFeedback('copied')
     } catch {
-      setCopyFeedback('Không sao chép được. Hãy tải file Markdown.')
+      setCopyFeedback('copyFailed')
     }
     clearTimeout(copyTimer.current)
     copyTimer.current = setTimeout(() => setCopyFeedback(''), 3500)
@@ -205,58 +214,94 @@ export default function App() {
 
   const processing = status === 'processing'
   const statusLabel = {
-    idle: 'Chọn tài liệu',
-    ready: 'Sẵn sàng',
-    processing: 'Đang xử lý',
-    done: 'Hoàn tất',
-    error: 'Cần thử lại',
+    idle: t.choose,
+    ready: t.ready,
+    processing: t.processing,
+    done: t.done,
+    error: t.needsRetry,
   }[status]
   const connectionLabel = {
-    checking: 'Đang kết nối',
-    online: 'Đã kết nối',
-    offline: 'Mất kết nối',
+    checking: t.checking,
+    online: t.online,
+    offline: t.offline,
   }[connection]
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${sidebarOpen ? 'sidebar-open' : ''}`}>
       <a href="#workspace" className="skip-link">
-        Đến vùng làm việc
+        {t.skip}
       </a>
+      {sidebarOpen && (
+        <button
+          className="sidebar-backdrop"
+          aria-label={t.closeSidebar}
+          onClick={closeSidebar}
+          tabIndex={-1}
+        />
+      )}
+      <aside
+        id="sidebar"
+        className="sidebar"
+        aria-label={t.sidebar}
+        hidden={!sidebarOpen}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            closeSidebar()
+          }
+        }}
+      >
+        <div className="sidebar-header">
+          <span>{t.workspace}</span>
+          <button
+            ref={sidebarClose}
+            className="icon-button"
+            aria-label={t.closeSidebar}
+            title={t.closeSidebar}
+            onClick={closeSidebar}
+          >
+            <PanelLeftClose size={19} />
+          </button>
+        </div>
+        <Settings {...preferences} />
+      </aside>
       <main className="main-shell">
         <header className="topbar">
-          <a className="brand" href="/" aria-label="cuddly giggle — trang chính">
+          <button
+            ref={menu}
+            className="icon-button menu-toggle"
+            aria-controls="sidebar"
+            aria-expanded={sidebarOpen}
+            aria-label={sidebarOpen ? t.closeSidebar : t.openSidebar}
+            title={sidebarOpen ? t.closeSidebar : t.openSidebar}
+            onClick={() => (sidebarOpen ? closeSidebar() : setSidebarOpen(true))}
+          >
+            <PanelLeft size={19} />
+          </button>
+          <a className="brand" href="/" aria-label={t.home}>
             <span className="brand-mark">
               <ScanLine size={23} />
             </span>
             <span>cuddly giggle</span>
           </a>
-          <h1>Đọc tài liệu</h1>
+          <h1>{t.read}</h1>
           <div className="topbar-actions">
-            {selection && (
-              <button
-                className="secondary-button new-document"
-                onClick={reset}
-                disabled={processing}
-              >
-                <FilePlus2 size={17} />
-                Tài liệu mới
-              </button>
-            )}
             <button
               className={`connection ${connection}`}
-              title="Kiểm tra lại kết nối"
+              aria-label={connectionLabel}
+              title={t.checkConnection}
               onClick={() => setRefresh(refresh + 1)}
             >
               <span className="status-dot" />
-              {connectionLabel}
+              <span className="connection-label">{connectionLabel}</span>
             </button>
             <a
               className="icon-button docs-link"
               href="/docs"
               target="_blank"
               rel="noreferrer"
-              aria-label="Tài liệu API"
-              title="Tài liệu API"
+              aria-label={t.docs}
+              title={t.docs}
             >
               <BookOpen size={18} />
             </a>
@@ -268,7 +313,7 @@ export default function App() {
           type="file"
           id="document-upload"
           className="sr-only"
-          aria-label="Chọn tài liệu"
+          aria-label={t.choose}
           accept={config?.supported_suffixes.join(',')}
           disabled={processing || !config}
           onChange={(event) => {
@@ -278,18 +323,18 @@ export default function App() {
         />
         {configError && (
           <div className="alert config-alert" role="alert">
-            {configError}
-            <button onClick={() => setRefresh(refresh + 1)}>Kết nối lại</button>
+            {t.configFailed}
+            <button onClick={() => setRefresh(refresh + 1)}>{t.reconnect}</button>
           </div>
         )}
         {error && (
           <div className="alert" role="alert">
             <Circle size={16} />
-            <span>{error}</span>
+            <span>{error.localizedMessage(language)}</span>
             <button
               className="icon-button"
-              aria-label="Đóng thông báo"
-              onClick={() => setError('')}
+              aria-label={t.closeAlert}
+              onClick={() => setError(null)}
             >
               <X size={16} />
             </button>
@@ -298,9 +343,8 @@ export default function App() {
 
         <section
           id="workspace"
-          ref={workspace}
           className={`workspace ${selection ? 'has-document' : 'is-empty'} ${dragging ? 'is-dragging' : ''}`}
-          aria-label="Vùng làm việc OCR"
+          aria-label={t.ocrWorkspace}
           tabIndex={-1}
           onDragOver={(event) => {
             event.preventDefault()
@@ -319,7 +363,7 @@ export default function App() {
           {dragging && (
             <div className="drop-overlay">
               <Upload size={32} />
-              <strong>Thả tài liệu để bắt đầu</strong>
+              <strong>{t.drop}</strong>
             </div>
           )}
           {selection && (
@@ -327,7 +371,7 @@ export default function App() {
               <div className="workspace-title">
                 <FileText size={17} />
                 <span>{selection.file.name}</span>
-                <small>{formatBytes(selection.file.size)}</small>
+                <small>{formatBytes(selection.file.size, language)}</small>
               </div>
               <span className={`document-status ${status}`} role="status">
                 {processing ? (
@@ -342,7 +386,7 @@ export default function App() {
             </div>
           )}
           {selection && (
-            <div className="mobile-tabs" role="tablist" aria-label="Vùng hiển thị">
+            <div className="mobile-tabs" role="tablist" aria-label={t.displayArea}>
               {(['document', 'result'] as const).map((tab, index) => (
                 <button
                   key={tab}
@@ -364,7 +408,7 @@ export default function App() {
                     }
                   }}
                 >
-                  {tab === 'document' ? 'Bản gốc' : 'Kết quả'}
+                  {tab === 'document' ? t.original : t.result}
                 </button>
               ))}
             </div>
@@ -383,18 +427,23 @@ export default function App() {
             <section
               id="panel-document"
               className={`document-panel panel ${mobileTab === 'document' ? 'mobile-active' : ''}`}
-              aria-label="Bản gốc"
+              aria-label={t.original}
             >
               {selection && (
                 <div className="panel-header">
-                  <span>Bản gốc</span>
+                  <span>{t.original}</span>
                   <span className="panel-meta">
                     {fileSuffix(selection.file.name).slice(1).toUpperCase()}
                   </span>
                 </div>
               )}
               {selection ? (
-                <DocumentPreview key={selection.id} file={selection.file} url={selection.url} />
+                <DocumentPreview
+                  key={selection.id}
+                  file={selection.file}
+                  url={selection.url}
+                  language={language}
+                />
               ) : (
                 <div className="upload-empty">
                   <div className="paper-illustration" aria-hidden="true">
@@ -415,26 +464,26 @@ export default function App() {
                     </div>
                     <span className="paper-plus">+</span>
                   </div>
-                  <h2>Tài liệu của bạn, dễ đọc hơn.</h2>
-                  <p>Kéo thả file vào đây hoặc</p>
+                  <h2>{t.emptyTitle}</h2>
+                  <p>{t.emptyHint}</p>
                   <button
                     className="primary-button upload-button"
                     disabled={!config}
                     onClick={() => input.current?.click()}
                   >
                     <Upload size={16} />
-                    Chọn tài liệu
+                    {t.choose}
                     <ArrowRight size={16} />
                   </button>
                   <small className="upload-limits">
-                    PDF, Word, Excel, ảnh
+                    {t.formats}
                     <span>
                       {config
-                        ? `Tối đa ${formatBytes(config.max_upload_bytes)}`
-                        : 'Đang tải giới hạn…'}
+                        ? t.maxSize(formatBytes(config.max_upload_bytes, language))
+                        : t.loadingLimits}
                     </span>
                   </small>
-                  {config && <small>PDF cần OCR: tối đa {config.pdf_max_pages} trang</small>}
+                  {config && <small>{t.maxPages(config.pdf_max_pages)}</small>}
                 </div>
               )}
             </section>
@@ -443,14 +492,14 @@ export default function App() {
                 className="panel-divider"
                 role="separator"
                 tabIndex={0}
-                aria-label="Điều chỉnh độ rộng bản gốc và kết quả"
+                aria-label={t.resize}
                 aria-orientation="vertical"
                 aria-controls="panel-document panel-result"
                 aria-valuemin={25}
                 aria-valuemax={75}
                 aria-valuenow={documentShare}
-                aria-valuetext={`Bản gốc ${documentShare}% · Kết quả ${100 - documentShare}%`}
-                title="Kéo để đổi độ rộng. Nhấp đúp hoặc nhấn Enter để chia đều."
+                aria-valuetext={t.split(documentShare)}
+                title={t.resizeHint}
                 onPointerDown={(event) => {
                   if (event.button !== 0 || !event.isPrimary) return
                   event.preventDefault()
@@ -498,12 +547,12 @@ export default function App() {
               <section
                 id="panel-result"
                 className={`result-panel panel ${mobileTab === 'result' ? 'mobile-active' : ''}`}
-                aria-label="Kết quả"
+                aria-label={t.result}
               >
                 <div className="panel-header">
-                  <span>Kết quả</span>
+                  <span>{t.result}</span>
                   {markdown && (
-                    <div className="output-tabs" role="tablist" aria-label="Định dạng kết quả">
+                    <div className="output-tabs" role="tablist" aria-label={t.resultFormat}>
                       {(['rendered', 'source'] as const).map((tab, index) => (
                         <button
                           key={tab}
@@ -526,7 +575,7 @@ export default function App() {
                             }
                           }}
                         >
-                          {tab === 'rendered' ? 'Trình bày' : 'Markdown'}
+                          {tab === 'rendered' ? t.rendered : 'Markdown'}
                         </button>
                       ))}
                     </div>
@@ -538,13 +587,13 @@ export default function App() {
                   className="output-content"
                   role="tabpanel"
                   aria-labelledby={markdown ? `output-tab-${outputTab}` : undefined}
-                  aria-label={markdown ? undefined : 'Kết quả đọc tài liệu'}
+                  aria-label={markdown ? undefined : t.readResult}
                   tabIndex={0}
                   aria-busy={processing}
                 >
                   {markdown ? (
                     outputTab === 'rendered' ? (
-                      <MarkdownResult markdown={markdown} />
+                      <MarkdownResult markdown={markdown} language={language} />
                     ) : (
                       <pre className="markdown-source">{markdown}</pre>
                     )
@@ -560,22 +609,18 @@ export default function App() {
                         )}
                       </div>
                       <h2>
-                        {processing
-                          ? 'Đang đọc tài liệu…'
-                          : status === 'error'
-                            ? 'Chưa đọc được tài liệu'
-                            : 'Sẵn sàng đọc'}
+                        {processing ? t.reading : status === 'error' ? t.readFailed : t.readyToRead}
                       </h2>
                       <p>
                         {processing
-                          ? 'Tài liệu nhiều trang có thể cần thêm thời gian.'
+                          ? t.processingHint
                           : status === 'error'
-                            ? 'Kiểm tra thông báo và thử lại.'
-                            : 'Nhấn “Đọc tài liệu” để bắt đầu.'}
+                            ? t.errorHint
+                            : t.readHint}
                       </p>
                       {processing ? (
                         <span className="elapsed" role="status">
-                          Đã chờ {elapsed} giây
+                          {t.waited(elapsed)}
                         </span>
                       ) : (
                         <div className="result-placeholder" aria-hidden="true">
@@ -601,7 +646,7 @@ export default function App() {
                   onClick={() => input.current?.click()}
                 >
                   <Upload size={15} />
-                  Đổi file
+                  {t.replace}
                 </button>
               </div>
               <div className="output-actions">
@@ -609,23 +654,23 @@ export default function App() {
                   <>
                     <button
                       className="secondary-button export-button"
-                      aria-label="Sao chép Markdown"
-                      title="Sao chép Markdown"
+                      aria-label={t.copyMarkdown}
+                      title={t.copyMarkdown}
                       disabled={!markdown || processing}
                       onClick={() => void copy()}
                     >
-                      {copyFeedback === 'Đã sao chép' ? <Check size={17} /> : <Copy size={17} />}
-                      <span>Sao chép</span>
+                      {copyFeedback === 'copied' ? <Check size={17} /> : <Copy size={17} />}
+                      <span>{t.copy}</span>
                     </button>
                     <button
                       className="primary-button export-button"
-                      aria-label="Tải Markdown"
-                      title="Tải Markdown"
+                      aria-label={t.downloadMarkdown}
+                      title={t.downloadMarkdown}
                       disabled={!markdown || processing}
                       onClick={download}
                     >
                       <ArrowDownToLine size={15} />
-                      <span>Tải xuống</span>
+                      <span>{t.download}</span>
                     </button>
                   </>
                 ) : (
@@ -639,7 +684,7 @@ export default function App() {
                     ) : (
                       <ScanLine size={16} />
                     )}
-                    {processing ? 'Đang xử lý…' : status === 'error' ? 'Thử lại' : 'Đọc tài liệu'}
+                    {processing ? t.processingButton : status === 'error' ? t.retry : t.read}
                     {!processing && <ArrowRight size={15} />}
                   </button>
                 )}
@@ -647,12 +692,12 @@ export default function App() {
             </footer>
           )}
           <div className="sr-only" role="status">
-            {copyFeedback}
+            {copyFeedback ? t[copyFeedback] : ''}
           </div>
-          {copyFeedback && <div className="copy-toast">{copyFeedback}</div>}
+          {copyFeedback && <div className="copy-toast">{copyFeedback ? t[copyFeedback] : ''}</div>}
         </section>
 
-        {status === 'done' && <p className="completion-note">Đã đọc xong · {elapsed} giây</p>}
+        {status === 'done' && <p className="completion-note">{t.completed(elapsed)}</p>}
       </main>
     </div>
   )

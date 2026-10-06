@@ -31,14 +31,12 @@ describe('OCR requests', () => {
   it.each([400, 413, 415, 422, 429, 503, 504, 500])(
     'handles HTTP %s without retrying',
     async (status) => {
-      const fetch = vi
-        .fn()
-        .mockResolvedValue(
-          new Response('{"detail":"private server data"}', {
-            status,
-            headers: { 'Retry-After': '7' },
-          }),
-        )
+      const fetch = vi.fn().mockResolvedValue(
+        new Response('{"detail":"private server data"}', {
+          status,
+          headers: { 'Retry-After': '7' },
+        }),
+      )
       vi.stubGlobal('fetch', fetch)
       await expect(
         runOCR(new File(['x'], 'test.pdf'), new AbortController().signal),
@@ -61,9 +59,11 @@ describe('OCR requests', () => {
 describe('upload configuration', () => {
   it('accepts uppercase suffixes, rejects unsupported, empty and oversized files', () => {
     expect(validateFile(new File(['x'], 'scan.PDF'), config)).toBeNull()
-    expect(validateFile(new File(['x'], 'note.md'), config)).toContain('Định dạng')
-    expect(validateFile(new File([], 'empty.pdf'), config)).toContain('trống')
-    expect(validateFile(new File(['x'.repeat(101)], 'large.pdf'), config)).toContain('giới hạn')
+    expect(validateFile(new File(['x'], 'note.md'), config)?.message).toContain('Định dạng')
+    expect(validateFile(new File([], 'empty.pdf'), config)?.message).toContain('trống')
+    expect(validateFile(new File(['x'.repeat(101)], 'large.pdf'), config)?.message).toContain(
+      'giới hạn',
+    )
   })
 
   it('does not reject PDF based on page count at the browser', () => {

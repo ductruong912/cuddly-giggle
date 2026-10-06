@@ -60,6 +60,89 @@ async function mockReadEndpoints(page: Page) {
   })
 }
 
+for (const width of [1440, 390]) {
+  test(`theme/language settings in a collapsible sidebar at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 960 })
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await mockReadEndpoints(page)
+    let requests = 0
+    await page.route('**/v1/doc/ocr', (route) => {
+      requests++
+      return route.fulfill({ contentType: 'text/markdown', body: markdown })
+    })
+    await page.goto('/')
+    const root = page.locator('html')
+    const settings = page.locator('#preferences')
+    await expect(root).toHaveAttribute('data-theme', 'dark')
+    await expect(page.getByRole('button', { name: 'Tài liệu mới' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Cài đặt' })).toHaveCount(0)
+    await page.getByRole('button', { name: 'Mở thanh bên' }).click()
+    await expect(settings).toBeVisible()
+    await expect(page.getByRole('radio', { name: 'Hệ thống', exact: true })).toBeChecked()
+    await page.getByRole('radio', { name: 'Sáng', exact: true }).check()
+    await expect(root).toHaveAttribute('data-theme', 'light')
+    await page.getByRole('radio', { name: 'Tối', exact: true }).check()
+    await expect(root).toHaveAttribute('data-theme', 'dark')
+    await page.emulateMedia({ colorScheme: 'light' })
+    await expect(root).toHaveAttribute('data-theme', 'dark')
+    await page.getByRole('radio', { name: 'Hệ thống', exact: true }).check()
+    await expect(root).toHaveAttribute('data-theme', 'light')
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await expect(root).toHaveAttribute('data-theme', 'dark')
+    await page.getByLabel('Ngôn ngữ', { exact: true }).selectOption('en')
+    await expect(root).toHaveAttribute('lang', 'en')
+    await expect(page.getByRole('button', { name: 'Connected', exact: true })).toBeVisible()
+    await page.getByRole('radio', { name: 'System', exact: true }).focus()
+    await page.keyboard.press('Escape')
+    await expect(settings).toBeHidden()
+    await expect(page.getByRole('button', { name: 'Open sidebar', exact: true })).toBeFocused()
+    await page.getByLabel('Choose document', { exact: true }).setInputFiles({
+      name: 'synthetic.pdf',
+      mimeType: 'application/pdf',
+      buffer: syntheticPDF(),
+    })
+    await expect(page.getByText('Page 1 / 2')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Zoom in', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Read document', exact: true }).click()
+    await expect(page.getByRole('table')).toBeVisible()
+    await expect(page.getByRole('cell', { name: 'Tài liệu A' })).toBeVisible()
+    const before = (await page.locator('.workspace').boundingBox())!
+    await page.getByRole('button', { name: 'Open sidebar', exact: true }).click()
+    const sidebar = page.getByRole('complementary', { name: 'Sidebar', exact: true })
+    await expect(sidebar).toBeVisible()
+    await expect(sidebar.locator('nav')).toHaveCount(0)
+    const after = (await page.locator('.workspace').boundingBox())!
+    if (width >= 960) expect(before.width - after.width).toBeGreaterThan(150)
+    else expect(Math.abs(before.width - after.width)).toBeLessThan(1)
+    await page.screenshot({
+      path: testInfo.outputPath(`sidebar-dark-${width}.png`),
+      fullPage: true,
+    })
+    await page.keyboard.press('Escape')
+    await expect(sidebar).toBeHidden()
+    await expect(page.getByRole('button', { name: 'Open sidebar', exact: true })).toBeFocused()
+    await page.getByRole('button', { name: 'Open sidebar', exact: true }).click()
+    await page.screenshot({
+      path: testInfo.outputPath(`settings-dark-${width}.png`),
+      fullPage: true,
+    })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.getByLabel('Language', { exact: true }).selectOption('vi')
+    await expect(page.getByRole('tab', { name: 'Trình bày', exact: true })).toBeVisible()
+    await page.getByLabel('Ngôn ngữ', { exact: true }).selectOption('en')
+    expect(requests).toBe(1)
+    await page.reload()
+    await expect(root).toHaveAttribute('lang', 'en')
+    await expect(root).toHaveAttribute('data-theme', 'dark')
+    await page.getByRole('button', { name: 'Open sidebar', exact: true }).click()
+    await expect(page.getByRole('radio', { name: 'System', exact: true })).toBeChecked()
+    await sidebar.getByRole('button', { name: 'Close sidebar', exact: true }).click()
+    await expect(settings).toBeHidden()
+  })
+}
+
 test('OCR flow, PDF pagination/zoom, clipboard, exact download and file replacement', async ({
   page,
 }, testInfo) => {
@@ -135,7 +218,7 @@ test('OCR flow, PDF pagination/zoom, clipboard, exact download and file replacem
   await page.getByRole('button', { name: 'Đọc tài liệu' }).click()
   await expect(page.getByRole('button', { name: 'Đang xử lý…', exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: 'Đổi file' })).toBeDisabled()
-  await expect(page.getByRole('button', { name: 'Tài liệu mới' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Mở thanh bên' })).toBeEnabled()
   finish()
   await expect(page.getByRole('table')).toBeVisible()
   await page.getByRole('button', { name: 'Thu nhỏ', exact: true }).click()
@@ -156,13 +239,23 @@ test('OCR flow, PDF pagination/zoom, clipboard, exact download and file replacem
   expect(count).toBe(1)
   await page.getByRole('tab', { name: 'Markdown', exact: true }).click()
   await expect(page.locator('.markdown-source')).toHaveText(markdown)
+  await page.bringToFront()
+  // Record the exact payload after a successful native write. Windows host clipboard
+  // reads can return empty text in browser automation even when the write succeeds.
+  await page.evaluate(() => {
+    const write = navigator.clipboard.writeText.bind(navigator.clipboard)
+    navigator.clipboard.writeText = async (text) => {
+      await write(text)
+      Object.assign(window, { lastClipboardWrite: text })
+    }
+  })
   await page.getByRole('button', { name: 'Sao chép Markdown' }).click()
-  // Windows clipboard normalizes line endings to CRLF; downloaded bytes stay exact.
-  await expect
-    .poll(() =>
-      page.evaluate(async () => (await navigator.clipboard.readText()).replace(/\r\n/g, '\n')),
-    )
-    .toBe(markdown)
+  await expect(page.locator('.copy-toast')).toHaveText('Đã sao chép')
+  expect(
+    await page.evaluate(
+      () => (window as Window & { lastClipboardWrite?: string }).lastClipboardWrite,
+    ),
+  ).toBe(markdown)
   const downloadPromise = page.waitForEvent('download')
   await page.getByRole('button', { name: 'Tải Markdown' }).click()
   const download = await downloadPromise
@@ -180,12 +273,7 @@ test('OCR flow, PDF pagination/zoom, clipboard, exact download and file replacem
     page.getByText('Chưa hỗ trợ xem trước định dạng này.', { exact: false }),
   ).toBeVisible()
   await expect(page.getByRole('button', { name: 'Sao chép Markdown' })).toHaveCount(0)
-  await page.getByRole('button', { name: 'Tài liệu mới' }).click()
-  await expect(
-    page
-      .getByRole('region', { name: 'Vùng làm việc OCR' })
-      .getByRole('button', { name: 'Chọn tài liệu', exact: true }),
-  ).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Tài liệu mới' })).toHaveCount(0)
   expect(errors).toEqual([])
 })
 
@@ -231,7 +319,6 @@ for (const width of [1440, 768, 390, 320]) {
       await expect(page.getByRole('separator')).toHaveCount(0)
       await page.getByRole('tab', { name: 'Bản gốc', exact: true }).click()
       await expect(page.locator('.file-fallback')).toBeVisible()
-      await page.getByRole('button', { name: 'Tài liệu mới' }).click()
     }
   })
 }

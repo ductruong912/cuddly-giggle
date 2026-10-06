@@ -2,13 +2,24 @@ import { useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, FileText, LoaderCircle, Minus, Plus } from 'lucide-react'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { fileSuffix } from './api'
+import { getMessages } from './i18n'
+import type { Language } from './i18n'
 
-function ZoomControls({ zoom, onChange }: { zoom: number; onChange: (value: number) => void }) {
+function ZoomControls({
+  zoom,
+  onChange,
+  language,
+}: {
+  zoom: number
+  onChange: (value: number) => void
+  language: Language
+}) {
+  const t = getMessages(language)
   return (
     <div className="zoom-controls">
       <button
         className="icon-button"
-        aria-label="Thu nhỏ"
+        aria-label={t.zoomOut}
         disabled={zoom <= 0.5}
         onClick={() => onChange(Math.max(0.5, zoom - 0.25))}
       >
@@ -17,7 +28,7 @@ function ZoomControls({ zoom, onChange }: { zoom: number; onChange: (value: numb
       <span>{Math.round(zoom * 100)}%</span>
       <button
         className="icon-button"
-        aria-label="Phóng to"
+        aria-label={t.zoomIn}
         disabled={zoom >= 2}
         onClick={() => onChange(Math.min(2, zoom + 0.25))}
       >
@@ -27,14 +38,15 @@ function ZoomControls({ zoom, onChange }: { zoom: number; onChange: (value: numb
   )
 }
 
-function PDFPreview({ file }: { file: File }) {
+function PDFPreview({ file, language }: { file: File; language: Language }) {
+  const t = getMessages(language)
   const canvas = useRef<HTMLCanvasElement>(null)
   const container = useRef<HTMLDivElement>(null)
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null)
   const [page, setPage] = useState(1)
   const [zoom, setZoom] = useState(1)
   const [width, setWidth] = useState(600)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<'' | 'pdfLoadFailed' | 'pdfRenderFailed'>('')
   const [rendering, setRendering] = useState(true)
 
   useEffect(() => {
@@ -68,7 +80,7 @@ function PDFPreview({ file }: { file: File }) {
         const pdf = await loading.promise
         if (!disposed) setDocument(pdf)
       } catch {
-        if (!disposed) setError('Không xem trước được PDF này. Bạn vẫn có thể gửi file để đọc/OCR.')
+        if (!disposed) setError('pdfLoadFailed')
       }
     }
     void load()
@@ -106,7 +118,7 @@ function PDFPreview({ file }: { file: File }) {
           !disposed &&
           !(cause instanceof Error && cause.name === 'RenderingCancelledException')
         ) {
-          setError('Không dựng được trang PDF. Bạn vẫn có thể chạy OCR cho file này.')
+          setError('pdfRenderFailed')
         }
       } finally {
         if (!disposed) setRendering(false)
@@ -125,40 +137,38 @@ function PDFPreview({ file }: { file: File }) {
         <div className="page-controls">
           <button
             className="icon-button"
-            aria-label="Trang trước"
+            aria-label={t.previousPage}
             disabled={!document || page === 1}
             onClick={() => setPage(page - 1)}
           >
             <ChevronLeft size={16} />
           </button>
-          <span aria-live="polite">
-            {document ? `Trang ${page} / ${document.numPages}` : 'PDF'}
-          </span>
+          <span aria-live="polite">{document ? t.page(page, document.numPages) : 'PDF'}</span>
           <button
             className="icon-button"
-            aria-label="Trang sau"
+            aria-label={t.nextPage}
             disabled={!document || page === document.numPages}
             onClick={() => setPage(page + 1)}
           >
             <ChevronRight size={16} />
           </button>
         </div>
-        <ZoomControls zoom={zoom} onChange={setZoom} />
+        <ZoomControls zoom={zoom} onChange={setZoom} language={language} />
       </div>
       <div className="preview-scroll" ref={container}>
         {error ? (
           <div className="preview-notice" role="status">
             <FileText size={30} />
-            <p>{error}</p>
+            <p>{t[error]}</p>
           </div>
         ) : (
           <>
             {rendering && (
               <span className="preview-loading" role="status">
-                <LoaderCircle className="spin" size={16} /> Đang dựng trang…
+                <LoaderCircle className="spin" size={16} /> {t.renderingPage}
               </span>
             )}
-            <canvas ref={canvas} className="pdf-canvas" aria-label={`Bản gốc PDF, trang ${page}`} />
+            <canvas ref={canvas} className="pdf-canvas" aria-label={t.pdfPage(page)} />
           </>
         )}
       </div>
@@ -166,22 +176,23 @@ function PDFPreview({ file }: { file: File }) {
   )
 }
 
-function ImagePreview({ file, url }: { file: File; url: string }) {
+function ImagePreview({ file, url, language }: { file: File; url: string; language: Language }) {
+  const t = getMessages(language)
   const [zoom, setZoom] = useState(1)
   const [failed, setFailed] = useState(false)
   return (
     <div className="document-preview">
       <div className="preview-toolbar">
-        <span>Ảnh gốc</span>
-        <ZoomControls zoom={zoom} onChange={setZoom} />
+        <span>{t.original}</span>
+        <ZoomControls zoom={zoom} onChange={setZoom} language={language} />
       </div>
       <div className="preview-scroll image-scroll">
         {failed ? (
-          <p className="preview-notice">Không xem trước được ảnh này. Bạn vẫn có thể chạy OCR.</p>
+          <p className="preview-notice">{t.imageFailed}</p>
         ) : (
           <img
             src={url}
-            alt={`Bản gốc ${file.name}`}
+            alt={t.imageOriginal(file.name)}
             className="image-preview"
             style={{ width: `${zoom * 100}%`, maxWidth: 'none' }}
             onError={() => setFailed(true)}
@@ -192,18 +203,27 @@ function ImagePreview({ file, url }: { file: File; url: string }) {
   )
 }
 
-export default function DocumentPreview({ file, url }: { file: File; url: string }) {
+export default function DocumentPreview({
+  file,
+  url,
+  language = 'vi',
+}: {
+  file: File
+  url: string
+  language?: Language
+}) {
+  const t = getMessages(language)
   const suffix = fileSuffix(file.name)
-  if (suffix === '.pdf') return <PDFPreview file={file} />
+  if (suffix === '.pdf') return <PDFPreview file={file} language={language} />
   if (['.png', '.jpg', '.jpeg', '.bmp', '.webp'].includes(suffix))
-    return <ImagePreview file={file} url={url} />
+    return <ImagePreview file={file} url={url} language={language} />
   return (
     <div className="file-fallback">
       <div className="file-sheet">
         <FileText size={42} strokeWidth={1.2} />
         <span>{suffix.slice(1).toUpperCase()}</span>
       </div>
-      <p className="fallback-description">Chưa hỗ trợ xem trước định dạng này.</p>
+      <p className="fallback-description">{t.unsupportedPreview}</p>
     </div>
   )
 }
