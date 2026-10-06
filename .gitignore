@@ -57,3 +57,12 @@ docs/
 AGENTS.md
 # Written by `python -m eval.run_eval --json`.
 /eval-report.json
+
+# OCR playground dependencies, builds and test artifacts
+/frontend/node_modules/
+/frontend/dist/
+/frontend/test-results/
+/frontend/playwright-report/
+/frontend/coverage/
+/frontend/public/assets/pdfjs/
+*.tsbuildinfo

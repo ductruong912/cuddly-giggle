@@ -11,7 +11,72 @@ FastAPI service for extracting Vietnamese documents into Markdown or structured 
 OCR runs on the local machine. Structured Purchase Order extraction still sends
 the OCR Markdown to OpenAI.
 
-## Requirements
+## OCR Playground
+
+UI nội bộ bằng React + TypeScript, xem tài liệu cạnh kết quả Markdown. Giao diện
+chỉ gọi `POST /v1/doc/ocr`; không gọi OpenAI hoặc API trích xuất trường PO. Giữ
+luồng đọc native cho Word/Excel/PDF có lớp chữ và OCR CPU/GPU cho ảnh/PDF scan.
+PaddleOCR-VL/llama.cpp vẫn có thể được sử dụng cho nhận dạng OCR theo cấu hình máy.
+
+**Phát triển** — cần Node.js 24 và runtime Python/OCR đã được chuẩn bị:
+
+```powershell
+# Terminal 1, từ root repo: OCR độc lập không cần OpenAI key/database.
+# Đặt biến môi trường trước khi chạy để ghi đè các giá trị trong .env.
+$env:DATABASE_URL = ""
+$env:OPENAI_API_KEY = ""
+.\venv\Scripts\python.exe main.py
+
+# Terminal 2
+cd frontend
+npm.cmd ci
+npm.cmd run dev
+```
+
+Mở `http://127.0.0.1:5173`. Vite proxy API tới `127.0.0.1:8000`. Trên Linux/macOS
+dùng `npm` thay `npm.cmd`, và `DATABASE_URL= OPENAI_API_KEY= python main.py` trong
+môi trường ảo. Không cần bật database; cấu hình database đã bật vẫn giữ startup
+check của backend. `/readyz` kiểm tra cả LLM nên có thể trả 503 khi không có key;
+UI dùng `/healthz` để hiển thị kết nối API, còn lỗi OCR hiển thị theo response thực.
+
+**Chạy bản build cùng FastAPI:**
+
+```powershell
+cd frontend
+npm.cmd ci
+npm.cmd run build
+cd ..
+.\venv\Scripts\python.exe main.py
+```
+
+Mở `http://127.0.0.1:8000/` hoặc `/playground`. `FRONTEND_DIST_DIR` mặc định là
+`frontend/dist`, được tính từ root repo. Nếu chưa có build, backend vẫn chạy các
+API như trước. Dockerfile tự build frontend ở stage Node rồi chép vào image app;
+Docker Compose vẫn cần runtime/model/GPU như mô tả ở phần Docker.
+
+PDF có preview chuyển trang/zoom; PNG/JPEG/BMP/WebP có preview ảnh. Word, Excel và
+TIFF chỉ hiển thị thông tin file nhưng vẫn gửi để đọc/OCR được. Giới hạn upload
+đọc từ `/v1/ui/config`; giới hạn trang chỉ áp dụng cho PDF cần OCR ở backend.
+Kết quả có tab trình bày/mã Markdown, sao chép và tải `.md`. Không thực thi HTML
+hoặc tự tải ảnh/link trong kết quả. File và kết quả giữ trong bộ nhớ trình duyệt;
+backend vẫn lưu artifact theo chính sách hiện có. Không có lịch sử OCR trong UI.
+
+**Kiểm thử frontend**, dùng fixture tổng hợp và API giả, không gọi provider/OCR thật:
+
+```powershell
+cd frontend
+npm.cmd run typecheck
+npm.cmd run lint
+npm.cmd test
+npx.cmd playwright install chromium
+npm.cmd run test:e2e
+npm.cmd run build
+```
+
+Playwright tự khởi động Vite ở cổng 5173. Screenshot được ghi vào `test-results/`;
+report và build không được Git theo dõi. CI chạy Chromium ở chế độ headless.
+
+## Backend requirements
 
 - Python 3.10+ (3.11 is what the Docker image ships)
 - NVIDIA GPU is optional; it enables the local PaddleOCR-VL + GGUF/llama.cpp path.

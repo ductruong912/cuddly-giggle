@@ -80,6 +80,14 @@ class ParseOptions(BaseModel):
     lang_hint: LangHint = LangHint.auto
 
 
+class UIConfigResponse(BaseModel):
+    """Public upload capabilities for the OCR playground; contains no credentials."""
+
+    supported_suffixes: list[str]
+    max_upload_bytes: int
+    pdf_max_pages: int
+
+
 class LLMExtractionOCRMetadata(BaseModel):
     decision: str
     page_count: int

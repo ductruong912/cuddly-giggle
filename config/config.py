@@ -233,6 +233,7 @@ class Settings:
     database_persistence_required: bool  = _get_bool("DATABASE_PERSISTENCE_REQUIRED", True)
 
     # --- Paths & misc ---
+    frontend_dist_dir: str               = _repo_path_from_env("FRONTEND_DIST_DIR", "frontend/dist")
     temp_dir: str                        = _get_str("DOC_TEMP_DIR", ".tmp_doc_parse")
     parse_output_dir: str                = _get_str("PARSE_OUTPUT_DIR", "outputs")
     # Saved artifacts accumulate one directory per request forever otherwise,

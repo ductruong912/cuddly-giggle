@@ -3,6 +3,13 @@
 #   --build-arg CUDA_TAG=11.8.0-cudnn8-runtime-ubuntu22.04
 #   --build-arg PADDLE_INDEX=https://www.paddlepaddle.org.cn/packages/stable/cu118/
 ARG CUDA_TAG=12.6.3-cudnn-runtime-ubuntu22.04
+FROM node:24-alpine AS frontend-build
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
 FROM nvidia/cuda:${CUDA_TAG}
 
 ARG PADDLE_INDEX=https://www.paddlepaddle.org.cn/packages/stable/cu126/
@@ -32,6 +39,7 @@ COPY requirements.txt .
 RUN python3.11 -m pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+COPY --from=frontend-build /frontend/dist /app/frontend/dist
 
 # Run as a non-root user; the mounted cache/output volumes must be writable by it.
 RUN useradd --create-home --uid 10001 appuser \

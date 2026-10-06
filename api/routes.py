@@ -33,7 +33,7 @@ from api.uploads import (
 )
 from config.config import settings
 from config.pipeline_logging import pipeline_message, source_document_context
-from core.domain.schemas import LLMExtractionResponse
+from core.domain.schemas import LLMExtractionResponse, UIConfigResponse
 from services.concurrency import PipelineLimiters
 from services.document_extraction import DocumentExtractionService
 from services.local_ocr_selector import has_usable_gpu
@@ -61,6 +61,17 @@ _LOCAL_UNSUPPORTED_MESSAGE = (
 # =====================================================================================
 
 health_router = APIRouter(tags=["health"])
+ui_router = APIRouter(prefix="/v1/ui", tags=["ui"])
+
+
+@ui_router.get("/config", response_model=UIConfigResponse)
+def ui_config() -> UIConfigResponse:
+    """Expose the existing OCR upload limits to the browser."""
+    return UIConfigResponse(
+        supported_suffixes=sorted(SUPPORTED_INPUT_SUFFIXES),
+        max_upload_bytes=settings.max_upload_bytes,
+        pdf_max_pages=settings.pdf_max_pages,
+    )
 
 
 @health_router.get("/healthz")
