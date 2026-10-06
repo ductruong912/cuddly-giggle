@@ -7,7 +7,7 @@ import time
 import uuid
 
 from config.config import Settings, settings
-from config.pipeline_logging import pipeline_message, request_logging_context
+from config.pipeline_logging import pipeline_message
 from core.domain.schemas import ParseDecision, ParseOptions, ParseResponse
 from core.engines.base import EngineParseResult, ParseEngine
 from core.engines.native import (
@@ -51,8 +51,7 @@ class ParseOrchestrator:
     ) -> ParseResponse:
         """Route the file to the cheapest engine that can read it, then normalize."""
         resolved_request_id = request_id or f"req_{uuid.uuid4().hex[:12]}"
-        with request_logging_context(resolved_request_id):
-            return self._parse(input_path, options or ParseOptions(), resolved_request_id)
+        return self._parse(input_path, options or ParseOptions(), resolved_request_id)
 
     def _parse(self, input_path: str, options: ParseOptions, request_id: str) -> ParseResponse:
         total_start = time.perf_counter()
