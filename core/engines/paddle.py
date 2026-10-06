@@ -112,6 +112,9 @@ class PaddlePipelineEngine(ParseEngine):
         return result
 
     def _parse_single(self, input_path: str, lang_hint: str) -> EngineParseResult:
+        # Enforce setup for both adapters before importing models or invoking CLI.
+        if os.getenv("CUDDLY_GIGGLE_MODEL_SETUP") != "1":
+            require_model_profile(self.settings, self.model_profile)
         # 1) Prefer official Python API when available.
         raw, py_error = self._try_python_api(input_path, lang_hint)
         cli_error = ""
