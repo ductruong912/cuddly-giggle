@@ -127,7 +127,9 @@ class PaddlePipelineEngine(ParseEngine):
 
         pages, markdown, normalized_raw = normalize_engine_output(raw, self.name, self.settings)
         geometry = None
-        if Path(input_path).suffix.lower() != ".pdf" and not self.settings.paddleocr_vl_auto_rotate:
+        if (Path(input_path).suffix.lower() != ".pdf"
+                and not self.settings.paddleocr_vl_auto_rotate
+                and not self.settings.paddleocr_vl_use_doc_unwarping):
             geometry = image_page_geometry(
                 input_path, matches_original=not self.settings.preprocess_enabled,
             )
@@ -392,9 +394,8 @@ class PaddleOCRVLEngine(PaddlePipelineEngine):
             kwargs["pipeline_version"] = self.settings.paddleocr_vl_pipeline_version
         if self.settings.paddleocr_vl_use_gguf:
             kwargs.update(self._remote_vl_kwargs())
-        if self.settings.paddleocr_vl_auto_rotate:
-            kwargs["use_doc_orientation_classify"] = True
-            kwargs["use_doc_unwarping"] = True
+        kwargs["use_doc_orientation_classify"] = self.settings.paddleocr_vl_auto_rotate
+        kwargs["use_doc_unwarping"] = self.settings.paddleocr_vl_use_doc_unwarping
 
         # Override ignore labels (e.g. empty list to keep headers and footers)
         kwargs["markdown_ignore_labels"] = list(self.settings.paddleocr_vl_markdown_ignore_labels)
@@ -407,9 +408,8 @@ class PaddleOCRVLEngine(PaddlePipelineEngine):
         if self.settings.paddleocr_vl_use_gguf:
             for key, value in self._remote_vl_kwargs().items():
                 args.extend([f"--{key}", str(value)])
-        if self.settings.paddleocr_vl_auto_rotate:
-            args.extend(["--use_doc_orientation_classify", "True"])
-            args.extend(["--use_doc_unwarping", "True"])
+        args.extend(["--use_doc_orientation_classify", str(self.settings.paddleocr_vl_auto_rotate)])
+        args.extend(["--use_doc_unwarping", str(self.settings.paddleocr_vl_use_doc_unwarping)])
         return args
 
     def _remote_vl_kwargs(self) -> dict[str, Any]:

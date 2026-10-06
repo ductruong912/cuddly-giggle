@@ -108,9 +108,12 @@ class Settings:
     paddleocr_vl_rec_api_model_name: str = os.getenv("PADDLEOCR_VL_REC_API_MODEL_NAME", "").strip()
     paddleocr_vl_rec_api_key: str      = os.getenv("PADDLEOCR_VL_REC_API_KEY", "").strip()
     paddleocr_vl_use_gguf: bool        = _get_bool("PADDLEOCR_VL_USE_GGUF", False)
-    # Corrects page rotation/warp before layout detection. Off by default: it adds
+    # Corrects page rotation before layout detection. Off by default: it adds
     # a model pass per page, and most scans already arrive upright.
     paddleocr_vl_auto_rotate: bool     = _get_bool("PADDLEOCR_VL_AUTO_ROTATE", False)
+    # Independent of rotation: flatten curved pages only when needed, since
+    # unwarping can distort otherwise flat scans and their table layout.
+    paddleocr_vl_use_doc_unwarping: bool = _get_bool("PADDLEOCR_VL_USE_DOC_UNWARPING", False)
     paddleocr_vl_max_pixels: int       = _get_int("PADDLEOCR_VL_MAX_PIXELS", 1003520)
     paddleocr_vl_markdown_ignore_labels: tuple[str, ...] = tuple(
         item.strip()
@@ -171,8 +174,8 @@ class Settings:
     # --- Scan preprocessing (cleans each page image before OCR) ---
     # Everything here is off by default and switchable one step at a time, so a
     # step's cost and its effect on accuracy can be attributed to that step
-    # alone. These are cheap CPU array passes, unlike PADDLEOCR_VL_AUTO_ROTATE,
-    # which runs two extra models per page inside the OCR slot.
+    # alone. These are cheap CPU array passes, unlike VL orientation correction
+    # and unwarping, which each run an extra model inside the OCR slot.
     preprocess_enabled: bool             = _get_bool("PREPROCESS_ENABLED", False)
     # OpenCV drops EXIF, so a phone photo of a document otherwise reaches OCR
     # sideways with nothing downstream able to notice.
