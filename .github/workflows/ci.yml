@@ -92,7 +92,7 @@ jobs:
           pip install -r requirements-ci.txt
 
       - name: Run the test suite
-        # TEST_DATABASE_URL switches on tests/test_persistence_database.py, which
+        # TEST_DATABASE_URL switches on TestDatabase in tests/test_persistence.py, which
         # skips without it. Those are the only checks that exercise the real SQL.
         env:
           TEST_DATABASE_URL: postgresql://docpipe:docpipepass@127.0.0.1:5432/docpipeline

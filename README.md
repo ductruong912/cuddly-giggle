@@ -550,7 +550,7 @@ Only ground truth catches these, which is the argument for a labeled set.
 
 ```bash
 pytest                              # the whole suite, ~18s
-pytest tests/test_self_heal.py      # one module
+pytest tests/test_extraction.py     # one module
 pytest -k concurrency               # by name
 ```
 
@@ -581,7 +581,7 @@ accuracy gate, then `compileall` and `pyflakes`. The evaluation report is
 uploaded as a build artifact.
 
 `requirements-ci.txt` is a subset of `requirements.txt` — the full file needs
-CUDA and a custom index. `tests/test_requirements.py` fails the build if the two
+CUDA and a custom index. `tests/test_runtime.py` fails the build if the two
 files' pins ever drift, so CI cannot quietly start testing different versions
 than production runs.
 
