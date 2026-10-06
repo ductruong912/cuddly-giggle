@@ -62,7 +62,8 @@ async function mockReadEndpoints(page: Page) {
 
 test('OCR flow, PDF pagination/zoom, clipboard, exact download and file replacement', async ({
   page,
-}) => {
+}, testInfo) => {
+  await page.setViewportSize({ width: 1920, height: 1080 })
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   await mockReadEndpoints(page)
@@ -80,7 +81,7 @@ test('OCR flow, PDF pagination/zoom, clipboard, exact download and file replacem
     await route.fulfill({ contentType: 'text/markdown; charset=utf-8', body: markdown })
   })
   await page.goto('/playground')
-  await expect(page.getByRole('button', { name: 'Chạy OCR' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Đọc tài liệu' })).toHaveCount(0)
   const input = page.getByLabel('Chọn tài liệu', { exact: true })
   await expect(input).toBeEnabled()
   await input.setInputFiles({
@@ -90,6 +91,36 @@ test('OCR flow, PDF pagination/zoom, clipboard, exact download and file replacem
   })
   await expect(page.getByText('Trang 1 / 2')).toBeVisible()
   await expect(page.locator('.preview-loading')).toHaveCount(0)
+  const workspace = await page.locator('.workspace').boundingBox()
+  const original = await page.locator('.pdf-canvas').boundingBox()
+  expect(workspace!.width).toBeGreaterThan(1800)
+  expect(original!.width).toBeGreaterThan(850)
+  const documentPanel = page.locator('#panel-document')
+  const resultPanel = page.locator('#panel-result')
+  expect(
+    Math.abs((await documentPanel.boundingBox())!.width - (await resultPanel.boundingBox())!.width),
+  ).toBeLessThan(1)
+  const divider = page.getByRole('separator')
+  await expect(divider).toHaveAttribute('aria-valuenow', '50')
+  const splitBounds = (await page.locator('.workspace-panels').boundingBox())!
+  const handle = (await divider.boundingBox())!
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(splitBounds.x + splitBounds.width * 0.65, handle.y + handle.height / 2, {
+    steps: 12,
+  })
+  await expect(divider).toHaveAttribute('aria-valuenow', '65')
+  await expect
+    .poll(async () => (await page.locator('.pdf-canvas').boundingBox())!.width)
+    .toBeGreaterThan(original!.width + 200)
+  await page.mouse.move(splitBounds.x + splitBounds.width + 10, handle.y + handle.height / 2)
+  await expect(divider).toHaveAttribute('aria-valuenow', '75')
+  await page.mouse.move(splitBounds.x - 10, handle.y + handle.height / 2)
+  await expect(divider).toHaveAttribute('aria-valuenow', '25')
+  await page.mouse.up()
+  await expect(page.locator('.workspace-panels')).not.toHaveClass(/is-resizing/)
+  await divider.dblclick()
+  await expect(divider).toHaveAttribute('aria-valuenow', '50')
   expect(
     await page.locator('.pdf-canvas').evaluate((element) => {
       const canvas = element as HTMLCanvasElement
@@ -101,12 +132,27 @@ test('OCR flow, PDF pagination/zoom, clipboard, exact download and file replacem
   await expect(page.getByText('Trang 2 / 2')).toBeVisible()
   await page.getByRole('button', { name: 'Phóng to', exact: true }).click()
   await expect(page.getByText('125%')).toBeVisible()
-  await page.getByRole('button', { name: 'Chạy OCR' }).click()
+  await page.getByRole('button', { name: 'Đọc tài liệu' }).click()
   await expect(page.getByRole('button', { name: 'Đang xử lý…', exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: 'Đổi file' })).toBeDisabled()
   await expect(page.getByRole('button', { name: 'Tài liệu mới' })).toBeDisabled()
   finish()
   await expect(page.getByRole('table')).toBeVisible()
+  await page.getByRole('button', { name: 'Thu nhỏ', exact: true }).click()
+  await expect(page.getByText('100%')).toBeVisible()
+  await expect
+    .poll(() =>
+      page.locator('.pdf-canvas').evaluate((canvas) => {
+        const scroll = canvas.parentElement!
+        const style = getComputedStyle(scroll)
+        const available =
+          scroll.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+        return Math.abs(canvas.getBoundingClientRect().width - available)
+      }),
+    )
+    .toBeLessThan(1)
+  await expect(page.locator('.preview-loading')).toHaveCount(0)
+  await page.screenshot({ path: testInfo.outputPath('pdf-comparison-1920.png'), fullPage: true })
   expect(count).toBe(1)
   await page.getByRole('tab', { name: 'Markdown', exact: true }).click()
   await expect(page.locator('.markdown-source')).toHaveText(markdown)
@@ -133,13 +179,17 @@ test('OCR flow, PDF pagination/zoom, clipboard, exact download and file replacem
   await expect(
     page.getByText('Chưa hỗ trợ xem trước định dạng này.', { exact: false }),
   ).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Sao chép Markdown' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Sao chép Markdown' })).toHaveCount(0)
   await page.getByRole('button', { name: 'Tài liệu mới' }).click()
-  await expect(page.getByRole('heading', { name: 'Đặt tài liệu của bạn ở đây' })).toBeVisible()
+  await expect(
+    page
+      .getByRole('region', { name: 'Vùng làm việc OCR' })
+      .getByRole('button', { name: 'Chọn tài liệu', exact: true }),
+  ).toBeVisible()
   expect(errors).toEqual([])
 })
 
-for (const width of [1440, 768, 390]) {
+for (const width of [1440, 768, 390, 320]) {
   test(`workspace and result fit ${width}px with keyboard/mobile navigation`, async ({
     page,
   }, testInfo) => {
@@ -149,7 +199,7 @@ for (const width of [1440, 768, 390]) {
       route.fulfill({ contentType: 'text/markdown', body: markdown }),
     )
     await page.goto('/')
-    await expect(page.getByRole('button', { name: 'API đã kết nối' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Đã kết nối' })).toBeVisible()
     await page.screenshot({ path: testInfo.outputPath(`empty-${width}.png`), fullPage: true })
     const input = page.getByLabel('Chọn tài liệu', { exact: true })
     await input.setInputFiles({
@@ -157,21 +207,30 @@ for (const width of [1440, 768, 390]) {
       mimeType: 'application/octet-stream',
       buffer: Buffer.from('synthetic'),
     })
-    await page.getByRole('button', { name: 'Chạy OCR' }).click()
+    await page.getByRole('button', { name: 'Đọc tài liệu' }).click()
     await expect(page.getByRole('table')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Tải Markdown' })).toBeVisible()
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
     ).toBe(true)
     await page.screenshot({ path: testInfo.outputPath(`result-${width}.png`), fullPage: true })
+    if (width >= 960) {
+      await page.getByRole('separator').press('End')
+      await expect(page.getByRole('separator')).toHaveAttribute('aria-valuenow', '75')
+      await expect(page.getByRole('tab', { name: 'Markdown' })).toBeVisible()
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true)
+      await page.getByRole('separator').press('Enter')
+    }
     const tab = page.getByRole('tab', { name: 'Trình bày' })
     await tab.focus()
     await page.keyboard.press('ArrowRight')
     await expect(page.getByRole('tab', { name: 'Markdown' })).toBeFocused()
     if (width < 960) {
+      await expect(page.getByRole('separator')).toHaveCount(0)
       await page.getByRole('tab', { name: 'Bản gốc', exact: true }).click()
       await expect(page.locator('.file-fallback')).toBeVisible()
-      await page.getByRole('button', { name: 'Mở điều hướng' }).click()
       await page.getByRole('button', { name: 'Tài liệu mới' }).click()
     }
   })
@@ -193,7 +252,7 @@ test('HTTP failure, explicit retry, image preview and blocked remote images/HTML
       ? route.fulfill({ status: 503, json: { detail: 'busy' }, headers: { 'Retry-After': '3' } })
       : route.fulfill({
           contentType: 'text/markdown',
-          body: '# Safe\n\n![external](https://example.com/image.png)\n\n<img src="https://example.com/html.png" onerror="window.injected=true" />\n<script>window.injected=true</script>',
+          body: '# Safe\n\n![external](https://example.com/image.png)\n\n<img src="https://example.com/html.png" onerror="window.injected=true" />\n<script>window.injected=true</script>\n\n<table onclick="window.injected=true" style="background:url(https://example.com/style)"><tr><th colspan="2">Hàng hóa</th></tr><tr><td>Tài liệu A</td><td>12</td></tr></table>',
         })
   })
   await page.goto('/')
@@ -210,11 +269,16 @@ test('HTTP failure, explicit retry, image preview and blocked remote images/HTML
   await expect(page.locator('.image-preview')).toBeVisible()
   await page.getByRole('button', { name: 'Phóng to', exact: true }).click()
   await expect(page.getByText('125%')).toBeVisible()
-  await page.getByRole('button', { name: 'Chạy OCR' }).click()
+  await page.getByRole('button', { name: 'Đọc tài liệu' }).click()
   await expect(page.getByRole('alert')).toContainText('3 giây')
   expect(count).toBe(1)
-  await page.getByRole('button', { name: 'Thử lại OCR' }).click()
+  await page.getByRole('button', { name: 'Thử lại' }).click()
   await expect(page.getByText('[Ảnh: external]')).toBeVisible()
+  await expect(page.getByRole('cell', { name: 'Tài liệu A' })).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: 'Hàng hóa' })).toHaveAttribute('colspan', '2')
+  await expect(page.locator('.markdown-content [onclick], .markdown-content [style]')).toHaveCount(
+    0,
+  )
   expect(remoteRequests).toBe(0)
   await expect(page.locator('.markdown-content img, .markdown-content script')).toHaveCount(0)
 })

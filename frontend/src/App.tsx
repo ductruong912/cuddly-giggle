@@ -5,16 +5,13 @@ import {
   BookOpen,
   Check,
   CheckCircle2,
-  ChevronRight,
   Circle,
   Copy,
   FileCheck2,
   FilePlus2,
   FileText,
   LoaderCircle,
-  Menu,
   ScanLine,
-  Sparkles,
   Upload,
   X,
 } from 'lucide-react'
@@ -42,11 +39,14 @@ export default function App() {
   const [elapsed, setElapsed] = useState(0)
   const [outputTab, setOutputTab] = useState<'rendered' | 'source'>('rendered')
   const [mobileTab, setMobileTab] = useState<'document' | 'result'>('document')
-  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [copyFeedback, setCopyFeedback] = useState('')
+  const [documentShare, setDocumentShare] = useState(50)
+  const [resizing, setResizing] = useState(false)
   const input = useRef<HTMLInputElement>(null)
-  const menu = useRef<HTMLButtonElement>(null)
+  const panels = useRef<HTMLDivElement>(null)
+  const workspace = useRef<HTMLElement>(null)
+  const output = useRef<HTMLDivElement>(null)
   const outputButtons = useRef<(HTMLButtonElement | null)[]>([])
   const mobileButtons = useRef<(HTMLButtonElement | null)[]>([])
   const activeURL = useRef<string | null>(null)
@@ -93,6 +93,10 @@ export default function App() {
     return () => clearInterval(timer)
   }, [status])
 
+  useEffect(() => {
+    if (status === 'done') output.current?.focus({ preventScroll: true })
+  }, [status])
+
   function chooseFiles(files: FileList | null) {
     if (busy.current || !config || !files?.length) return
     if (files.length !== 1) {
@@ -116,6 +120,7 @@ export default function App() {
     setStatus('ready')
     setMobileTab('document')
     setOutputTab('rendered')
+    setDocumentShare(50)
   }
 
   function reset() {
@@ -129,13 +134,9 @@ export default function App() {
     setElapsed(0)
     setStatus('idle')
     setMobileTab('document')
-    closeSidebar()
+    setDocumentShare(50)
     if (input.current) input.current.value = ''
-  }
-
-  function closeSidebar() {
-    if (sidebarOpen) menu.current?.focus()
-    setSidebarOpen(false)
+    workspace.current?.focus({ preventScroll: true })
   }
 
   async function process() {
@@ -204,16 +205,16 @@ export default function App() {
 
   const processing = status === 'processing'
   const statusLabel = {
-    idle: 'Chưa có tài liệu',
-    ready: 'Sẵn sàng xử lý',
+    idle: 'Chọn tài liệu',
+    ready: 'Sẵn sàng',
     processing: 'Đang xử lý',
-    done: 'Đã hoàn tất',
-    error: 'Chưa hoàn tất',
+    done: 'Hoàn tất',
+    error: 'Cần thử lại',
   }[status]
   const connectionLabel = {
-    checking: 'Đang kết nối API',
-    online: 'API đã kết nối',
-    offline: 'API chưa kết nối',
+    checking: 'Đang kết nối',
+    online: 'Đã kết nối',
+    offline: 'Mất kết nối',
   }[connection]
 
   return (
@@ -221,119 +222,46 @@ export default function App() {
       <a href="#workspace" className="skip-link">
         Đến vùng làm việc
       </a>
-      {sidebarOpen && (
-        <button className="sidebar-backdrop" aria-label="Đóng điều hướng" onClick={closeSidebar} />
-      )}
-      <aside
-        id="main-navigation"
-        className={`sidebar ${sidebarOpen ? 'is-open' : ''}`}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') closeSidebar()
-        }}
-      >
-        <a className="brand" href="/" aria-label="OCR Playground — trang chính">
-          <span className="brand-mark">
-            <ScanLine size={23} />
-          </span>
-          <span>
-            folio<span className="brand-dot">.</span>
-          </span>
-        </a>
-        <div className="workspace-label">
-          <span className="workspace-avatar">F</span>
-          <div>
-            Không gian nội bộ<small>Document workspace</small>
-          </div>
-          <ChevronRight size={14} />
-        </div>
-        <p className="nav-caption">KHÔNG GIAN LÀM VIỆC</p>
-        <nav aria-label="Điều hướng">
-          <a
-            href="#workspace"
-            className="nav-item active"
-            aria-current="page"
-            onClick={closeSidebar}
-          >
-            <ScanLine size={18} />
-            OCR Playground<span className="nav-count">01</span>
-          </a>
-          <button className="nav-item" onClick={reset} disabled={processing}>
-            <FilePlus2 size={18} />
-            Tài liệu mới
-          </button>
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="local-note">
-            <span className="local-dot" />
-            <strong>Đọc tài liệu tại máy chủ</strong>
-            <p>Không gian gọn gàng để chuyển tài liệu thành nội dung có thể sử dụng.</p>
-          </div>
-          <a className="nav-item docs-link" href="/docs" target="_blank" rel="noreferrer">
-            <BookOpen size={17} />
-            Tài liệu API
-            <ArrowRight size={14} />
-          </a>
-          <div className="sidebar-footer">
-            <span>FOLIO / OCR</span>
-            <span>v0.1</span>
-          </div>
-        </div>
-      </aside>
-
       <main className="main-shell">
         <header className="topbar">
-          <button
-            className="icon-button menu-toggle"
-            ref={menu}
-            aria-label="Mở điều hướng"
-            aria-controls="main-navigation"
-            aria-expanded={sidebarOpen}
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-          >
-            <Menu size={20} />
-          </button>
-          <div className="breadcrumb">
-            <span>Không gian làm việc</span>
-            <ChevronRight size={13} />
-            <strong>OCR Playground</strong>
-          </div>
-          <button
-            className={`connection ${connection}`}
-            title="Kiểm tra lại kết nối API"
-            onClick={() => setRefresh(refresh + 1)}
-          >
-            <span className="status-dot" />
-            {connectionLabel}
-          </button>
-        </header>
-
-        <section className="intro">
-          <div>
-            <p className="eyebrow">
-              <span />
-              TÀI LIỆU THÀNH NỘI DUNG
-            </p>
-            <h1>
-              OCR Playground<span className="heading-dot">.</span>
-            </h1>
-            <p className="intro-description">Đọc tài liệu. Giữ lại cấu trúc. Sẵn sàng sử dụng.</p>
-          </div>
-          <div className="workflow-steps" aria-label="Quy trình">
-            <span className={selection ? 'step-complete' : 'step-current'}>
-              <i>{selection ? <Check size={12} /> : '1'}</i>Chọn tài liệu
+          <a className="brand" href="/" aria-label="cuddly giggle — trang chính">
+            <span className="brand-mark">
+              <ScanLine size={23} />
             </span>
-            <ChevronRight size={13} />
-            <span
-              className={processing ? 'step-current' : status === 'done' ? 'step-complete' : ''}
+            <span>cuddly giggle</span>
+          </a>
+          <h1>Đọc tài liệu</h1>
+          <div className="topbar-actions">
+            {selection && (
+              <button
+                className="secondary-button new-document"
+                onClick={reset}
+                disabled={processing}
+              >
+                <FilePlus2 size={17} />
+                Tài liệu mới
+              </button>
+            )}
+            <button
+              className={`connection ${connection}`}
+              title="Kiểm tra lại kết nối"
+              onClick={() => setRefresh(refresh + 1)}
             >
-              <i>{status === 'done' ? <Check size={12} /> : '2'}</i>Đọc / OCR
-            </span>
-            <ChevronRight size={13} />
-            <span className={status === 'done' ? 'step-current' : ''}>
-              <i>3</i>Xem kết quả
-            </span>
+              <span className="status-dot" />
+              {connectionLabel}
+            </button>
+            <a
+              className="icon-button docs-link"
+              href="/docs"
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Tài liệu API"
+              title="Tài liệu API"
+            >
+              <BookOpen size={18} />
+            </a>
           </div>
-        </section>
+        </header>
 
         <input
           ref={input}
@@ -370,7 +298,8 @@ export default function App() {
 
         <section
           id="workspace"
-          className={`workspace ${dragging ? 'is-dragging' : ''}`}
+          ref={workspace}
+          className={`workspace ${selection ? 'has-document' : 'is-empty'} ${dragging ? 'is-dragging' : ''}`}
           aria-label="Vùng làm việc OCR"
           tabIndex={-1}
           onDragOver={(event) => {
@@ -393,63 +322,77 @@ export default function App() {
               <strong>Thả tài liệu để bắt đầu</strong>
             </div>
           )}
-          <div className="workspace-header">
-            <div className="workspace-title">
-              <FileText size={17} />
-              <span>{selection?.file.name ?? 'Không gian tài liệu'}</span>
-              {selection && <small>{formatBytes(selection.file.size)}</small>}
+          {selection && (
+            <div className="workspace-header">
+              <div className="workspace-title">
+                <FileText size={17} />
+                <span>{selection.file.name}</span>
+                <small>{formatBytes(selection.file.size)}</small>
+              </div>
+              <span className={`document-status ${status}`} role="status">
+                {processing ? (
+                  <LoaderCircle className="spin" size={13} />
+                ) : status === 'done' ? (
+                  <CheckCircle2 size={13} />
+                ) : (
+                  <span className="status-dot" />
+                )}
+                {statusLabel}
+              </span>
             </div>
-            <span className={`document-status ${status}`} role="status">
-              {processing ? (
-                <LoaderCircle className="spin" size={13} />
-              ) : status === 'done' ? (
-                <CheckCircle2 size={13} />
-              ) : (
-                <span className="status-dot" />
-              )}
-              {statusLabel}
-            </span>
-          </div>
-          <div className="mobile-tabs" role="tablist" aria-label="Vùng hiển thị">
-            {(['document', 'result'] as const).map((tab, index) => (
-              <button
-                key={tab}
-                role="tab"
-                id={`mobile-tab-${tab}`}
-                aria-controls={`panel-${tab}`}
-                aria-selected={mobileTab === tab}
-                tabIndex={mobileTab === tab ? 0 : -1}
-                ref={(element) => {
-                  mobileButtons.current[index] = element
-                }}
-                onClick={() => setMobileTab(tab)}
-                onKeyDown={(event) => {
-                  if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
-                    event.preventDefault()
-                    const target = event.key === 'Home' ? 0 : event.key === 'End' ? 1 : 1 - index
-                    setMobileTab(target ? 'result' : 'document')
-                    mobileButtons.current[target]?.focus()
+          )}
+          {selection && (
+            <div className="mobile-tabs" role="tablist" aria-label="Vùng hiển thị">
+              {(['document', 'result'] as const).map((tab, index) => (
+                <button
+                  key={tab}
+                  role="tab"
+                  id={`mobile-tab-${tab}`}
+                  aria-controls={`panel-${tab}`}
+                  aria-selected={mobileTab === tab}
+                  tabIndex={mobileTab === tab ? 0 : -1}
+                  ref={(element) => {
+                    mobileButtons.current[index] = element
+                  }}
+                  onClick={() => setMobileTab(tab)}
+                  onKeyDown={(event) => {
+                    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+                      event.preventDefault()
+                      const target = event.key === 'Home' ? 0 : event.key === 'End' ? 1 : 1 - index
+                      setMobileTab(target ? 'result' : 'document')
+                      mobileButtons.current[target]?.focus()
+                    }
+                  }}
+                >
+                  {tab === 'document' ? 'Bản gốc' : 'Kết quả'}
+                </button>
+              ))}
+            </div>
+          )}
+          <div
+            ref={panels}
+            className={`workspace-panels ${resizing ? 'is-resizing' : ''}`}
+            style={
+              selection
+                ? {
+                    gridTemplateColumns: `minmax(0, ${documentShare}fr) 10px minmax(0, ${100 - documentShare}fr)`,
                   }
-                }}
-              >
-                {tab === 'document' ? 'Bản gốc' : 'Kết quả'}
-              </button>
-            ))}
-          </div>
-          <div className="workspace-panels">
+                : undefined
+            }
+          >
             <section
               id="panel-document"
               className={`document-panel panel ${mobileTab === 'document' ? 'mobile-active' : ''}`}
               aria-label="Bản gốc"
             >
-              <div className="panel-header">
-                <span>
-                  <span className="panel-number">01</span>Bản gốc
-                </span>
-                <span className="panel-meta">
-                  {selection ? fileSuffix(selection.file.name).slice(1).toUpperCase() : 'INPUT'}
-                </span>
-              </div>
+              {selection && (
+                <div className="panel-header">
+                  <span>Bản gốc</span>
+                  <span className="panel-meta">
+                    {fileSuffix(selection.file.name).slice(1).toUpperCase()}
+                  </span>
+                </div>
+              )}
               {selection ? (
                 <DocumentPreview key={selection.id} file={selection.file} url={selection.url} />
               ) : (
@@ -470,17 +413,10 @@ export default function App() {
                         <i />
                       </div>
                     </div>
-                    <span className="paper-plus">
-                      <PlusIcon />
-                    </span>
+                    <span className="paper-plus">+</span>
                   </div>
-                  <p className="empty-eyebrow">MỖI TÀI LIỆU, MỘT KHỞI ĐẦU</p>
-                  <h2>Đặt tài liệu của bạn ở đây</h2>
-                  <p>
-                    Kéo thả file vào không gian này
-                    <br />
-                    hoặc chọn từ máy tính của bạn.
-                  </p>
+                  <h2>Tài liệu của bạn, dễ đọc hơn.</h2>
+                  <p>Kéo thả file vào đây hoặc</p>
                   <button
                     className="primary-button upload-button"
                     disabled={!config}
@@ -490,186 +426,234 @@ export default function App() {
                     Chọn tài liệu
                     <ArrowRight size={16} />
                   </button>
-                  <div className="format-tags">
-                    <span>PDF</span>
-                    <span>WORD</span>
-                    <span>EXCEL</span>
-                    <span>ẢNH</span>
-                  </div>
-                  <small>
-                    {config
-                      ? `Tối đa ${formatBytes(config.max_upload_bytes)} / file`
-                      : 'Đang tải giới hạn upload…'}
+                  <small className="upload-limits">
+                    PDF, Word, Excel, ảnh
+                    <span>
+                      {config
+                        ? `Tối đa ${formatBytes(config.max_upload_bytes)}`
+                        : 'Đang tải giới hạn…'}
+                    </span>
                   </small>
+                  {config && <small>PDF cần OCR: tối đa {config.pdf_max_pages} trang</small>}
                 </div>
               )}
             </section>
-            <section
-              id="panel-result"
-              className={`result-panel panel ${mobileTab === 'result' ? 'mobile-active' : ''}`}
-              aria-label="Kết quả"
-            >
-              <div className="panel-header">
-                <span>
-                  <span className="panel-number">02</span>Kết quả
-                </span>
-                <div className="output-tabs" role="tablist" aria-label="Định dạng kết quả">
-                  {(['rendered', 'source'] as const).map((tab, index) => (
-                    <button
-                      key={tab}
-                      id={`output-tab-${tab}`}
-                      role="tab"
-                      aria-selected={outputTab === tab}
-                      aria-controls="output-content"
-                      tabIndex={outputTab === tab ? 0 : -1}
-                      ref={(element) => {
-                        outputButtons.current[index] = element
-                      }}
-                      onClick={() => setOutputTab(tab)}
-                      onKeyDown={(event) => {
-                        if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
-                          event.preventDefault()
-                          const target =
-                            event.key === 'Home' ? 0 : event.key === 'End' ? 1 : 1 - index
-                          setOutputTab(target ? 'source' : 'rendered')
-                          outputButtons.current[target]?.focus()
-                        }
-                      }}
-                    >
-                      {tab === 'rendered' ? 'Trình bày' : 'Markdown'}
-                    </button>
-                  ))}
-                </div>
-              </div>
+            {selection && (
               <div
-                id="output-content"
-                className="output-content"
-                role="tabpanel"
-                aria-labelledby={`output-tab-${outputTab}`}
+                className="panel-divider"
+                role="separator"
                 tabIndex={0}
-                aria-busy={processing}
+                aria-label="Điều chỉnh độ rộng bản gốc và kết quả"
+                aria-orientation="vertical"
+                aria-controls="panel-document panel-result"
+                aria-valuemin={25}
+                aria-valuemax={75}
+                aria-valuenow={documentShare}
+                aria-valuetext={`Bản gốc ${documentShare}% · Kết quả ${100 - documentShare}%`}
+                title="Kéo để đổi độ rộng. Nhấp đúp hoặc nhấn Enter để chia đều."
+                onPointerDown={(event) => {
+                  if (event.button !== 0 || !event.isPrimary) return
+                  event.preventDefault()
+                  event.currentTarget.focus({ preventScroll: true })
+                  event.currentTarget.setPointerCapture(event.pointerId)
+                  setResizing(true)
+                }}
+                onPointerMove={(event) => {
+                  if (!event.currentTarget.hasPointerCapture(event.pointerId) || !panels.current)
+                    return
+                  const bounds = panels.current.getBoundingClientRect()
+                  const dividerWidth = event.currentTarget.getBoundingClientRect().width
+                  const share =
+                    (100 * (event.clientX - bounds.left - dividerWidth / 2)) /
+                    (bounds.width - dividerWidth)
+                  setDocumentShare(Math.min(75, Math.max(25, Math.round(share))))
+                }}
+                onPointerUp={(event) => {
+                  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                    event.currentTarget.releasePointerCapture(event.pointerId)
+                  }
+                }}
+                onLostPointerCapture={() => setResizing(false)}
+                onDoubleClick={() => setDocumentShare(50)}
+                onKeyDown={(event) => {
+                  const step = event.shiftKey ? 10 : 2
+                  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+                    event.preventDefault()
+                    setDocumentShare((share) =>
+                      Math.min(
+                        75,
+                        Math.max(25, share + (event.key === 'ArrowRight' ? step : -step)),
+                      ),
+                    )
+                  } else if (['Home', 'End', 'Enter'].includes(event.key)) {
+                    event.preventDefault()
+                    setDocumentShare(event.key === 'Home' ? 25 : event.key === 'End' ? 75 : 50)
+                  }
+                }}
               >
-                {markdown ? (
-                  outputTab === 'rendered' ? (
-                    <MarkdownResult markdown={markdown} />
+                <span aria-hidden="true" />
+              </div>
+            )}
+            {selection && (
+              <section
+                id="panel-result"
+                className={`result-panel panel ${mobileTab === 'result' ? 'mobile-active' : ''}`}
+                aria-label="Kết quả"
+              >
+                <div className="panel-header">
+                  <span>Kết quả</span>
+                  {markdown && (
+                    <div className="output-tabs" role="tablist" aria-label="Định dạng kết quả">
+                      {(['rendered', 'source'] as const).map((tab, index) => (
+                        <button
+                          key={tab}
+                          id={`output-tab-${tab}`}
+                          role="tab"
+                          aria-selected={outputTab === tab}
+                          aria-controls="output-content"
+                          tabIndex={outputTab === tab ? 0 : -1}
+                          ref={(element) => {
+                            outputButtons.current[index] = element
+                          }}
+                          onClick={() => setOutputTab(tab)}
+                          onKeyDown={(event) => {
+                            if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+                              event.preventDefault()
+                              const target =
+                                event.key === 'Home' ? 0 : event.key === 'End' ? 1 : 1 - index
+                              setOutputTab(target ? 'source' : 'rendered')
+                              outputButtons.current[target]?.focus()
+                            }
+                          }}
+                        >
+                          {tab === 'rendered' ? 'Trình bày' : 'Markdown'}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div
+                  id="output-content"
+                  ref={output}
+                  className="output-content"
+                  role="tabpanel"
+                  aria-labelledby={markdown ? `output-tab-${outputTab}` : undefined}
+                  aria-label={markdown ? undefined : 'Kết quả đọc tài liệu'}
+                  tabIndex={0}
+                  aria-busy={processing}
+                >
+                  {markdown ? (
+                    outputTab === 'rendered' ? (
+                      <MarkdownResult markdown={markdown} />
+                    ) : (
+                      <pre className="markdown-source">{markdown}</pre>
+                    )
                   ) : (
-                    <pre className="markdown-source">{markdown}</pre>
-                  )
-                ) : (
-                  <div className="result-empty">
-                    <div className={`result-symbol ${processing ? 'processing-symbol' : ''}`}>
+                    <div className="result-empty">
+                      <div className={`result-symbol ${processing ? 'processing-symbol' : ''}`}>
+                        {processing ? (
+                          <LoaderCircle className="spin" size={26} />
+                        ) : status === 'error' ? (
+                          <FileText size={26} />
+                        ) : (
+                          <FileCheck2 size={26} strokeWidth={1.4} />
+                        )}
+                      </div>
+                      <h2>
+                        {processing
+                          ? 'Đang đọc tài liệu…'
+                          : status === 'error'
+                            ? 'Chưa đọc được tài liệu'
+                            : 'Sẵn sàng đọc'}
+                      </h2>
+                      <p>
+                        {processing
+                          ? 'Tài liệu nhiều trang có thể cần thêm thời gian.'
+                          : status === 'error'
+                            ? 'Kiểm tra thông báo và thử lại.'
+                            : 'Nhấn “Đọc tài liệu” để bắt đầu.'}
+                      </p>
                       {processing ? (
-                        <LoaderCircle className="spin" size={26} />
-                      ) : status === 'error' ? (
-                        <FileText size={26} />
+                        <span className="elapsed" role="status">
+                          Đã chờ {elapsed} giây
+                        </span>
                       ) : (
-                        <FileCheck2 size={26} strokeWidth={1.4} />
+                        <div className="result-placeholder" aria-hidden="true">
+                          <span />
+                          <span />
+                          <span />
+                          <div />
+                          <span />
+                        </div>
                       )}
                     </div>
-                    <h2>
-                      {processing
-                        ? 'Đang đọc tài liệu của bạn'
-                        : status === 'error'
-                          ? 'Chưa có kết quả OCR'
-                          : 'Nội dung sẽ xuất hiện ở đây'}
-                    </h2>
-                    <p>
-                      {processing
-                        ? 'Tài liệu nhiều trang có thể cần thêm thời gian.'
-                        : status === 'error'
-                          ? 'Kiểm tra thông báo lỗi rồi thử lại khi sẵn sàng.'
-                          : 'Văn bản và bảng trong tài liệu được chuyển\nthành Markdown để bạn xem và sử dụng.'}
-                    </p>
+                  )}
+                </div>
+              </section>
+            )}
+          </div>
+          {selection && (
+            <footer className="action-bar">
+              <div className="file-actions">
+                <button
+                  className="secondary-button"
+                  disabled={processing || !config}
+                  onClick={() => input.current?.click()}
+                >
+                  <Upload size={15} />
+                  Đổi file
+                </button>
+              </div>
+              <div className="output-actions">
+                {markdown ? (
+                  <>
+                    <button
+                      className="secondary-button export-button"
+                      aria-label="Sao chép Markdown"
+                      title="Sao chép Markdown"
+                      disabled={!markdown || processing}
+                      onClick={() => void copy()}
+                    >
+                      {copyFeedback === 'Đã sao chép' ? <Check size={17} /> : <Copy size={17} />}
+                      <span>Sao chép</span>
+                    </button>
+                    <button
+                      className="primary-button export-button"
+                      aria-label="Tải Markdown"
+                      title="Tải Markdown"
+                      disabled={!markdown || processing}
+                      onClick={download}
+                    >
+                      <ArrowDownToLine size={15} />
+                      <span>Tải xuống</span>
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="primary-button run-button"
+                    disabled={!selection || !config || processing}
+                    onClick={() => void process()}
+                  >
                     {processing ? (
-                      <span className="elapsed" role="status">
-                        Đã chờ {elapsed} giây
-                      </span>
+                      <LoaderCircle className="spin" size={16} />
                     ) : (
-                      <div className="result-placeholder" aria-hidden="true">
-                        <span />
-                        <span />
-                        <span />
-                        <div />
-                        <span />
-                      </div>
+                      <ScanLine size={16} />
                     )}
-                    {!selection && (
-                      <span className="result-hint">
-                        <Sparkles size={13} />
-                        Từ bản gốc đến nội dung có cấu trúc
-                      </span>
-                    )}
-                  </div>
+                    {processing ? 'Đang xử lý…' : status === 'error' ? 'Thử lại' : 'Đọc tài liệu'}
+                    {!processing && <ArrowRight size={15} />}
+                  </button>
                 )}
               </div>
-            </section>
-          </div>
-          <footer className="action-bar">
-            <div className="file-actions">
-              <button
-                className="secondary-button"
-                disabled={processing || !config}
-                onClick={() => input.current?.click()}
-              >
-                <Upload size={15} />
-                {selection ? 'Đổi file' : 'Chọn file'}
-              </button>
-              <span className="file-action-hint">
-                {selection
-                  ? `${fileSuffix(selection.file.name).slice(1).toUpperCase()} · ${formatBytes(selection.file.size)}`
-                  : 'Một tài liệu mỗi lần xử lý'}
-              </span>
-            </div>
-            <div className="output-actions">
-              <button
-                className="icon-button export-button"
-                aria-label="Sao chép Markdown"
-                disabled={!markdown || processing}
-                onClick={() => void copy()}
-              >
-                {copyFeedback === 'Đã sao chép' ? <Check size={17} /> : <Copy size={17} />}
-              </button>
-              <button
-                className="secondary-button export-button"
-                disabled={!markdown || processing}
-                onClick={download}
-              >
-                <ArrowDownToLine size={15} />
-                <span>Tải Markdown</span>
-              </button>
-              <span className="action-divider" />
-              <button
-                className="primary-button run-button"
-                disabled={!selection || !config || processing}
-                onClick={() => void process()}
-              >
-                {processing ? <LoaderCircle className="spin" size={16} /> : <ScanLine size={16} />}
-                {processing ? 'Đang xử lý…' : status === 'error' ? 'Thử lại OCR' : 'Chạy OCR'}
-                {!processing && <ArrowRight size={15} />}
-              </button>
-            </div>
-          </footer>
+            </footer>
+          )}
           <div className="sr-only" role="status">
             {copyFeedback}
           </div>
           {copyFeedback && <div className="copy-toast">{copyFeedback}</div>}
         </section>
 
-        <footer className="page-footer">
-          <span>
-            PDF, Word, Excel & ảnh<span className="footer-dot">·</span>Đọc tài liệu tại máy chủ
-          </span>
-          <span>
-            {config ? `PDF cần OCR: tối đa ${config.pdf_max_pages} trang` : 'OCR Playground'}
-            <span className="footer-dot">·</span>
-            {status === 'done' ? `${elapsed} giây` : 'Markdown output'}
-          </span>
-        </footer>
+        {status === 'done' && <p className="completion-note">Đã đọc xong · {elapsed} giây</p>}
       </main>
     </div>
   )
-}
-
-function PlusIcon() {
-  return <span>+</span>
 }

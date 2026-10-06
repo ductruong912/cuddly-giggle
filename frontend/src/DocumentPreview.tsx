@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, FileText, LoaderCircle, Minus, Plus } from 'lucide-react'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
-import { fileSuffix, formatBytes } from './api'
+import { fileSuffix } from './api'
 
 function ZoomControls({ zoom, onChange }: { zoom: number; onChange: (value: number) => void }) {
   return (
@@ -41,7 +41,7 @@ function PDFPreview({ file }: { file: File }) {
     const element = container.current
     if (!element) return
     const observer = new ResizeObserver(([entry]) =>
-      setWidth(Math.max(160, entry.contentRect.width - 48)),
+      setWidth(Math.max(160, entry.contentRect.width)),
     )
     observer.observe(element)
     return () => observer.disconnect()
@@ -203,13 +203,7 @@ export default function DocumentPreview({ file, url }: { file: File; url: string
         <FileText size={42} strokeWidth={1.2} />
         <span>{suffix.slice(1).toUpperCase()}</span>
       </div>
-      <h3>{file.name}</h3>
-      <p>{formatBytes(file.size)}</p>
-      <p className="fallback-description">
-        Chưa hỗ trợ xem trước định dạng này.
-        <br />
-        Chạy OCR để đọc nội dung và bảng trong tài liệu.
-      </p>
+      <p className="fallback-description">Chưa hỗ trợ xem trước định dạng này.</p>
     </div>
   )
 }
