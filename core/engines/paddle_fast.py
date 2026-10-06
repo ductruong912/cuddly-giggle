@@ -26,6 +26,7 @@ class PaddleOCRFastEngine:
     """Run the general PaddleOCR pipeline with the CPU-oriented v6 profile."""
 
     name = "paddleocr_fast"
+    model_profile = "cpu"
 
     def __init__(self, app_settings: Settings = settings) -> None:
         self.settings = app_settings
@@ -182,7 +183,7 @@ class PaddleOCRFastEngine:
 
     def _get_or_create_pipeline(self) -> Any:
         if os.getenv("CUDDLY_GIGGLE_MODEL_SETUP") != "1":
-            require_model_profile(self.settings, "fast-onnx")
+            require_model_profile(self.settings, self.model_profile)
         with self._pipeline_lock:
             if self._pipeline is None:
                 initialization_start = time.perf_counter()

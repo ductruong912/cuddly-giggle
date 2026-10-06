@@ -99,7 +99,6 @@ class Settings:
     po_line_total_tolerance_ratio: float = _get_float("PO_LINE_TOTAL_TOLERANCE_RATIO", 0.01)
 
     # --- OCR engines ---
-    primary_engine: str                = _get_str("OCR_PRIMARY_ENGINE", "paddleocr_vl")
     ocr_device: str                    = os.getenv("OCR_DEVICE", "").strip()
     ocr_inference_engine: str          = os.getenv("OCR_INFERENCE_ENGINE", "").strip()
     paddleocr_vl_pipeline_version: str = _get_str("PADDLEOCR_VL_PIPELINE_VERSION", "v1.6")

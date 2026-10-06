@@ -53,6 +53,7 @@ ENV/
 test/
 docs/
 .superpowers/
-
+.agents/
+AGENTS.md
 # Written by `python -m eval.run_eval --json`.
 /eval-report.json

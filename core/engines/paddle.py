@@ -32,6 +32,7 @@ class PaddlePipelineEngine(ParseEngine):
     shared so the two adapters do not duplicate them.
     """
 
+    model_profile: str
     cli_subcommand: str
 
     def __init__(self, app_settings: Settings = settings) -> None:
@@ -342,7 +343,7 @@ class PaddlePipelineEngine(ParseEngine):
 
     def _get_or_create_pipeline(self, pipeline_cls: type, kwargs: dict[str, Any]):  # type: ignore[no-untyped-def]
         if os.getenv("CUDDLY_GIGGLE_MODEL_SETUP") != "1":
-            require_model_profile(self.settings, self.name.replace("_", "-"))
+            require_model_profile(self.settings, self.model_profile)
         key = tuple(sorted((str(k), str(v)) for k, v in kwargs.items()))
         with self._pipeline_lock:
             if self._pipeline is None or self._pipeline_key != key:
@@ -360,6 +361,7 @@ class PaddlePipelineEngine(ParseEngine):
 
 class PaddleOCRVLEngine(PaddlePipelineEngine):
     name = "paddleocr_vl"
+    model_profile = "gpu"
     cli_subcommand = "doc_parser"
 
     def _load_pipeline_cls(self) -> type:

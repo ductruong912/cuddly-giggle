@@ -13,26 +13,25 @@ if str(REPO_ROOT) not in sys.path:
 
 from config.config import settings  # noqa: E402
 from core.engines.paddle_fast import PaddleOCRFastEngine  # noqa: E402
-from core.engines.registry import create_engine  # noqa: E402
+from core.engines.paddle import PaddleOCRVLEngine  # noqa: E402
 from services.model_assets import write_model_profile  # noqa: E402
 
 
-_PROFILES = ("fast-onnx", "paddleocr-vl")
+_PROFILES = ("cpu", "gpu")
 
 
 def _warm(profile: str) -> None:
-    if profile == "fast-onnx":
+    if profile == "cpu":
         PaddleOCRFastEngine(settings).warmup()
     else:
-        engine = create_engine(profile.replace("-", "_"), settings)
-        engine.warmup()
+        PaddleOCRVLEngine(settings).warmup()
     write_model_profile(settings, profile)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--fast-onnx", action="store_true", help="Download Fast OCR ONNX models.")
-    parser.add_argument("--paddleocr-vl", action="store_true", help="Download PaddleOCR-VL models.")
+    parser.add_argument("--cpu", action="store_true", help="Download CPU OCR models.")
+    parser.add_argument("--gpu", action="store_true", help="Download GPU OCR models.")
     args = parser.parse_args(argv)
     selected = [profile for profile in _PROFILES if getattr(args, profile.replace("-", "_"))]
     if not selected:

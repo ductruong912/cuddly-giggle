@@ -14,6 +14,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 
 SETUP_STEPS = ("dependencies", "ocr-models", "llama")
@@ -104,39 +105,30 @@ def install_dependencies() -> None:
 
 
 def warmup_ocr_models(
-    app_settings: object | None = None,
-    engine_factory: Callable[[str, object], object] | None = None,
+    app_settings: Any | None = None,
 ) -> None:
-    """Warm the configured primary OCR engine pipeline.
-
-    The optional arguments keep this adapter independent from concrete OCR
-    runtimes during tests while the normal CLI path uses the app's registry.
-    """
+    """Warm the same CPU/GPU OCR engine selected by the API on this machine."""
     if app_settings is None:
         from config.config import settings
 
         app_settings = settings
-    if engine_factory is None:
-        from core.engines.registry import create_engine
-
-        engine_factory = create_engine
 
     from services.model_assets import write_model_profile
+    from services.local_ocr_selector import LocalOCRSelector
 
     previous_setup_mode = os.environ.get("CUDDLY_GIGGLE_MODEL_SETUP")
     os.environ["CUDDLY_GIGGLE_MODEL_SETUP"] = "1"
     try:
-        engine_name = getattr(app_settings, "primary_engine")
-        normalized_name = (engine_name or "").strip().lower()
-        engine = engine_factory(engine_name, app_settings)
+        engine = LocalOCRSelector(app_settings).select()
+        profile = "gpu" if engine.name == "paddleocr_vl" else "cpu"
         warmup = getattr(engine, "warmup", None)
         if not callable(warmup):
             raise RuntimeError(
-                f"Configured OCR engine {engine_name!r} does not support warmup."
+                f"Selected OCR engine {engine.name!r} does not support warmup."
             )
         warmup()
         if hasattr(app_settings, "paddlex_cache_home"):
-            write_model_profile(app_settings, normalized_name.replace("_", "-"))
+            write_model_profile(app_settings, profile)
     finally:
         if previous_setup_mode is None:
             os.environ.pop("CUDDLY_GIGGLE_MODEL_SETUP", None)

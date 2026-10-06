@@ -188,7 +188,7 @@ Configure `.env` according to the API flow you will use. `OPENAI_API_KEY` is req
 Use this profile when there is no NVIDIA GPU. It runs PaddleOCR v6 and does not need llama.cpp or PaddlePaddle GPU.
 
 ```bash
-python scripts/setup_models.py --fast-onnx
+python scripts/setup_models.py --cpu
 ```
 
 Keep these values in `.env`:
@@ -207,7 +207,7 @@ Do not keep both PaddlePaddle CPU and GPU packages in the same virtual environme
 ```powershell
 python -m pip uninstall -y paddlepaddle paddlepaddle-gpu
 python -m pip install "paddlepaddle-gpu==3.3.0" -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
-python scripts/setup_models.py --paddleocr-vl
+python scripts/setup_models.py --gpu
 python scripts/setup_runtime.py --llama
 ```
 
