@@ -357,7 +357,6 @@ export default function DocumentPreview({
   selected,
   onSelect,
   showBbox,
-  onShowBboxChange,
   pageIndex,
   onPageChange,
   scrollSelected = false,
@@ -369,7 +368,6 @@ export default function DocumentPreview({
   selected: OCRBlock | null
   onSelect: (block: OCRBlock) => void
   showBbox: boolean
-  onShowBboxChange: (visible: boolean) => void
   pageIndex: number
   onPageChange: (index: number) => void
   scrollSelected?: boolean
@@ -395,18 +393,6 @@ export default function DocumentPreview({
   if (previewable)
     return (
       <>
-        {result ? (
-          <div className="bbox-toggle">
-            <label>
-              <input
-                type="checkbox"
-                checked={showBbox}
-                onChange={(event) => onShowBboxChange(event.target.checked)}
-              />
-              {t.bbox}
-            </label>
-          </div>
-        ) : null}
         {useProcessed && ocrPage && result ? (
           <OCRImagePreview
             page={ocrPage}

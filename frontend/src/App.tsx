@@ -60,7 +60,6 @@ export default function App() {
   const [activeBlock, setActiveBlock] = useState<OCRBlock | null>(null)
   const [selectionSource, setSelectionSource] = useState<'preview' | 'blocks'>('preview')
   const [previewPage, setPreviewPage] = useState(0)
-  const [showBbox, setShowBbox] = useState(false)
   const [error, setError] = useState<UIError | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [outputTab, setOutputTab] = useState<(typeof outputTabs)[number]>('rendered')
@@ -154,7 +153,6 @@ export default function App() {
     setOCRResult(null)
     setActiveBlock(null)
     setPreviewPage(0)
-    setShowBbox(false)
     setError(null)
     setCopyFeedback('')
     setElapsed(0)
@@ -187,7 +185,6 @@ export default function App() {
       if (controller.signal.aborted) return
       setMarkdown(result.markdown)
       setOCRResult(result)
-      setShowBbox(true)
       setStatus('done')
       setMobileTab('result')
     } catch (cause) {
@@ -224,7 +221,6 @@ export default function App() {
     setOutputTab('blocks')
     if (source === 'blocks') {
       setPreviewPage(block.page_index)
-      setShowBbox(true)
     }
   }
 
@@ -486,8 +482,7 @@ export default function App() {
                   onSelect={(block) => selectBlock(block, 'preview')}
                   pageIndex={previewPage}
                   onPageChange={setPreviewPage}
-                  showBbox={showBbox}
-                  onShowBboxChange={setShowBbox}
+                  showBbox={outputTab === 'blocks'}
                   scrollSelected={selectionSource === 'blocks'}
                 />
               ) : (

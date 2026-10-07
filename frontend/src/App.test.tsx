@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Mock } from 'vitest'
 import App from './App'
+import { getMessages } from './i18n'
 import MarkdownResult from './MarkdownResult'
 import { ocrFixture } from '../fixtures/ocrFixture'
 
@@ -43,6 +44,64 @@ async function upload(name = 'synthetic.docx', content = 'synthetic') {
 }
 
 describe('OCR workspace', () => {
+  it.each(['original', 'processed'])(
+    'only shows bbox in Blocks without a checkbox: %s coordinates',
+    async (coordinate_space) => {
+      const t = getMessages('vi')
+      const result = ocrFixture('# Synthetic OCR')
+      const block = {
+        block_id: 'region',
+        page_index: 0,
+        type: 'text',
+        content: 'Synthetic region',
+        bbox: [
+          { x: 10, y: 20 },
+          { x: 100, y: 20 },
+          { x: 100, y: 50 },
+        ],
+        confidence: 0.95,
+        source_engine: 'test',
+        extra: {},
+      }
+      result.blocks = [block]
+      result.pages = [
+        {
+          page_index: 0,
+          blocks: [block],
+          tables: [],
+          reading_order: [block.block_id],
+          confidence: 0.95,
+          source_engine: 'test',
+          geometry: { width: 200, height: 300, coordinate_space },
+          preview_image: 'data:image/jpeg;base64,YQ==',
+        },
+      ]
+      ocr.mockResolvedValue(
+        new Response(JSON.stringify(result), {
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      const user = userEvent.setup()
+      const { container } = render(<App />)
+      await upload('synthetic.png')
+      await user.click(screen.getByRole('button', { name: t.read }))
+      const rendered = await screen.findByRole('tab', { name: t.rendered })
+      expect(container.querySelector('.bbox-overlay')).toBeNull()
+      expect(screen.queryByRole('checkbox', { name: t.bbox })).not.toBeInTheDocument()
+      for (const name of ['Markdown', t.jsonOCR, t.rendered]) {
+        await user.click(screen.getByRole('tab', { name: 'Blocks' }))
+        expect(container.querySelector('.bbox-overlay')).not.toBeNull()
+        await user.click(screen.getByRole('tab', { name }))
+        expect(container.querySelector('.bbox-overlay')).toBeNull()
+      }
+      rendered.focus()
+      await user.keyboard('{End}')
+      expect(container.querySelector('.bbox-overlay')).not.toBeNull()
+      await user.keyboard('{Home}')
+      expect(container.querySelector('.bbox-overlay')).toBeNull()
+    },
+  )
+
   it('shows and exports OCR JSON, then shows recognized title and text regions', async () => {
     const result = ocrFixture('# OCR')
     result.blocks = [

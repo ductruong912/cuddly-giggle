@@ -1212,26 +1212,6 @@ svg {
 .output-tabs button {
   white-space: nowrap;
 }
-.bbox-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-  font-size: 12px;
-  border-bottom: 1px solid var(--border);
-}
-.bbox-toggle input {
-  accent-color: var(--accent);
-}
-.bbox-toggle > label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.bbox-toggle {
-  flex-wrap: wrap;
-  justify-content: space-between;
-}
 .bbox-stage {
   position: relative;
   margin-inline: auto;

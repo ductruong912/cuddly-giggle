@@ -10,17 +10,19 @@ function Preview({ result }: { result: ReturnType<typeof ocrFixture> }) {
   const [selected, setSelected] = useState<OCRBlock | null>(null)
   const [showBbox, setShowBbox] = useState(false)
   return (
-    <DocumentPreview
-      file={new File(['x'], 'scan.png')}
-      url="blob:synthetic"
-      result={result}
-      selected={selected}
-      onSelect={setSelected}
-      showBbox={showBbox}
-      onShowBboxChange={setShowBbox}
-      pageIndex={0}
-      onPageChange={() => {}}
-    />
+    <>
+      <button onClick={() => setShowBbox(!showBbox)}>Toggle bbox</button>
+      <DocumentPreview
+        file={new File(['x'], 'scan.png')}
+        url="blob:synthetic"
+        result={result}
+        selected={selected}
+        onSelect={setSelected}
+        showBbox={showBbox}
+        pageIndex={0}
+        onPageChange={() => {}}
+      />
+    </>
   )
 }
 
@@ -57,7 +59,7 @@ describe('OCR bbox preview', () => {
       },
     ]
     const { container } = render(<Preview result={result} />)
-    await userEvent.click(screen.getByRole('checkbox', { name: 'Hiện bbox' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Toggle bbox' }))
     expect(screen.getByRole('img', { name: 'Ảnh OCR' })).toHaveAttribute(
       'src',
       result.pages[0].preview_image,
@@ -70,10 +72,10 @@ describe('OCR bbox preview', () => {
     )
     expect(screen.queryByRole('button', { name: 'Bản gốc' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Ảnh OCR' })).not.toBeInTheDocument()
-    await userEvent.click(screen.getByRole('checkbox', { name: 'Hiện bbox' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Toggle bbox' }))
     expect(container.querySelector('.bbox-overlay')).toBeNull()
     expect(container.querySelector('img')).toHaveAttribute('src', 'blob:synthetic')
-    await userEvent.click(screen.getByRole('checkbox', { name: 'Hiện bbox' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Toggle bbox' }))
     await userEvent.click(screen.getByRole('button', { name: 'Phóng to' }))
     expect(container.querySelector('.bbox-stage')).toHaveStyle({ width: '125%' })
   })
@@ -98,7 +100,7 @@ describe('OCR bbox preview', () => {
       },
     ]
     const { container } = render(<Preview result={result} />)
-    await userEvent.click(screen.getByRole('checkbox', { name: 'Hiện bbox' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Toggle bbox' }))
     expect(screen.getByRole('button', { name: 'Vùng 1 · text' })).toHaveAttribute(
       'points',
       '180,10 180,100 150,100 150,10',
@@ -123,7 +125,7 @@ describe('OCR bbox preview', () => {
       },
     ]
     const { container } = render(<Preview result={result} />)
-    await userEvent.click(screen.getByRole('checkbox', { name: 'Hiện bbox' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Toggle bbox' }))
     expect(container.querySelector('img')).toHaveAttribute('src', 'blob:synthetic')
     expect(screen.queryByRole('button', { name: 'Ảnh OCR' })).not.toBeInTheDocument()
   })
@@ -144,7 +146,7 @@ describe('OCR bbox preview', () => {
       result.pages = [page]
       const { container } = render(<Preview result={result} />)
       expect(container.querySelector('.bbox-overlay')).toBeNull()
-      await userEvent.click(screen.getByRole('checkbox', { name: 'Hiện bbox' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Toggle bbox' }))
       if (space !== 'original') {
         expect(container.querySelector('.bbox-overlay')).toBeNull()
         expect(screen.getByText(/chưa có bbox khớp/)).toBeVisible()
@@ -157,7 +159,7 @@ describe('OCR bbox preview', () => {
       expect(polygon).toHaveAttribute('aria-pressed', 'true')
       await userEvent.click(screen.getByRole('button', { name: 'Phóng to' }))
       expect(container.querySelector('.bbox-stage')).toHaveStyle({ width: '125%' })
-      await userEvent.click(screen.getByRole('checkbox', { name: 'Hiện bbox' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Toggle bbox' }))
       expect(container.querySelector('.bbox-overlay')).toBeNull()
     },
   )
