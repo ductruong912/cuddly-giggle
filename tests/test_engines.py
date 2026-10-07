@@ -166,21 +166,78 @@ def test_prepared_profile_still_allows_cli_fallback(monkeypatch, tmp_path) -> No
     cli.assert_called_once_with("synthetic.png", "auto")
 
 
-@pytest.mark.parametrize("rotate", [False, True])
 @pytest.mark.parametrize("unwarp", [False, True])
-def test_python_and_cli_keep_preprocessing_flags_independent(rotate, unwarp):
+def test_vl_uses_external_orientation_normalization_and_keeps_unwarping_independent(unwarp):
     engine = PaddleOCRVLEngine(replace(
         settings, paddleocr_vl_use_gguf=False,
-        paddleocr_vl_auto_rotate=rotate, paddleocr_vl_use_doc_unwarping=unwarp,
+        paddleocr_vl_auto_rotate=True, paddleocr_vl_use_doc_unwarping=unwarp,
     ))
 
     kwargs = engine._extra_kwargs()
     args = engine._extra_cli_args()
 
-    assert kwargs["use_doc_orientation_classify"] is rotate
+    assert kwargs["use_doc_orientation_classify"] is False
     assert kwargs["use_doc_unwarping"] is unwarp
-    assert args[args.index("--use_doc_orientation_classify") + 1] == str(rotate)
+    assert args[args.index("--use_doc_orientation_classify") + 1] == "False"
     assert args[args.index("--use_doc_unwarping") + 1] == str(unwarp)
+
+
+def test_raw_pdf_keeps_paddle_orientation_fallback_enabled():
+    engine = PaddleOCRVLEngine(replace(settings, paddleocr_vl_auto_rotate=True))
+
+    args = engine._extra_cli_args("unrasterized.pdf")
+
+    assert args[args.index("--use_doc_orientation_classify") + 1] == "True"
+
+
+@pytest.mark.parametrize("input_path,expected", [("normalized.png", False), ("unrasterized.pdf", True)])
+def test_python_api_uses_internal_orientation_only_for_raw_pdf(
+    monkeypatch, input_path, expected
+):
+    engine = PaddleOCRVLEngine(replace(
+        settings, paddleocr_vl_auto_rotate=True, paddleocr_vl_use_gguf=False
+    ))
+    pipeline = Mock()
+    pipeline.predict.return_value = []
+    monkeypatch.setattr(engine, "_load_pipeline_cls", lambda: object)
+    monkeypatch.setattr(engine, "_build_kwargs", lambda *_: {})
+    monkeypatch.setattr(engine, "_get_or_create_pipeline", lambda *_: pipeline)
+
+    result, error = engine._try_python_api(input_path, "auto")
+
+    assert result == []
+    assert not error
+    assert pipeline.predict.call_args.kwargs["use_doc_orientation_classify"] is expected
+
+
+def test_vl_auto_rotation_preprocesses_images_even_when_cleanup_is_disabled(
+    monkeypatch, tmp_path
+):
+    np = pytest.importorskip("numpy")
+    image_module = pytest.importorskip("PIL.Image")
+    from core.engines.paddle import PaddleOCRVLEngine
+    from core.preprocess import image_ops
+
+    source = tmp_path / "sideways.png"
+    original = np.zeros((80, 120, 3), dtype=np.uint8)
+    original[5:20, 10:110] = 255
+    image_module.fromarray(original).save(source)
+    monkeypatch.setenv("CUDDLY_GIGGLE_MODEL_SETUP", "1")
+
+    def rotate(image):
+        return np.rot90(image, 1).copy(), 90
+
+    monkeypatch.setattr("core.preprocess.orientation.normalize_document_orientation", rotate)
+    engine = PaddleOCRVLEngine(replace(
+        settings, paddleocr_vl_auto_rotate=True, preprocess_enabled=False
+    ))
+    page_images, cleanup = engine._prepare_page_images(str(source))
+    try:
+        assert page_images is not None and len(page_images) == 1
+        assert page_images[0] != str(source)
+        assert np.array_equal(image_ops.read_image(page_images[0]), np.rot90(image_ops.read_image(source), 1))
+    finally:
+        cleanup()
 
 
 @pytest.mark.parametrize("value,expected", [(None, False), ("false", False), ("true", True)])
@@ -564,7 +621,8 @@ def test_capture_context_resets_after_failure():
 
 @pytest.mark.parametrize("auto_rotate", [False, True])
 def test_fast_pdf_uses_actual_recognition_image_dimensions(monkeypatch, auto_rotate):
-    engine = PaddleOCRFastEngine(replace(settings, fast_ocr_auto_rotate=auto_rotate))
+    engine = PaddleOCRFastEngine(replace(settings, fast_ocr_auto_rotate=auto_rotate,
+                                         ocr_external_rotation=False, pdf_rasterize_enabled=False))
     output = [
         {"page_index": index, "rec_texts": [f"Synthetic page {index}"], "rec_scores": [0.95],
          "rec_polys": [[[10, 20], [100, 22], [99, 50], [9, 48]]],
@@ -604,3 +662,90 @@ def test_exif_orientation_is_not_overlaid_on_browser_original(tmp_path):
     path = tmp_path / "synthetic.jpg"
     image.save(path, exif=exif)
     assert image_page_geometry(str(path), matches_original=True) is None
+
+
+@pytest.mark.parametrize("engine_cls,flag", [
+    (PaddleOCRFastEngine, "fast_ocr_auto_rotate"),
+    (PaddleOCRVLEngine, "paddleocr_vl_auto_rotate"),
+])
+@pytest.mark.parametrize("external", [False, True])
+def test_rotation_mode_enables_exactly_one_classifier(engine_cls, flag, external):
+    engine = engine_cls(replace(settings, ocr_external_rotation=external, **{flag: True}))
+    kwargs = (engine._build_pipeline_kwargs() if engine_cls is PaddleOCRFastEngine
+              else engine._extra_kwargs())
+    assert engine._external_auto_rotate() is external
+    assert kwargs["use_doc_orientation_classify"] is (not external)
+
+
+@pytest.mark.parametrize("engine_cls,flag", [
+    (PaddleOCRFastEngine, "fast_ocr_auto_rotate"),
+    (PaddleOCRVLEngine, "paddleocr_vl_auto_rotate"),
+])
+def test_external_rotation_requires_pdf_page_images(engine_cls, flag):
+    engine = engine_cls(replace(settings, ocr_external_rotation=True,
+                                pdf_rasterize_enabled=False, **{flag: True}))
+    with pytest.raises(RuntimeError, match="External PDF rotation requires"):
+        engine.parse("synthetic.pdf")
+
+
+@pytest.mark.skipif(fitz is None, reason="PyMuPDF is required to build PDF fixtures")
+def test_fast_pdf_rotates_then_deskews_each_page_and_cleans_up(monkeypatch, tmp_path):
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("cv2")
+    from core.preprocess import image_ops
+    source = build_pdf(tmp_path / "synthetic.pdf", second_page_text=SECOND_PAGE_NOTE)
+    before = source.read_bytes()
+    events = []
+    staged = []
+    monkeypatch.setenv("CUDDLY_GIGGLE_MODEL_SETUP", "1")
+
+    def rotate(image):
+        events.append("rotate")
+        return np.rot90(image).copy(), 90
+
+    def deskew(image, **kwargs):
+        events.append("deskew")
+        assert image.shape[1] > image.shape[0]
+        return image, 0
+
+    monkeypatch.setattr("core.preprocess.orientation.normalize_document_orientation", rotate)
+    monkeypatch.setattr(image_ops, "deskew", deskew)
+    engine = PaddleOCRFastEngine(replace(
+        settings, ocr_external_rotation=True, fast_ocr_auto_rotate=True,
+        pdf_rasterize_enabled=True, pdf_rasterize_dpi=72,
+        preprocess_enabled=True, preprocess_deskew=True,
+        preprocess_exif_transpose=False, preprocess_border_crop=False,
+        preprocess_illumination=False, preprocess_denoise=False, preprocess_clahe=False,
+    ))
+
+    class Pipeline:
+        def predict(self, path):
+            events.append("ocr")
+            staged.append(Path(path))
+            assert Path(path).exists() and Path(path).suffix == ".png"
+            return [{"rec_texts": ["Synthetic"], "rec_scores": [0.95],
+                     "rec_boxes": [[10, 20, 100, 40]]}]
+
+    monkeypatch.setattr(engine, "_get_or_create_pipeline", lambda: Pipeline())
+    result = engine.parse(str(source))
+    assert events == ["rotate", "deskew", "rotate", "deskew", "ocr", "ocr"]
+    assert [page.page_index for page in result.pages] == [0, 1]
+    assert result.pages[1].blocks[0].page_index == 1
+    assert len(result.raw["paddleocr"]) == 2
+    assert source.read_bytes() == before
+    assert all(not path.exists() for path in staged)
+
+
+def test_fast_pdf_cleans_pages_when_ocr_fails(monkeypatch, tmp_path):
+    engine = PaddleOCRFastEngine(replace(settings, ocr_external_rotation=True))
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    page = staged / "page.png"
+    page.touch()
+    import shutil
+    monkeypatch.setattr(engine, "_prepare_page_images",
+                        lambda _: ([str(page)], lambda: shutil.rmtree(staged)))
+    monkeypatch.setattr(engine, "_parse_single", Mock(side_effect=RuntimeError("synthetic failure")))
+    with pytest.raises(RuntimeError, match="synthetic failure"):
+        engine.parse("synthetic.pdf")
+    assert not staged.exists()

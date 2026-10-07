@@ -19,6 +19,8 @@ from core.prompts.prompt import (
 logger = logging.getLogger(__name__)
 
 _GPT5_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
+_GPT54_REASONING_EFFORTS = {"none", "low", "medium", "high", "xhigh"}
+_GPT6_REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 
 
 class LLMExtractionError(RuntimeError):
@@ -76,9 +78,9 @@ class LLMExtractionService:
         }
         self._apply_reasoning_effort(kwargs)
 
-        # Reasoning models (like o1, o3, gpt-5) do not support setting temperature or top_p.
+        # Omit sampling controls for reasoning models; retain the GPT-4 request shape.
         model_name = self.settings.openai_model.lower()
-        if not any(prefix in model_name for prefix in ("o1", "o3", "gpt-5")):
+        if not any(prefix in model_name for prefix in ("o1", "o3", "gpt-5", "gpt-6")):
             kwargs["temperature"] = 0.0
             kwargs["top_p"] = 0.0
 
@@ -117,13 +119,26 @@ class LLMExtractionService:
         effort = self.settings.llm_reasoning_effort
         if not effort:
             return
-        if effort not in _GPT5_REASONING_EFFORTS:
+        model_name = self.settings.openai_model.lower()
+        if model_name.startswith("gpt-4"):
+            # GPT-4 has no reasoning control; changing model alone must still work.
+            return
+        if model_name.startswith("gpt-6"):
+            supported = _GPT6_REASONING_EFFORTS
+            if model_name.startswith(("gpt-6-luna", "gpt-6-sol")):
+                supported = supported | {"none"}
+        elif model_name.startswith("gpt-5.4"):
+            supported = _GPT54_REASONING_EFFORTS
+        elif model_name.startswith("gpt-5"):
+            supported = _GPT5_REASONING_EFFORTS
+        else:
             raise LLMExtractionError(
-                "Invalid LLM_REASONING_EFFORT; use minimal, low, medium, high, or leave it empty"
+                "LLM_REASONING_EFFORT is only configured for GPT-5/GPT-6-family models"
             )
-        if "gpt-5" not in self.settings.openai_model.lower():
+        if effort not in supported:
             raise LLMExtractionError(
-                "LLM_REASONING_EFFORT is only configured for GPT-5-family models"
+                f"Invalid LLM_REASONING_EFFORT for {self.settings.openai_model}; "
+                f"use {', '.join(sorted(supported))}, or leave it empty"
             )
         kwargs["reasoning"] = {"effort": effort}
 

@@ -209,7 +209,9 @@ def test_the_chain_is_inert_until_it_is_switched_on(tmp_path: Path) -> None:
     source = tmp_path / "page.png"
     image_ops.write_image(source, synthetic_page(200, 200))
 
-    result = preprocess_file(str(source), app_settings=base_settings)
+    result = preprocess_file(
+        str(source), app_settings=dataclasses.replace(base_settings, preprocess_enabled=False)
+    )
 
     assert result.path == str(source)
     assert not result.changed and not result.steps
@@ -220,7 +222,10 @@ def test_enabling_the_chain_without_a_step_still_does_nothing(tmp_path: Path) ->
     source = tmp_path / "page.png"
     image_ops.write_image(source, synthetic_page(200, 200))
 
-    result = preprocess_file(str(source), app_settings=enabled())
+    result = preprocess_file(str(source), app_settings=enabled(
+        preprocess_exif_transpose=False, preprocess_border_crop=False, preprocess_deskew=False,
+        preprocess_illumination=False, preprocess_denoise=False, preprocess_clahe=False,
+    ))
 
     assert not result.changed
 
@@ -275,6 +280,60 @@ def test_a_freshly_rendered_page_skips_the_exif_decode(tmp_path: Path) -> None:
     assert "exif" in [step.name for step in from_disk.steps]
     assert "exif" not in [step.name for step in rendered.steps]
     assert rendered.changed
+
+
+def test_document_orientation_label_is_applied_as_an_exact_quarter_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.preprocess import orientation
+
+    class Prediction:
+        json = {"res": {"label_names": ["270"]}}
+
+    class Classifier:
+        def predict(self, image, *, batch_size):
+            assert batch_size == 1
+            return [Prediction()]
+
+    image = np.arange(5 * 8 * 3, dtype=np.uint8).reshape(5, 8, 3)
+    monkeypatch.setattr(orientation, "_get_classifier", lambda: Classifier())
+
+    normalized, angle = orientation.normalize_document_orientation(image)
+
+    assert angle == 270
+    assert np.array_equal(normalized, np.rot90(image, k=3))
+
+
+def test_orientation_runs_when_general_preprocessing_is_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.preprocess import orientation
+
+    source = tmp_path / "sideways.png"
+    destination = tmp_path / "upright.png"
+    original = synthetic_page(300, 200)
+    image_ops.write_image(source, original)
+
+    def rotate(image):
+        return np.rot90(image, 1).copy(), 90
+
+    monkeypatch.setattr(orientation, "normalize_document_orientation", rotate)
+    options = dataclasses.replace(
+        base_settings,
+        preprocess_enabled=False,
+        preprocess_deskew=True,
+    )
+
+    result = preprocess_file(
+        str(source),
+        output_path=str(destination),
+        app_settings=options,
+        auto_rotate=True,
+    )
+
+    assert result.changed and result.path == str(destination)
+    assert [step.name for step in result.steps] == ["orientation", "write"]
+    assert np.array_equal(image_ops.read_image(destination), np.rot90(original, 1))
 
 
 def test_an_undecodable_page_falls_back_to_the_original(tmp_path: Path) -> None:

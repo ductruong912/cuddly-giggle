@@ -52,7 +52,7 @@ class PaddlePipelineEngine(ParseEngine):
         """Engine-specific constructor kwargs (e.g. pipeline_version)."""
         return {}
 
-    def _extra_cli_args(self) -> list[str]:
+    def _extra_cli_args(self, input_path: str | None = None) -> list[str]:
         """Engine-specific CLI args (e.g. --pipeline_version)."""
         return []
 
@@ -138,37 +138,60 @@ class PaddlePipelineEngine(ParseEngine):
         if preview_capture_enabled():
             attach_page_previews(pages, raw, input_matches_original=(
                 not self.settings.preprocess_enabled
+                and not self.settings.paddleocr_vl_auto_rotate
                 and (Path(input_path).suffix.lower() == ".pdf"
                      or image_page_geometry(input_path, matches_original=True) is not None)
             ))
         return EngineParseResult(engine_name=self.name, pages=pages, markdown=markdown, raw=normalized_raw)
 
     def _prepare_page_images(self, input_path: str) -> tuple[list[str] | None, Callable[[], None]]:
-        """Produce the page images OCR should read, cleaned up if preprocessing is on.
+        """Produce the page images OCR should read, normalizing orientation if enabled.
 
         Returns ``(None, noop)`` to mean "hand the original path straight to the
         pipeline", which is the flow for a PDF when rasterization is off or has
-        failed, and for any input the preprocessing chain declined to touch.
+        failed, and for any input that neither cleanup nor orientation handling touched.
         """
         page_images, cleanup = self._rasterize_pdf_pages(input_path)
-        if not self.settings.preprocess_enabled:
+        auto_rotate = self._external_auto_rotate()
+        if auto_rotate and page_images is None and Path(input_path).suffix.lower() == ".pdf":
+            cleanup()
+            raise RuntimeError("External PDF rotation requires successful rasterization; "
+                               "enable PDF_RASTERIZE_ENABLED or set OCR_EXTERNAL_ROTATION=false.")
+        if not self.settings.preprocess_enabled and not auto_rotate:
             return page_images, cleanup
 
         document_stem = self._document_stem(input_path)
         try:
+            if auto_rotate and (page_images is not None or Path(input_path).suffix.lower() != ".pdf"):
+                if os.getenv("CUDDLY_GIGGLE_MODEL_SETUP") != "1":
+                    require_model_profile(self.settings, self.model_profile)
+
             if page_images is not None:
                 # Rasterized pages are throwaway temp files, so they are rewritten
                 # in place and removed by the existing cleanup.
                 for page_number, image_path in enumerate(page_images, start=1):
                     self._preprocess_page(
-                        image_path, image_path, document_stem, page_number, allow_exif=False
+                        image_path,
+                        image_path,
+                        document_stem,
+                        page_number,
+                        allow_exif=False,
+                        auto_rotate=auto_rotate,
                     )
                 return page_images, cleanup
-            return self._preprocess_standalone_input(input_path, document_stem)
+            return self._preprocess_standalone_input(
+                input_path, document_stem, auto_rotate=auto_rotate
+            )
         except Exception:
             # Never let cleanup leak because preprocessing raised.
-            logger.warning("page preprocessing failed for %s; using the raw pages", input_path, exc_info=True)
+            logger.warning("page preprocessing failed for %s", input_path, exc_info=True)
+            if auto_rotate:
+                cleanup()
+                raise
             return page_images, cleanup
+
+    def _external_auto_rotate(self) -> bool:
+        return self.settings.ocr_external_rotation and self.settings.paddleocr_vl_auto_rotate
 
     @staticmethod
     def _document_stem(input_path: str) -> str:
@@ -180,20 +203,35 @@ class PaddlePipelineEngine(ParseEngine):
         return safe or "document"
 
     def _preprocess_standalone_input(
-        self, input_path: str, document_stem: str
+        self, input_path: str, document_stem: str, *, auto_rotate: bool = False
     ) -> tuple[list[str] | None, Callable[[], None]]:
-        """Clean a single image input into a temp copy, never over the source file."""
+        """Normalize a single image into a temp copy, never over the source file."""
         noop: Callable[[], None] = lambda: None
         if Path(input_path).suffix.lower() == ".pdf":
             # Rasterization is off or failed, so there is no page image to clean;
             # PaddleOCR renders the PDF itself.
             return None, noop
+        if not self.settings.preprocess_enabled and not auto_rotate:
+            return None, noop
 
         tmp_dir = Path(tempfile.mkdtemp(prefix=f"{self.name}_pre_"))
-        destination = tmp_dir / f"page_0000{Path(input_path).suffix or '.png'}"
-        result = self._preprocess_page(input_path, str(destination), document_stem, 1)
+        suffix = ".png" if auto_rotate else (Path(input_path).suffix or ".png")
+        destination = tmp_dir / f"page_0000{suffix}"
+        try:
+            result = self._preprocess_page(
+                input_path,
+                str(destination),
+                document_stem,
+                1,
+                auto_rotate=auto_rotate,
+            )
+        except Exception:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
         if not result.changed:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+            if auto_rotate and any(step.name == "orientation" for step in result.steps):
+                return [input_path], noop
             return None, noop
         return [result.path], lambda: shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -205,6 +243,7 @@ class PaddlePipelineEngine(ParseEngine):
         page_number: int,
         *,
         allow_exif: bool = True,
+        auto_rotate: bool = False,
     ):  # type: ignore[no-untyped-def]
         result = preprocess_file(
             source_path,
@@ -212,8 +251,9 @@ class PaddlePipelineEngine(ParseEngine):
             app_settings=self.settings,
             debug_name=f"{document_stem}/page_{page_number:04d}",
             allow_exif=allow_exif,
+            auto_rotate=auto_rotate,
         )
-        if result.changed:
+        if result.steps:
             logger.info(
                 pipeline_message("PHASE 2", "preprocess page=%s duration=%.3fs steps=%s"),
                 page_number,
@@ -284,6 +324,12 @@ class PaddlePipelineEngine(ParseEngine):
             predict_kwargs: dict[str, Any] = {}
             if self.name == "paddleocr_vl":
                 predict_kwargs["max_pixels"] = self.settings.paddleocr_vl_max_pixels
+                if self.settings.paddleocr_vl_auto_rotate:
+                    # Prepared image pages have already been rotated externally.
+                    predict_kwargs["use_doc_orientation_classify"] = (
+                        not self.settings.ocr_external_rotation
+                        or Path(input_path).suffix.lower() == ".pdf"
+                    )
 
             if self.settings.paddleocr_vl_use_gguf:
                 # GGUF backend is remote, so calling predict is thread-safe and doesn't require the GPU process-level lock.
@@ -302,7 +348,7 @@ class PaddlePipelineEngine(ParseEngine):
 
         with tempfile.TemporaryDirectory(prefix=f"{self.name}_") as tmp_dir:
             cmd = [cli_bin, self.cli_subcommand, "-i", input_path, "--save_path", tmp_dir]
-            cmd.extend(self._extra_cli_args())
+            cmd.extend(self._extra_cli_args(input_path))
             if lang_hint != "auto":
                 cmd.extend(["--lang", lang_hint])
             if self.settings.ocr_device:
@@ -394,23 +440,39 @@ class PaddleOCRVLEngine(PaddlePipelineEngine):
             kwargs["pipeline_version"] = self.settings.paddleocr_vl_pipeline_version
         if self.settings.paddleocr_vl_use_gguf:
             kwargs.update(self._remote_vl_kwargs())
-        kwargs["use_doc_orientation_classify"] = self.settings.paddleocr_vl_auto_rotate
+        # Avoid loading a second classifier when the app normalizes orientation.
+        # The configuration switch retains Paddle's built-in rotation.
+        kwargs["use_doc_orientation_classify"] = (
+            self.settings.paddleocr_vl_auto_rotate and not self.settings.ocr_external_rotation
+        )
         kwargs["use_doc_unwarping"] = self.settings.paddleocr_vl_use_doc_unwarping
 
         # Override ignore labels (e.g. empty list to keep headers and footers)
         kwargs["markdown_ignore_labels"] = list(self.settings.paddleocr_vl_markdown_ignore_labels)
         return kwargs
 
-    def _extra_cli_args(self) -> list[str]:
+    def _extra_cli_args(self, input_path: str | None = None) -> list[str]:
         args: list[str] = []
         if self.settings.paddleocr_vl_pipeline_version:
             args.extend(["--pipeline_version", self.settings.paddleocr_vl_pipeline_version])
         if self.settings.paddleocr_vl_use_gguf:
             for key, value in self._remote_vl_kwargs().items():
                 args.extend([f"--{key}", str(value)])
-        args.extend(["--use_doc_orientation_classify", str(self.settings.paddleocr_vl_auto_rotate)])
+        internal_rotation = (
+            self.settings.paddleocr_vl_auto_rotate
+            and (not self.settings.ocr_external_rotation
+                 or (input_path is not None and Path(input_path).suffix.lower() == ".pdf"))
+        )
+        args.extend(["--use_doc_orientation_classify", str(internal_rotation)])
         args.extend(["--use_doc_unwarping", str(self.settings.paddleocr_vl_use_doc_unwarping)])
         return args
+
+    def warmup(self, pipeline_cls: type | None = None) -> None:
+        super().warmup(pipeline_cls)
+        if self._external_auto_rotate():
+            from core.preprocess.orientation import warmup_orientation_classifier
+
+            warmup_orientation_classifier()
 
     def _remote_vl_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
