@@ -31,7 +31,15 @@ def build_blocks_from_layout_boxes(
         if not isinstance(box, dict):
             continue
         label = str(box.get("label", "")).strip() or "other"
-        poly = to_polygon(box.get("coordinate") or box.get("bbox") or box.get("box"))
+        poly = []
+        for key in ("coordinate", "bbox", "box"):
+            poly = to_polygon(box.get(key))
+            if poly:
+                break
+        extra = {"label": label}
+        order = box.get("block_order")
+        if order is not None:
+            extra["block_order"] = safe_int(order, -1)
         block = Block(
             block_id=new_block_id("blk"),
             type=map_label_to_type(label),
@@ -40,7 +48,7 @@ def build_blocks_from_layout_boxes(
             confidence=safe_float(box.get("score"), 0.0),
             page_index=page_index,
             source_engine=source_engine,
-            extra={"label": label},
+            extra=extra,
         )
         blocks.append(block)
     return blocks
@@ -60,7 +68,9 @@ def build_blocks_from_parsing_res_list(
         poly = to_polygon(item.get("polygon_points"))
         if not poly:
             poly = bbox_to_polygon(item.get("bbox"))
-        block_id = str(item.get("block_id") or new_block_id("blk"))
+        engine_block_id = item.get("block_id")
+        # SDK numeric ids are page-local; use unique ids for response references.
+        block_id = engine_block_id if isinstance(engine_block_id, str) and engine_block_id else new_block_id("blk")
         block_order = item.get("block_order")
         blocks.append(
             Block(
@@ -75,14 +85,17 @@ def build_blocks_from_parsing_res_list(
                     "label": label,
                     "block_order": safe_int(block_order, -1) if block_order is not None else None,
                     "group_id": item.get("group_id"),
+                    "engine_block_id": engine_block_id,
                 },
             )
         )
     return blocks
 
 
-def reading_order(blocks: list[Block]) -> list[str]:
-    """Order block ids by the engine's ordering, falling back to top-to-bottom."""
+def reading_order(blocks: list[Block], *, preserve_input_order: bool = False) -> list[str]:
+    """Keep a parsed sequence; only order boxes without an engine sequence."""
+    if preserve_input_order:
+        return [block.block_id for block in blocks]
     # Missing/invalid/negative block_order sorts to the BACK (large sentinel), not
     # the front: a stored -1 or None must not jump an order-less block ahead of 0.
     def order_of(block: Block) -> int:

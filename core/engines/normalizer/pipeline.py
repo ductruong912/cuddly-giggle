@@ -94,6 +94,8 @@ def _build_pages(
     for idx, page in enumerate(_raw_pages(normalized_raw, root)):
         if not isinstance(page, dict):
             continue
+        if isinstance(page.get("res"), dict):
+            page = page["res"]
 
         # Prefer the engine's real page index when present; fall back to the
         # positional index. Using the real index keeps page attribution correct
@@ -137,7 +139,8 @@ def _build_pages(
                 page_index=page_index,
                 blocks=blocks,
                 tables=tables,
-                reading_order=reading_order(blocks),
+                # parsing_res_list is already ordered, including None-order headers/tables.
+                reading_order=reading_order(blocks, preserve_input_order=bool(parsed_blocks)),
                 confidence=_page_confidence(page, boxes, blocks, tables, app_settings),
                 source_engine=source_engine,
             )

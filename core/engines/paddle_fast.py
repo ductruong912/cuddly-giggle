@@ -269,7 +269,8 @@ class PaddleOCRFastEngine(PaddlePipelineEngine):
                     box = polygons[line_index]
                 else:
                     box = boxes[line_index] if line_index < len(boxes) else []
-                blocks.append({"label": "text", "text": text, "box": self._to_list(box), "score": score})
+                blocks.append({"label": "text", "text": text, "box": self._to_list(box),
+                               "score": score, "block_order": line_index})
                 lines.append(text)
                 if score > 0:
                     numeric_scores.append(score)

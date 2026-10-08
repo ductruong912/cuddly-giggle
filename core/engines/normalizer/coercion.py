@@ -53,7 +53,9 @@ def map_label_to_type(label: str | None) -> BlockType:
 
 def to_polygon(raw_coordinate: object) -> list[Point]:
     """Accept either an [x1,y1,x2,y2] box or a point list, and return a polygon."""
-    if not isinstance(raw_coordinate, list):
+    if callable(getattr(raw_coordinate, "tolist", None)):
+        raw_coordinate = raw_coordinate.tolist()
+    if not isinstance(raw_coordinate, (list, tuple)):
         return []
 
     if len(raw_coordinate) == 4 and all(isinstance(v, (int, float)) for v in raw_coordinate):
@@ -74,7 +76,9 @@ def to_polygon(raw_coordinate: object) -> list[Point]:
 
 def bbox_to_polygon(bbox: object) -> list[Point]:
     """Convert a 4-number bounding box into a four-point polygon."""
-    if isinstance(bbox, list) and len(bbox) >= 4 and all(isinstance(v, (int, float)) for v in bbox[:4]):
+    if callable(getattr(bbox, "tolist", None)):
+        bbox = bbox.tolist()
+    if isinstance(bbox, (list, tuple)) and len(bbox) >= 4 and all(isinstance(v, (int, float)) for v in bbox[:4]):
         x1, y1, x2, y2 = bbox[:4]
         return [
             Point(x=float(x1), y=float(y1)),
@@ -146,16 +150,30 @@ def normalize_parsing_item(item: object) -> dict:
 
 def result_to_dict(raw: object) -> dict:
     """Convert an engine result (dict, ``.json`` provider, or object) to a dict."""
+    # Paddle result classes inherit dict but expose the complete schema via .json.
+    try:
+        json_attr = getattr(raw, "json", None)
+        value = json_attr() if callable(json_attr) else json_attr
+    except Exception:
+        value = None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            value = None
+    if isinstance(value, dict):
+        raw = value
+
     if isinstance(raw, dict):
         converted = dict(raw)
-        if "res" in converted and not isinstance(converted["res"], (dict, list, str, int, float, bool, type(None))):
+        if "res" in converted and not isinstance(converted["res"], (list, str, int, float, bool, type(None))):
             nested = result_to_dict(converted["res"])
             if nested:
                 converted["res"] = nested.get("res", nested)
         if "pages" in converted and isinstance(converted["pages"], list):
             pages: list[object] = converted["pages"]
             converted["pages"] = [
-                result_to_dict(page) if not isinstance(page, dict) else page
+                result_to_dict(page)
                 for page in pages
             ]
         if "markdown" in converted and isinstance(converted["markdown"], dict):
@@ -163,21 +181,6 @@ def result_to_dict(raw: object) -> dict:
             if md_text:
                 converted["markdown"] = md_text
         return converted
-    if hasattr(raw, "json"):
-        json_attr = getattr(raw, "json")
-        try:
-            value = json_attr() if callable(json_attr) else json_attr
-        except Exception:
-            value = None
-        if isinstance(value, dict):
-            return value
-        if isinstance(value, str):
-            try:
-                parsed = json.loads(value)
-                if isinstance(parsed, dict):
-                    return parsed
-            except json.JSONDecodeError:
-                pass
     if hasattr(raw, "__dict__"):
         return dict(vars(raw))
     return {}
