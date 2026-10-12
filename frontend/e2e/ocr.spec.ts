@@ -62,7 +62,7 @@ async function mockReadEndpoints(page: Page) {
   })
 }
 
-test('unwarped OCR preview shows linked blocks automatically and preserves original PDF', async ({
+test('unwarped OCR preview links blocks in Blocks and preserves original PDF in other tabs', async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 960 })
@@ -108,7 +108,9 @@ test('unwarped OCR preview shows linked blocks automatically and preserves origi
     .getByLabel('Chọn tài liệu', { exact: true })
     .setInputFiles({ name: 'synthetic.pdf', mimeType: 'application/pdf', buffer: syntheticPDF() })
   await page.getByRole('button', { name: 'Đọc tài liệu', exact: true }).click()
-  await expect(page.getByRole('checkbox', { name: 'Hiện bbox' })).toBeChecked()
+  await expect(page.getByRole('checkbox', { name: 'Hiện bbox' })).toHaveCount(0)
+  await expect(page.locator('.bbox-overlay')).toHaveCount(0)
+  await page.getByRole('tab', { name: 'Blocks', exact: true }).click()
   const processed = page.getByRole('img', { name: 'Ảnh OCR', exact: true })
   await expect(processed).toBeVisible()
   await page.getByRole('button', { name: 'Vùng 1 · title', exact: true }).hover()
@@ -127,10 +129,14 @@ test('unwarped OCR preview shows linked blocks automatically and preserves origi
     .toBeLessThan(1)
   await expect(page.getByRole('button', { name: 'Bản gốc', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Ảnh OCR', exact: true })).toHaveCount(0)
-  await page.getByRole('checkbox', { name: 'Hiện bbox' }).uncheck()
-  await expect(page.locator('.pdf-canvas')).toBeVisible()
-  await expect(page.locator('.bbox-overlay')).toHaveCount(0)
-  await page.getByRole('checkbox', { name: 'Hiện bbox' }).check()
+  for (const name of ['Trình bày', 'Markdown', 'JSON OCR']) {
+    await page.getByRole('tab', { name, exact: true }).click()
+    await expect(page.locator('.pdf-canvas')).toBeVisible()
+    await expect(page.locator('.bbox-overlay')).toHaveCount(0)
+    await expect(processed).toHaveCount(0)
+  }
+  await page.getByRole('tab', { name: 'Blocks', exact: true }).click()
+  await expect(processed).toBeVisible()
   await page.getByRole('button', { name: 'Trang sau', exact: true }).click()
   await page.getByRole('button', { name: 'Vùng 1 · title', exact: true }).hover()
   await expect(
@@ -189,7 +195,7 @@ test('bbox hover links title and text regions across PDF pages and zoom', async 
   })
   await expect(page.locator('.preview-loading')).toHaveCount(0)
   await page.getByRole('button', { name: 'Đọc tài liệu', exact: true }).click()
-  await page.getByRole('checkbox', { name: 'Hiện bbox' }).check()
+  await page.getByRole('tab', { name: 'Blocks', exact: true }).click()
   await page.getByRole('button', { name: 'Vùng 1 · title' }).hover()
   await expect(page.getByRole('tab', { name: 'Blocks' })).toHaveAttribute('aria-selected', 'true')
   const titleContent = page.getByRole('button', { name: 'Nội dung 1 · title · Trang 1' })
@@ -395,13 +401,15 @@ test('OCR flow, PDF pagination/zoom, clipboard, exact download and file replacem
   await expect(page.locator('.workspace-panels')).not.toHaveClass(/is-resizing/)
   await divider.dblclick()
   await expect(divider).toHaveAttribute('aria-valuenow', '50')
-  expect(
-    await page.locator('.pdf-canvas').evaluate((element) => {
-      const canvas = element as HTMLCanvasElement
-      const pixels = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data
-      return pixels.some((value, index) => index % 4 === 0 && value < 100 && pixels[index + 3] > 0)
-    }),
-  ).toBe(true)
+  await expect
+    .poll(() =>
+      page.locator('.pdf-canvas').evaluate((element) => {
+        const canvas = element as HTMLCanvasElement
+        const pixels = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data
+        return pixels.some((value, index) => index % 4 === 0 && value < 100 && pixels[index + 3] > 0)
+      }),
+    )
+    .toBe(true)
   await page.getByRole('button', { name: 'Trang sau' }).click()
   await expect(page.getByText('Trang 2 / 2')).toBeVisible()
   await page.getByRole('button', { name: 'Phóng to', exact: true }).click()
