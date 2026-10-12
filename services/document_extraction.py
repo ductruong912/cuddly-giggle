@@ -1,8 +1,8 @@
 """OCR → LLM extraction pipeline, run with bounded concurrency off the event loop.
 
-Both extraction routes (local and online) drive the same three stages: parse the
-document, send the Markdown to the LLM, then persist the artifacts. This service
-owns that sequence so the routes only translate HTTP into a call.
+The local extraction route parses the document, sends the Markdown to the LLM,
+then persists the artifacts. This service owns that sequence so the route only
+translates HTTP into a call.
 """
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ import uuid
 from config.config import Settings, settings
 from config.pipeline_logging import (
     pipeline_message,
-    request_logging_context,
     source_document_context,
 )
 from core.domain.schemas import (
@@ -41,7 +40,7 @@ class DocumentExtractionFailed(Exception):
 
 
 class DocumentParser(Protocol):
-    """The parse contract shared by the local and online orchestrators."""
+    """The parse contract implemented by the local orchestrator."""
 
     def parse(self, input_path: str, *, request_id: str | None = None) -> ParseResponse: ...
 
@@ -103,7 +102,7 @@ class DocumentExtractionService:
             raise
         except Exception as exc:
             logger.exception(
-                pipeline_message("FAILED", "%s extraction request error", request_id=request_id),
+                pipeline_message("FAILED", "%s extraction request error"),
                 self.route_label,
             )
             raise DocumentExtractionFailed(f"Unexpected extraction error: {exc}") from exc
@@ -111,8 +110,7 @@ class DocumentExtractionService:
         logger.info(
             pipeline_message(
                 "COMPLETED route=%s pages=%s markdown_chars=%s ocr=%.3fs llm=%.3fs "
-                "save=%.3fs total=%.3fs validation=%s attempts=%s%s saved=%s",
-                request_id=parse_response.request_id,
+                "save=%.3fs total=%.3fs validation=%s attempts=%s saved=%s"
             ),
             self.route_label,
             len(parse_response.pages),
@@ -123,25 +121,9 @@ class DocumentExtractionService:
             time.perf_counter() - total_start,
             "valid" if outcome.is_valid else "needs_review",
             outcome.attempts,
-            self._engine_summary(parse_response),
             ",".join(saved) or "none",
         )
         return self._build_response(parse_response, outcome)
-
-    @staticmethod
-    def _engine_summary(parse_response: ParseResponse) -> str:
-        """Provider, runtime and billed cost for engines that report them (DataLab)."""
-        metadata = parse_response.engine_metadata or {}
-        if not metadata:
-            return ""
-        parts = [f"provider={metadata.get('provider') or parse_response.engine_name or 'local'}"]
-        runtime = metadata.get("runtime")
-        if runtime is not None:
-            parts.append(f"engine_runtime={runtime}s")
-        cost_breakdown = metadata.get("cost_breakdown")
-        if isinstance(cost_breakdown, dict):
-            parts.append(f"cost_cents={cost_breakdown.get('final_cost_cents', 'n/a')}")
-        return " " + " ".join(parts)
 
     async def extract_markdown(
         self,
@@ -201,8 +183,7 @@ class DocumentExtractionService:
         except Exception:
             logger.exception(
                 pipeline_message(
-                    "FAILED", "could not persist the extraction",
-                    request_id=parse_response.request_id,
+                    "FAILED", "could not persist the extraction"
                 )
             )
             if self.settings.database_persistence_required:
@@ -216,8 +197,7 @@ class DocumentExtractionService:
         return await self.limiters.llm.run(self._extract_blocking, parse_response)
 
     def _extract_blocking(self, parse_response: ParseResponse) -> ExtractionOutcome:
-        with request_logging_context(parse_response.request_id):
-            return self.validator.extract(parse_response)
+        return self.validator.extract(parse_response)
 
     @staticmethod
     def _save_artifacts(

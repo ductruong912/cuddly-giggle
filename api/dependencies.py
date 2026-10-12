@@ -20,7 +20,6 @@ from services.concurrency import PipelineLimiters
 from services.document_extraction import DocumentExtractionService
 from services.llm_extraction import LLMExtractionService
 from services.local_ocr_selector import has_usable_gpu
-from services.online_orchestrator import OnlineParseOrchestrator
 from services.orchestrator import ParseOrchestrator
 from services.persistence import DatabasePool, ExtractionStore
 from services.vl_runtime import VLRuntimeManager
@@ -68,11 +67,6 @@ def get_orchestrator() -> ParseOrchestrator:
     return _singleton("orchestrator", ParseOrchestrator)
 
 
-def get_online_orchestrator() -> OnlineParseOrchestrator:
-    """DataLab-backed parse orchestrator."""
-    return _singleton("online_orchestrator", OnlineParseOrchestrator)
-
-
 def get_llm_extractor() -> LLMExtractionService:
     """Structured-output extraction client, reused across requests."""
     return _singleton("llm_extractor", LLMExtractionService)
@@ -114,21 +108,6 @@ def get_local_extraction_service() -> DocumentExtractionService:
             get_llm_extractor(),
             get_pipeline_limiters(),
             route_label="local",
-            app_settings=settings,
-            store=get_extraction_store(),
-        ),
-    )
-
-
-def get_online_extraction_service() -> DocumentExtractionService:
-    """Full pipeline for the online DataLab route."""
-    return _singleton(
-        "online_extraction",
-        lambda: DocumentExtractionService(
-            get_online_orchestrator(),
-            get_llm_extractor(),
-            get_pipeline_limiters(),
-            route_label="online",
             app_settings=settings,
             store=get_extraction_store(),
         ),

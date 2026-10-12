@@ -26,3 +26,11 @@ data/
 .DS_Store
 .idea/
 .vscode/
+
+# Frontend is built in a separate Node stage.
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/coverage/
+frontend/public/assets/pdfjs/

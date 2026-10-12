@@ -75,6 +75,7 @@ def preprocess_file(
     app_settings: Settings = settings,
     debug_name: str | None = None,
     allow_exif: bool = True,
+    auto_rotate: bool = False,
 ) -> PreprocessResult:
     """Clean up one page image, writing the result to ``output_path``.
 
@@ -93,7 +94,8 @@ def preprocess_file(
         A result whose ``path`` is always safe to hand to the OCR engine.
     """
     unchanged = PreprocessResult(path=input_path)
-    if not app_settings.preprocess_enabled or not _any_step_enabled(app_settings):
+    cleanup_enabled = app_settings.preprocess_enabled and _any_step_enabled(app_settings)
+    if not cleanup_enabled and not auto_rotate:
         return unchanged
 
     try:
@@ -101,6 +103,8 @@ def preprocess_file(
     except ImportError:
         # OpenCV is a transitive dependency of paddleocr; a text-only install
         # will not have it, and that must not be fatal.
+        if auto_rotate:
+            raise RuntimeError("Automatic document orientation requires OpenCV and PaddleOCR.")
         logger.warning("preprocessing is enabled but OpenCV is unavailable; skipping")
         return unchanged
 
@@ -112,8 +116,11 @@ def preprocess_file(
             app_settings,
             debug_name,
             allow_exif,
+            auto_rotate,
         )
     except Exception:
+        if auto_rotate:
+            raise
         logger.warning("preprocessing failed for %s; using the original image", input_path, exc_info=True)
         return unchanged
 
@@ -125,23 +132,36 @@ def _run_chain(
     app_settings: Settings,
     debug_name: str | None,
     allow_exif: bool,
+    auto_rotate: bool,
 ) -> PreprocessResult:
     steps: list[StepTiming] = []
-    use_exif = app_settings.preprocess_exif_transpose and allow_exif
+    cleanup_enabled = app_settings.preprocess_enabled and _any_step_enabled(app_settings)
+    use_exif = cleanup_enabled and app_settings.preprocess_exif_transpose and allow_exif
 
     started = time.perf_counter()
     image = _load(image_ops, input_path, use_exif)
     if image is None:
+        if auto_rotate:
+            raise RuntimeError(f"Could not decode {input_path} for automatic orientation normalization.")
         logger.warning("could not decode %s for preprocessing; using the original", input_path)
         return PreprocessResult(path=input_path)
     if use_exif:
         steps.append(StepTiming("exif", time.perf_counter() - started))
 
+    orientation_changed = False
+    if auto_rotate:
+        from core.preprocess.orientation import normalize_document_orientation
+
+        started = time.perf_counter()
+        image, angle = normalize_document_orientation(image)
+        orientation_changed = angle != 0
+        steps.append(StepTiming("orientation", time.perf_counter() - started, f"{angle}deg"))
+
     # Order is deliberate. The border goes first: a black margin corrupts both
     # the skew estimate and the background statistics. Deskew comes next so the
     # remaining filters see level text. Contrast work goes last, on an image
     # that is already geometrically correct.
-    if app_settings.preprocess_border_crop:
+    if cleanup_enabled and app_settings.preprocess_border_crop:
         started = time.perf_counter()
         before = image.shape[:2]
         image = image_ops.crop_scanner_border(image)
@@ -149,7 +169,7 @@ def _run_chain(
         detail = "" if before == after else f"{before[1]}x{before[0]}->{after[1]}x{after[0]}"
         steps.append(StepTiming("border_crop", time.perf_counter() - started, detail))
 
-    if app_settings.preprocess_deskew:
+    if cleanup_enabled and app_settings.preprocess_deskew:
         started = time.perf_counter()
         image, angle = image_ops.deskew(
             image,
@@ -159,23 +179,28 @@ def _run_chain(
         detail = f"{angle:+.2f}deg" if angle else "none"
         steps.append(StepTiming("deskew", time.perf_counter() - started, detail))
 
-    if app_settings.preprocess_illumination:
+    if cleanup_enabled and app_settings.preprocess_illumination:
         started = time.perf_counter()
         image = image_ops.flatten_illumination(image)
         steps.append(StepTiming("illumination", time.perf_counter() - started))
 
-    if app_settings.preprocess_denoise:
+    if cleanup_enabled and app_settings.preprocess_denoise:
         started = time.perf_counter()
         image = image_ops.denoise(image, kernel_size=app_settings.preprocess_denoise_kernel)
         steps.append(StepTiming("denoise", time.perf_counter() - started))
 
-    if app_settings.preprocess_clahe:
+    if cleanup_enabled and app_settings.preprocess_clahe:
         started = time.perf_counter()
         image = image_ops.apply_clahe(image, clip_limit=app_settings.preprocess_clahe_clip_limit)
         steps.append(StepTiming("clahe", time.perf_counter() - started))
 
+    if not cleanup_enabled and not orientation_changed:
+        return PreprocessResult(path=input_path, steps=steps)
+
     started = time.perf_counter()
     if not image_ops.write_image(output_path, image):
+        if auto_rotate and orientation_changed:
+            raise RuntimeError(f"Could not save the normalized page image to {output_path}.")
         logger.warning("could not encode the preprocessed image for %s; using the original", input_path)
         return PreprocessResult(path=input_path)
     steps.append(StepTiming("write", time.perf_counter() - started))

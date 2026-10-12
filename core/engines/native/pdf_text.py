@@ -14,7 +14,7 @@ from typing import Any
 import unicodedata
 
 from config.config import Settings, settings
-from core.domain.schemas import Block, BlockType, PageParseResult, Point, Table, TableCell
+from core.domain.schemas import Block, BlockType, PageGeometry, PageParseResult, Point, Table, TableCell
 from core.engines.base import EngineParseResult, ParseEngine
 
 
@@ -90,6 +90,12 @@ class PdfTextEngine(ParseEngine):
                 raw_blocks = text_dict.get("blocks", [])
                 raw_words = _get_page_words(page)
                 blocks = self._extract_page_blocks(raw_blocks, page_index)
+                # Text coordinates are unrotated; the browser renders page rotation.
+                for block in blocks:
+                    rotated = [
+                        fitz.Point(point.x, point.y) * page.rotation_matrix for point in block.bbox
+                    ]
+                    block.bbox = [Point(x=point.x, y=point.y) for point in rotated]
                 tables = _extract_tables_from_words(raw_words, page_index, PDF_TEXT_CONFIDENCE)
                 page_markdown = _build_layout_markdown(raw_words)
                 if blocks:
@@ -104,6 +110,11 @@ class PdfTextEngine(ParseEngine):
                         reading_order=[block.block_id for block in blocks],
                         confidence=PDF_TEXT_CONFIDENCE if blocks else 0.0,
                         source_engine=self.name,
+                        geometry=PageGeometry(
+                            width=page.rect.width,
+                            height=page.rect.height,
+                            coordinate_space="original",
+                        ),
                     )
                 )
                 raw_pages.append({"page_index": page_index, "blocks": raw_blocks, "words": raw_words})

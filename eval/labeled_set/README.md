@@ -69,8 +69,8 @@ eval/labeled_set/
     └── po-215612.pdf
 ```
 
-Run them with `--source local` or `--source online`. These call the real OCR
-engine and the real OpenAI API, so they cost money and need `OPENAI_API_KEY`.
+Run them with `--source local`. This calls the local OCR engine and the real
+OpenAI API, so it costs money and needs `OPENAI_API_KEY`.
 
 `--source replay` skips document cases and vice versa; the report says how many
 were skipped.

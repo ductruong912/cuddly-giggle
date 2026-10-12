@@ -16,8 +16,9 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from api.dependencies import get_database_pool, get_pipeline_limiters, warmup_primary_engine
 from api.errors import register_exception_handlers
+from api.frontend import register_frontend
 from api.rate_limit import limiter
-from api.routes import doc_router, health_router, history_router, ocr_router
+from api.routes import doc_router, health_router, history_router, ocr_router, ui_router
 from api.uploads import cleanup_temp_dir
 from config.config import configure_app_logging, configure_third_party_logging, settings
 from services.concurrency import apply_thread_pool_size
@@ -84,6 +85,8 @@ def create_app() -> FastAPI:
     application.include_router(doc_router)
     application.include_router(ocr_router)
     application.include_router(history_router)
+    application.include_router(ui_router)
+    register_frontend(application, settings)
     return application
 
 

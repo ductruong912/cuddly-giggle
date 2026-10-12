@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -52,6 +52,23 @@ class Table(BaseModel):
     confidence: float = 0.0
 
 
+class OriginalPageGeometry(BaseModel):
+    """Exact affine mapping from OCR pixels to the original page pixels."""
+
+    width: float = Field(gt=0)
+    height: float = Field(gt=0)
+    transform: tuple[float, float, float, float, float, float]
+
+
+class PageGeometry(BaseModel):
+    """Extent of the bbox coordinate space; original means it matches the preview."""
+
+    width: float = Field(gt=0)
+    height: float = Field(gt=0)
+    coordinate_space: Literal["original", "processed"] = "processed"
+    original: OriginalPageGeometry | None = None
+
+
 class PageParseResult(BaseModel):
     page_index: int
     blocks: list[Block] = Field(default_factory=list)
@@ -59,6 +76,8 @@ class PageParseResult(BaseModel):
     reading_order: list[str] = Field(default_factory=list)
     confidence: float = 0.0
     source_engine: str = ""
+    geometry: PageGeometry | None = None
+    preview_image: str | None = None
 
 
 class ParseDecision(BaseModel):
@@ -74,11 +93,18 @@ class ParseResponse(BaseModel):
     reading_order: list[str]
     markdown: str | None = None
     engine_name: str = ""
-    engine_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ParseOptions(BaseModel):
     lang_hint: LangHint = LangHint.auto
+
+
+class UIConfigResponse(BaseModel):
+    """Public upload capabilities for the OCR playground; contains no credentials."""
+
+    supported_suffixes: list[str]
+    max_upload_bytes: int
+    pdf_max_pages: int
 
 
 class LLMExtractionOCRMetadata(BaseModel):

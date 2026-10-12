@@ -85,10 +85,11 @@ class Settings:
 
     # --- OpenAI structured extraction ---
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "").strip()
-    openai_model: str = _get_str("OPENAI_MODEL", "gpt-5-mini")
+    openai_model: str = _get_str("OPENAI_MODEL", "gpt-6-luna")
     openai_timeout_seconds: float = _get_float("OPENAI_TIMEOUT_SECONDS", 60.0)
     openai_max_retries: int = _get_int("OPENAI_MAX_RETRIES", 2)
     llm_max_input_chars: int = _get_int("LLM_MAX_INPUT_CHARS", 120_000)
+    # GPT-4 ignores this control; reasoning models validate it per family.
     llm_reasoning_effort: str = _get_str("LLM_REASONING_EFFORT", "low").lower()
 
     # --- Extraction validation & self-healing ---
@@ -99,7 +100,8 @@ class Settings:
     po_line_total_tolerance_ratio: float = _get_float("PO_LINE_TOTAL_TOLERANCE_RATIO", 0.01)
 
     # --- OCR engines ---
-    primary_engine: str                = _get_str("OCR_PRIMARY_ENGINE", "paddleocr_vl")
+    # External quarter-turn normalization precedes deskew; False restores Paddle rotation.
+    ocr_external_rotation: bool = _get_bool("OCR_EXTERNAL_ROTATION", True)
     ocr_device: str                    = os.getenv("OCR_DEVICE", "").strip()
     ocr_inference_engine: str          = os.getenv("OCR_INFERENCE_ENGINE", "").strip()
     paddleocr_vl_pipeline_version: str = _get_str("PADDLEOCR_VL_PIPELINE_VERSION", "v1.6")
@@ -109,9 +111,12 @@ class Settings:
     paddleocr_vl_rec_api_model_name: str = os.getenv("PADDLEOCR_VL_REC_API_MODEL_NAME", "").strip()
     paddleocr_vl_rec_api_key: str      = os.getenv("PADDLEOCR_VL_REC_API_KEY", "").strip()
     paddleocr_vl_use_gguf: bool        = _get_bool("PADDLEOCR_VL_USE_GGUF", False)
-    # Corrects page rotation/warp before layout detection. Off by default: it adds
-    # a model pass per page, and most scans already arrive upright.
+    # Normalize page orientation before the OCR pipeline. Off by default because
+    # the separate classifier adds a model pass per page.
     paddleocr_vl_auto_rotate: bool     = _get_bool("PADDLEOCR_VL_AUTO_ROTATE", False)
+    # Independent of rotation: flatten curved pages only when needed, since
+    # unwarping can distort otherwise flat scans and their table layout.
+    paddleocr_vl_use_doc_unwarping: bool = _get_bool("PADDLEOCR_VL_USE_DOC_UNWARPING", False)
     paddleocr_vl_max_pixels: int       = _get_int("PADDLEOCR_VL_MAX_PIXELS", 1003520)
     paddleocr_vl_markdown_ignore_labels: tuple[str, ...] = tuple(
         item.strip()
@@ -130,9 +135,6 @@ class Settings:
     fast_ocr_inference_engine: str = _get_str("FAST_OCR_INFERENCE_ENGINE", "onnxruntime")
     fast_ocr_enable_mkldnn: bool = _get_bool("FAST_OCR_ENABLE_MKLDNN", False)
     fast_ocr_auto_rotate: bool = _get_bool("FAST_OCR_AUTO_ROTATE", False)
-    fast_ocr_datalab_mode: str = _get_str("FAST_OCR_DATALAB_MODE", "balanced").lower()
-    fast_ocr_datalab_timeout_seconds: float = _get_float("FAST_OCR_DATALAB_TIMEOUT_SECONDS", 120.0)
-    datalab_api_key: str = os.getenv("DATALAB_API_KEY", "").strip()
     warmup_models_on_startup: bool     = _get_bool("WARMUP_MODELS_ON_STARTUP", False)
 
     # --- llama.cpp / GGUF bootstrap ---
@@ -175,8 +177,8 @@ class Settings:
     # --- Scan preprocessing (cleans each page image before OCR) ---
     # Everything here is off by default and switchable one step at a time, so a
     # step's cost and its effect on accuracy can be attributed to that step
-    # alone. These are cheap CPU array passes, unlike PADDLEOCR_VL_AUTO_ROTATE,
-    # which runs two extra models per page inside the OCR slot.
+    # alone. These are cheap CPU array passes, unlike VL orientation correction
+    # and unwarping, which each run an extra model inside the OCR slot.
     preprocess_enabled: bool             = _get_bool("PREPROCESS_ENABLED", False)
     # OpenCV drops EXIF, so a phone photo of a document otherwise reaches OCR
     # sideways with nothing downstream able to notice.
@@ -237,6 +239,9 @@ class Settings:
     database_persistence_required: bool  = _get_bool("DATABASE_PERSISTENCE_REQUIRED", True)
 
     # --- Paths & misc ---
+    frontend_dist_dir: str               = _repo_path_from_env("FRONTEND_DIST_DIR", "frontend/dist")
+    ui_preview_max_bytes: int = _get_int("UI_PREVIEW_MAX_BYTES", 16 * 1024 * 1024)
+    ui_preview_max_edge: int = _get_int("UI_PREVIEW_MAX_EDGE", 2000)
     temp_dir: str                        = _get_str("DOC_TEMP_DIR", ".tmp_doc_parse")
     parse_output_dir: str                = _get_str("PARSE_OUTPUT_DIR", "outputs")
     # Saved artifacts accumulate one directory per request forever otherwise,
@@ -250,12 +255,6 @@ class Settings:
     paddlex_disable_model_source_check: bool = _get_bool("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", True)
 
     def __post_init__(self) -> None:
-        if self.fast_ocr_datalab_mode not in {"fast", "balanced", "accurate"}:
-            raise ValueError(
-                "FAST_OCR_DATALAB_MODE must be one of: fast, balanced, accurate"
-            )
-        if self.fast_ocr_datalab_timeout_seconds <= 0:
-            raise ValueError("FAST_OCR_DATALAB_TIMEOUT_SECONDS must be greater than zero")
         if self.ocr_max_concurrency < 1:
             raise ValueError("OCR_MAX_CONCURRENCY must be at least 1")
         if self.llm_max_concurrency < 1:
@@ -282,6 +281,8 @@ class Settings:
             raise ValueError("PARSE_OUTPUT_SWEEP_MINUTES must be at least 1")
         if self.max_upload_bytes < 1:
             raise ValueError("MAX_UPLOAD_BYTES must be at least 1")
+        if self.ui_preview_max_bytes < 1 or self.ui_preview_max_edge < 1:
+            raise ValueError("UI_PREVIEW_MAX_BYTES and UI_PREVIEW_MAX_EDGE must be at least 1")
         if self.pdf_max_pages < 1:
             raise ValueError("PDF_MAX_PAGES must be at least 1")
         if self.llm_self_heal_max_retries < 0:
@@ -394,10 +395,29 @@ _prepend_windows_cuda_paths()
 # Logging helpers
 # ---------------------------------------------------------------------------
 
+class QuietAccessLogFilter(logging.Filter):
+    """Hide successful static-file and health probes, while keeping API errors."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not settings.quiet_third_party_logs or record.levelno >= logging.WARNING:
+            return True
+        if not isinstance(record.args, tuple) or len(record.args) != 5:
+            return True
+        _, method, target, _, status = record.args
+        if method not in ("GET", "HEAD") or not isinstance(status, int) or status >= 400:
+            return True
+        path = str(target).partition("?")[0]
+        return not (path.startswith("/assets/") or path in ("/healthz", "/readyz"))
+
+
 def configure_third_party_logging() -> None:
     """Quieten paddlex's logger where it is installed, and carry on where it is not."""
     if not settings.quiet_third_party_logs:
         return
+    # HTTPX logs every model-loading probe and OCR block at INFO. Keep genuine
+    # library warnings/errors without flooding the console with HTTP traffic.
+    for logger_name in ("httpx", "httpcore"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
     try:
         from paddlex.utils import logging as paddlex_logging  # type: ignore
     except ImportError:
@@ -412,6 +432,9 @@ def configure_third_party_logging() -> None:
 
 
 def configure_app_logging() -> None:
+    access_logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, QuietAccessLogFilter) for f in access_logger.filters):
+        access_logger.addFilter(QuietAccessLogFilter())
     for logger_name in ("app", "api", "config", "core", "eval", "services"):
         app_logger = logging.getLogger(logger_name)
         app_logger.setLevel(logging.INFO)

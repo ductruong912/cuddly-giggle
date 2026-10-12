@@ -9,6 +9,8 @@ import subprocess
 import time
 from typing import Callable, Protocol
 
+import httpx
+
 
 logger = logging.getLogger(__name__)
 
@@ -96,12 +98,41 @@ def wait_for_tcp_port(host: str, port: int, timeout_seconds: float) -> bool:
     return False
 
 
+def is_llama_server_ready(host: str, port: int, timeout_seconds: float = 0.25) -> bool:
+    """Check model readiness; an open TCP port can still return Loading model."""
+    probe_host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(host, host)
+    if ":" in probe_host:
+        probe_host = f"[{probe_host}]"
+    try:
+        response = httpx.get(
+            f"http://{probe_host}:{port}/health", timeout=timeout_seconds, trust_env=False
+        )
+        if response.status_code != 200:
+            return False
+        payload = response.json()
+        return isinstance(payload, dict) and payload.get("status") == "ok"
+    except (httpx.HTTPError, ValueError):
+        return False
+
+
+def wait_for_llama_server(host: str, port: int, timeout_seconds: float) -> bool:
+    """Wait for the model to finish loading within the startup budget."""
+    deadline = time.monotonic() + timeout_seconds
+    while (remaining := deadline - time.monotonic()) > 0:
+        if is_llama_server_ready(host, port, min(0.25, remaining)):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.25, remaining))
+    return False
+
+
 def start_llama_server_if_needed(
     config: LlamaServerConfig,
     *,
     port_check: Callable[[str, int], bool] = is_tcp_port_open,
     popen: Callable[..., ProcessLike] = subprocess.Popen,
-    wait_for_server: Callable[[str, int, float], bool] = wait_for_tcp_port,
+    wait_for_server: Callable[[str, int, float], bool] = wait_for_llama_server,
 ) -> ProcessLike | None:
     """Start llama-server unless one is already listening. Returns the owned process.
 
@@ -110,7 +141,12 @@ def start_llama_server_if_needed(
     """
     if port_check(config.host, config.port):
         logger.info("llama.cpp server already listening on %s:%s", config.host, config.port)
-        return None
+        if wait_for_server(config.host, config.port, config.startup_timeout_seconds):
+            return None
+        raise RuntimeError(
+            f"Existing llama.cpp server did not become ready on {config.host}:{config.port} "
+            f"within {config.startup_timeout_seconds:g}s."
+        )
 
     _validate_paths(config)
     command = build_llama_server_command(config)

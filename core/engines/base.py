@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
-from core.domain.schemas import PageParseResult
+from core.domain.schemas import PageGeometry, PageParseResult
 
 
 @dataclass
@@ -27,3 +27,21 @@ class ParseEngine(ABC):
     @abstractmethod
     def parse(self, input_path: str, lang_hint: str = "auto") -> EngineParseResult:
         raise NotImplementedError
+
+
+def image_page_geometry(input_path: str, *, matches_original: bool) -> PageGeometry | None:
+    """Read pixel dimensions lazily; unknown/EXIF-transformed images cannot be overlaid."""
+    try:
+        from PIL import Image
+
+        with Image.open(input_path) as image:
+            if image.getexif().get(274, 1) != 1 or getattr(image, "n_frames", 1) != 1:
+                return None
+            width, height = image.size
+        return PageGeometry(
+            width=width,
+            height=height,
+            coordinate_space="original" if matches_original else "processed",
+        )
+    except (ImportError, OSError, ValueError):
+        return None

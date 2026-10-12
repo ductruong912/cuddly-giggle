@@ -83,7 +83,6 @@ services:
       MAX_UPLOAD_BYTES: "${MAX_UPLOAD_BYTES:-52428800}"
       PDF_MAX_PAGES: "${PDF_MAX_PAGES:-100}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      DATALAB_API_KEY: "${DATALAB_API_KEY:-}"
       # Inside the compose network Postgres is on its own hostname and port 5432,
       # not the 5433 published to the host.
       DATABASE_URL: "postgresql://${POSTGRES_USER:-docpipe}:${POSTGRES_PASSWORD:-docpipepass}@postgres:5432/${POSTGRES_DB:-docpipeline}"

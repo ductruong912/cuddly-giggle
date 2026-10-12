@@ -21,7 +21,7 @@ REPLAY_MARKDOWN = "# Replayed case\n\nNo document was read; answers are scripted
 
 
 class DocumentParser(Protocol):
-    """The parse contract shared by the local and online orchestrators."""
+    """The parse contract implemented by the local orchestrator."""
 
     def parse(self, input_path: str, *, request_id: str | None = None) -> ParseResponse: ...
 
@@ -101,13 +101,12 @@ class LiveExtractionSource:
         parser: DocumentParser,
         extractor: StructuredExtractor,
         *,
-        route_label: str,
         app_settings: Settings = settings,
     ) -> None:
         self.parser = parser
         self.extractor = extractor
         self.settings = app_settings
-        self.name = f"live-{route_label}"
+        self.name = "live-local"
 
     def run(self, case: EvalCase) -> ExtractionOutcome:
         """Parse the document, then extract and validate it exactly as the API does."""

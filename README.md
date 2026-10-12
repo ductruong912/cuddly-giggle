@@ -6,10 +6,105 @@ FastAPI service for extracting Vietnamese documents into Markdown or structured 
 
 - Uses native text extraction for digital PDF, DOCX, XLSX, and XLSM files.
 - `POST /v1/extract/local` chooses PaddleOCR-VL + GGUF/llama.cpp on NVIDIA GPU, or PaddleOCR v6 on CPU.
-- `POST /v1/extract/online` sends PDFs and images to DataLab SuryaOCR.
 - Saves generated Markdown and extraction artifacts in `outputs/`.
 
-## Requirements
+OCR runs on the local machine. Structured Purchase Order extraction still sends
+the OCR Markdown to OpenAI.
+
+## OCR Playground
+
+UI nội bộ bằng React + TypeScript, xem tài liệu cạnh kết quả OCR có cấu trúc.
+Giao diện gọi `POST /v1/doc/ocr/result`; không gọi OpenAI hoặc API trích xuất PO. Giữ
+luồng đọc native cho Word/Excel/PDF có lớp chữ và OCR CPU/GPU cho ảnh/PDF scan.
+PaddleOCR-VL/llama.cpp vẫn có thể được sử dụng cho nhận dạng OCR theo cấu hình máy.
+
+**Phát triển** — cần Node.js 24 và runtime Python/OCR đã được chuẩn bị:
+
+```powershell
+# Terminal 1, từ root repo: OCR độc lập không cần OpenAI key/database.
+# Đặt biến môi trường trước khi chạy để ghi đè các giá trị trong .env.
+$env:DATABASE_URL = ""
+$env:OPENAI_API_KEY = ""
+.\venv\Scripts\python.exe main.py
+
+# Terminal 2
+cd frontend
+npm.cmd ci
+npm.cmd run dev
+```
+
+Mở `http://127.0.0.1:5173`. Vite proxy API tới `127.0.0.1:8000`. Trên Linux/macOS
+dùng `npm` thay `npm.cmd`, và `DATABASE_URL= OPENAI_API_KEY= python main.py` trong
+môi trường ảo. Không cần bật database; cấu hình database đã bật vẫn giữ startup
+check của backend. `/readyz` kiểm tra cả LLM nên có thể trả 503 khi không có key;
+UI dùng `/healthz` để hiển thị kết nối API, còn lỗi OCR hiển thị theo response thực.
+
+**Chạy bản build cùng FastAPI:**
+
+```powershell
+cd frontend
+npm.cmd ci
+npm.cmd run build
+cd ..
+.\venv\Scripts\python.exe main.py
+```
+
+Mở `http://127.0.0.1:8000/` hoặc `/playground`. `FRONTEND_DIST_DIR` mặc định là
+`frontend/dist`, được tính từ root repo. Nếu chưa có build, backend vẫn chạy các
+API như trước. Dockerfile tự build frontend ở stage Node rồi chép vào image app;
+Docker Compose vẫn cần runtime/model/GPU như mô tả ở phần Docker.
+
+PDF có preview chuyển trang/zoom; PNG/JPEG/BMP/WebP có preview ảnh. Word, Excel và
+TIFF chỉ hiển thị thông tin file nhưng vẫn gửi để đọc/OCR được. Giới hạn upload
+đọc từ `/v1/ui/config`; giới hạn trang chỉ áp dụng cho PDF cần OCR ở backend.
+Kết quả có tab **Trình bày**, **Markdown**, **JSON OCR** và **Blocks**;
+sao chép/tải `.json` khi chọn JSON OCR, `.md` ở các tab còn lại.
+
+Bbox tự bật khi đọc xong; có thể tắt bằng **Hiện bbox**. Rê chuột, chọn hoặc
+đặt focus vào bbox để mở **Blocks**, đánh dấu và cuộn đến nội dung tương
+ứng. Tương tác với nội dung làm nổi bật bbox và chuyển preview đến đúng trang.
+Blocks dùng khối viền mảnh và nhãn viết hoa, đồng bộ màu với bbox: title hồng,
+text xanh, table cam. Danh sách theo thứ tự đọc, giữ nhãn gốc trong `extra.label`
+(nếu có), hoặc loại block như `title`, `text`; không tự suy đoán
+tiêu đề nếu engine chỉ trả text. Mỗi vùng hiển thị điểm nhận dạng, có thể được tổng
+hợp hoặc gán mặc định, không phải phần trăm chính xác. Mỗi trang có `geometry`
+gồm kích thước hệ tọa độ bbox và `coordinate_space`: `original` khớp bản gốc,
+`processed` thuộc ảnh đã xử lý. Nếu kết quả có `geometry.original`, UI dùng
+ma trận affine `transform` để đưa bbox sau xoay về bản gốc; bbox trong JSON giữ
+nguyên. Nếu ảnh được uốn/chỉnh hình và không có phép chuyển ngược xác định,
+UI tự chọn ảnh OCR với bbox khớp ảnh đó; tắt **Hiện bbox** để đối chiếu
+tài liệu ban đầu. Không ước lượng kích thước trang từ phạm vi text hoặc vẽ
+bbox đã uốn lên bản gốc khi chưa có ánh xạ.
+
+Frontend gọi `/v1/doc/ocr/result?include_preview=true`. Chỉ request có cờ này
+mới lấy metadata/ảnh từ kết quả OCR đang có, không chạy lại model, không đổi
+cấu hình tự xoay và không lưu thêm ảnh ra đĩa. Tổng ảnh JPEG inline bị giới hạn
+bởi `UI_PREVIEW_MAX_BYTES` (mặc định 16 MiB), cạnh dài bởi `UI_PREVIEW_MAX_EDGE`
+(2000 px); kích thước hệ tọa độ vẫn là ảnh OCR đầy đủ. Nếu adapter/CLI không
+cung cấp ảnh hoặc hết ngân sách, UI thông báo không có bbox khớp bản gốc và
+giữ tọa độ trong JSON. `/v1/doc/ocr`, `/v1/extract/local` và request JSON không
+có cờ vẫn dùng luồng cũ, không tạo ảnh xem trước.
+
+Không thực thi HTML
+hoặc tự tải ảnh/link trong kết quả. File và kết quả giữ trong bộ nhớ trình duyệt;
+backend vẫn lưu artifact theo chính sách hiện có. Không có lịch sử OCR trong UI.
+
+**Kiểm thử frontend**, dùng fixture tổng hợp và API giả, không gọi provider/OCR thật:
+
+```powershell
+cd frontend
+npm.cmd run typecheck
+npm.cmd run lint
+npm.cmd test
+npx.cmd playwright install chromium
+npm.cmd run test:e2e
+npm.cmd run build
+```
+
+Playwright tự khởi động Vite ở cổng 5173. Screenshot được ghi vào `test-results/`;
+report và build không được Git theo dõi. CI chạy Chromium ở chế độ headless.
+
+## Backend requirements
 
 - Python 3.10+ (3.11 is what the Docker image ships)
 - NVIDIA GPU is optional; it enables the local PaddleOCR-VL + GGUF/llama.cpp path.
@@ -86,18 +181,15 @@ cuddly-giggle/
 │   │   └── strict_schema.py       # Pydantic model → OpenAI strict JSON Schema
 │   ├── engines/
 │   │   ├── base.py                # Engine interface
-│   │   ├── registry.py            # Config-driven engine factory (used by scripts)
 │   │   ├── native/                # PDF / Word / Excel text-layer parsers
 │   │   ├── normalizer/            # Normalizes engine output to the page schema
 │   │   ├── paddle.py              # PaddleOCR-VL adapter
 │   │   ├── paddle_fast.py         # PaddleOCR v6 CPU adapter
-│   │   └── fast_datalab.py        # DataLab SuryaOCR adapter
 │   └── prompts/prompt.py          # Extraction instructions + JSON schema
 ├── services/
 │   ├── document_extraction.py     # parse → extract → save pipeline
 │   ├── concurrency.py             # Stage limiters + worker-pool sizing
 │   ├── orchestrator.py            # Per-file-type engine selection
-│   ├── online_orchestrator.py     # DataLab parse path
 │   ├── llm_extraction.py          # OpenAI structured-output adapter
 │   ├── validation/                # Deterministic checks + the self-heal retry loop
 │   ├── local_ocr_selector.py      # GPU/CPU engine choice
@@ -188,7 +280,7 @@ Configure `.env` according to the API flow you will use. `OPENAI_API_KEY` is req
 Use this profile when there is no NVIDIA GPU. It runs PaddleOCR v6 and does not need llama.cpp or PaddlePaddle GPU.
 
 ```bash
-python scripts/setup_models.py --fast-onnx
+python scripts/setup_models.py --cpu
 ```
 
 Keep these values in `.env`:
@@ -207,7 +299,7 @@ Do not keep both PaddlePaddle CPU and GPU packages in the same virtual environme
 ```powershell
 python -m pip uninstall -y paddlepaddle paddlepaddle-gpu
 python -m pip install "paddlepaddle-gpu==3.3.0" -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
-python scripts/setup_models.py --paddleocr-vl
+python scripts/setup_models.py --gpu
 python scripts/setup_runtime.py --llama
 ```
 
@@ -229,17 +321,7 @@ python -c "import paddle; print(paddle.device.is_compiled_with_cuda()); print(pa
 
 Expected output is `True` and `gpu:0`. If it says GPU is unavailable, PaddlePaddle was installed without CUDA support or with an incompatible build.
 
-### Online OCR: DataLab SuryaOCR
-
-`POST /v1/extract/online` does not require local OCR models, llama.cpp, or a GPU. Configure only the DataLab credential:
-
-```dotenv
-DATALAB_API_KEY=your_datalab_api_key_here
-FAST_OCR_DATALAB_MODE=balanced
-```
-
-- API: <http://localhost:8000> (Swagger at `/docs`)
-- llama (debug only): <http://localhost:8080>
+The llama.cpp debug server is available at <http://localhost:8080> when running.
 
 ### Tuning / overrides
 
@@ -268,21 +350,22 @@ uvicorn api.application:app --host 0.0.0.0 --port 8000
 ```
 
 Open [Swagger UI](http://127.0.0.1:8000/docs). The health endpoint is `GET /healthz`.
+The API listens on <http://localhost:8000> by default; on GPU setups, the local
+llama.cpp debug server listens on <http://localhost:8080>.
 
 ## API routes
 
 | Route | Description |
 | --- | --- |
 | `POST /v1/extract/local` | Local OCR plus structured extraction. Uses PaddleOCR-VL on GPU and PaddleOCR v6 on CPU. |
-| `POST /v1/extract/online` | DataLab SuryaOCR plus structured extraction for PDFs and images. |
 | `POST /v1/doc/ocr` | Auxiliary local OCR-only debugging endpoint; returns Markdown and does not call the LLM. |
+| `POST /v1/doc/ocr/result` | OCR-only structured response: Markdown, pages, blocks/bbox, tables, reading order and engine name. Uses the same upload limits, runtime guard and cleanup as `/v1/doc/ocr`. |
 | `GET /healthz` | Liveness check plus live per-stage occupancy. |
 
 Use `multipart/form-data` with a `file` field. The local route supports PDF,
 DOC/DOCX, XLS/XLSX/XLSM, PNG, JPG, BMP, WEBP, TIFF, and Markdown; it also accepts
 already-parsed Markdown as a `text/markdown`, `text/plain`, or
-`application/json` (`{"markdown": "..."}`) body. The online route supports PDFs
-and images only.
+`application/json` (`{"markdown": "..."}`) body.
 
 ### Extraction validation
 
@@ -441,9 +524,9 @@ on the first attempt and were correct by the last.
 Two kinds of case. A **replay** case supplies recorded model answers and runs
 them through the real validation loop, so the retry behaviour can be measured
 without an OCR engine, an API key or a document. A **document** case runs the
-full pipeline against a file on disk. `--source replay` runs the first kind,
-`--source local` / `--source online` the second; the report says how many cases
-were skipped.
+full local OCR and extraction pipeline against a file on disk. `--source replay`
+runs the first kind, while `--source local` runs the second; the report says how
+many cases were skipped.
 
 > The shipped `synthetic.json` is **12 hand-written cases, not real documents.**
 > It measures the validation layer only. Its accuracy figure is a property of the
@@ -467,7 +550,7 @@ Only ground truth catches these, which is the argument for a labeled set.
 
 ```bash
 pytest                              # the whole suite, ~18s
-pytest tests/test_self_heal.py      # one module
+pytest tests/test_extraction.py     # one module
 pytest -k concurrency               # by name
 ```
 
@@ -498,7 +581,7 @@ accuracy gate, then `compileall` and `pyflakes`. The evaluation report is
 uploaded as a build artifact.
 
 `requirements-ci.txt` is a subset of `requirements.txt` — the full file needs
-CUDA and a custom index. `tests/test_requirements.py` fails the build if the two
+CUDA and a custom index. `tests/test_runtime.py` fails the build if the two
 files' pins ever drift, so CI cannot quietly start testing different versions
 than production runs.
 

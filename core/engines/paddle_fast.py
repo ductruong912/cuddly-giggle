@@ -7,25 +7,27 @@ import logging
 import os
 from pathlib import Path
 import shutil
-import tempfile
 import threading
 import time
 from typing import Any
 
 from config.config import Settings, settings
-from core.engines.base import EngineParseResult
+from core.domain.schemas import PageGeometry
+from core.engines.base import EngineParseResult, image_page_geometry
 from core.engines.normalizer import normalize_engine_output
-from core.preprocess import preprocess_file
+from core.engines.preview import attach_page_previews, preview_capture_enabled
+from core.engines.paddle import PaddlePipelineEngine
 from services.model_assets import require_model_profile
 
 
 logger = logging.getLogger(__name__)
 
 
-class PaddleOCRFastEngine:
+class PaddleOCRFastEngine(PaddlePipelineEngine):
     """Run the general PaddleOCR pipeline with the CPU-oriented v6 profile."""
 
     name = "paddleocr_fast"
+    model_profile = "cpu"
 
     def __init__(self, app_settings: Settings = settings) -> None:
         self.settings = app_settings
@@ -39,7 +41,9 @@ class PaddleOCRFastEngine:
             "text_detection_model_name": self.settings.fast_ocr_detection_model_name,
             "text_recognition_model_name": self.settings.fast_ocr_recognition_model_name,
             "text_recognition_batch_size": self.settings.fast_ocr_recognition_batch_size,
-            "use_doc_orientation_classify": self.settings.fast_ocr_auto_rotate,
+            "use_doc_orientation_classify": (
+                self.settings.fast_ocr_auto_rotate and not self.settings.ocr_external_rotation
+            ),
             "use_doc_unwarping": False,
             "use_textline_orientation": False,
         }
@@ -50,11 +54,33 @@ class PaddleOCRFastEngine:
             )
         return kwargs
 
+    def _external_auto_rotate(self) -> bool:
+        return self.settings.ocr_external_rotation and self.settings.fast_ocr_auto_rotate
+
     def parse(self, input_path: str, lang_hint: str = "auto") -> EngineParseResult:
+        if Path(input_path).suffix.lower() != ".pdf":
+            return self._parse_single(input_path, lang_hint)
+        page_images, cleanup = self._prepare_page_images(input_path)
+        try:
+            if page_images is None:
+                return self._parse_single(input_path, lang_hint)
+            results = [self._parse_single(path, lang_hint, prepared=True) for path in page_images]
+            merged = self._merge_page_results(results)
+            merged.raw["paddleocr"] = [
+                page for result in results for page in result.raw.get("paddleocr", [])
+            ]
+            return merged
+        finally:
+            cleanup()
+
+    def _parse_single(
+        self, input_path: str, lang_hint: str, *, prepared: bool = False
+    ) -> EngineParseResult:
         del lang_hint
         staged_dir: str | None = None
         try:
-            input_path, staged_dir = self._preprocessed_input(input_path)
+            if not prepared:
+                input_path, staged_dir = self._preprocessed_input(input_path)
             pipeline = self._get_or_create_pipeline()
             page_count = self._get_input_page_count(input_path)
             total_start = time.perf_counter()
@@ -76,6 +102,27 @@ class PaddleOCRFastEngine:
                 source_engine=self.name,
                 app_settings=self.settings,
             )
+            is_pdf = Path(input_path).suffix.lower() == ".pdf"
+            geometry = None
+            if not is_pdf and not self.settings.fast_ocr_auto_rotate:
+                geometry = image_page_geometry(input_path, matches_original=staged_dir is None and not prepared)
+            for page, normalized_page in zip(pages, normalized["pages"]):
+                if geometry is not None:
+                    page.geometry = geometry
+                elif normalized_page.get("image_size"):
+                    width, height = normalized_page["image_size"]
+                    page.geometry = PageGeometry(
+                        width=width,
+                        height=height,
+                        coordinate_space=(
+                            "original" if is_pdf and not self.settings.fast_ocr_auto_rotate
+                            else "processed"
+                        ),
+                    )
+            if preview_capture_enabled():
+                attach_page_previews(pages, output, input_matches_original=(
+                    not prepared and staged_dir is None and (is_pdf or image_page_geometry(input_path, matches_original=True) is not None)
+                ))
             logger.info(
                 "fast-ocr normalize completed duration=%.3fs",
                 time.perf_counter() - normalize_start,
@@ -99,36 +146,25 @@ class PaddleOCRFastEngine:
                 shutil.rmtree(staged_dir, ignore_errors=True)
 
     def _preprocessed_input(self, input_path: str) -> tuple[str, str | None]:
-        """Clean an image input into a temp copy. Returns the path and any dir to remove.
-
-        PDFs are passed through untouched: this engine hands the document to
-        PaddleOCR whole rather than rasterizing it, so there is no page image to
-        clean. On this CPU path preprocessing competes with OCR for the same
-        cores, unlike the GPU path where it overlaps with inference.
-        """
-        if not self.settings.preprocess_enabled or Path(input_path).suffix.lower() == ".pdf":
+        """Normalize an image into a temporary copy using the shared page chain."""
+        if Path(input_path).suffix.lower() == ".pdf":
             return input_path, None
-
-        staged_dir = tempfile.mkdtemp(prefix=f"{self.name}_pre_")
-        destination = Path(staged_dir) / f"page_0000{Path(input_path).suffix or '.png'}"
-        result = preprocess_file(
-            input_path,
-            output_path=str(destination),
-            app_settings=self.settings,
-            debug_name=f"{Path(input_path).stem}/page_0001",
+        if self._external_auto_rotate() and os.getenv("CUDDLY_GIGGLE_MODEL_SETUP") != "1":
+            require_model_profile(self.settings, self.model_profile)
+        paths, cleanup = self._preprocess_standalone_input(
+            input_path, self._document_stem(input_path), auto_rotate=self._external_auto_rotate()
         )
-        if not result.changed:
-            shutil.rmtree(staged_dir, ignore_errors=True)
+        if paths is None or paths[0] == input_path:
+            cleanup()
             return input_path, None
-        logger.info(
-            "fast-ocr preprocess duration=%.3fs steps=%s",
-            result.total_seconds,
-            result.summary(),
-        )
-        return result.path, staged_dir
+        return paths[0], str(Path(paths[0]).parent)
 
     def warmup(self) -> None:
         self._get_or_create_pipeline()
+        if self._external_auto_rotate():
+            from core.preprocess.orientation import warmup_orientation_classifier
+
+            warmup_orientation_classifier()
 
     def _runtime_threads_label(self) -> object:
         if self.settings.fast_ocr_inference_engine == "onnxruntime":
@@ -182,7 +218,7 @@ class PaddleOCRFastEngine:
 
     def _get_or_create_pipeline(self) -> Any:
         if os.getenv("CUDDLY_GIGGLE_MODEL_SETUP") != "1":
-            require_model_profile(self.settings, "fast-onnx")
+            require_model_profile(self.settings, self.model_profile)
         with self._pipeline_lock:
             if self._pipeline is None:
                 initialization_start = time.perf_counter()
@@ -212,6 +248,14 @@ class PaddleOCRFastEngine:
             texts = self._as_list(payload.get("rec_texts"))
             scores = self._as_list(payload.get("rec_scores"))
             boxes = self._as_list(payload.get("rec_boxes"))
+            polygons = self._as_list(payload.get("rec_polys"))
+            # PaddleX retains the recognition image in the live result but omits
+            # it from JSON. Its actual dimensions also cover PDFs rendered internally.
+            live = item.get("res", item) if isinstance(item, dict) else {}
+            preprocessor = live.get("doc_preprocessor_res", {})
+            image = preprocessor.get("output_img") if isinstance(preprocessor, dict) else None
+            shape = getattr(image, "shape", ())
+            image_size = [int(shape[1]), int(shape[0])] if len(shape) >= 2 else None
 
             blocks: list[dict[str, object]] = []
             lines: list[str] = []
@@ -221,8 +265,12 @@ class PaddleOCRFastEngine:
                 if not text:
                     continue
                 score = self._as_float(scores[line_index] if line_index < len(scores) else None)
-                box = boxes[line_index] if line_index < len(boxes) else []
-                blocks.append({"label": "text", "text": text, "box": self._to_list(box), "score": score})
+                if line_index < len(polygons):
+                    box = polygons[line_index]
+                else:
+                    box = boxes[line_index] if line_index < len(boxes) else []
+                blocks.append({"label": "text", "text": text, "box": self._to_list(box),
+                               "score": score, "block_order": line_index})
                 lines.append(text)
                 if score > 0:
                     numeric_scores.append(score)
@@ -233,6 +281,7 @@ class PaddleOCRFastEngine:
                     "text": "\n".join(lines),
                     "score": sum(numeric_scores) / len(numeric_scores) if numeric_scores else 0.0,
                     "blocks": blocks,
+                    "image_size": image_size,
                 }
             )
             if lines:
