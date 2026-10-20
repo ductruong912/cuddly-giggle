@@ -1,11 +1,12 @@
 """Output helpers: markdown table filtering and parse artifact saving."""
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
+import os
 from pathlib import Path, PurePosixPath
 import re
+import tempfile
 
 from config.config import settings
 from core.domain.schemas import ParseResponse
@@ -76,6 +77,11 @@ def _is_pipe_table(block_lines: list[str]) -> bool:
 # =====================================================================================
 
 _WINDOWS_FORBIDDEN_FILENAME_CHARS = frozenset('<>:"/\\|?*')
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"{prefix}{number}" for prefix in ("COM", "LPT") for number in "123456789¹²³"}
+)
+_REQUEST_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 
 
 def _safe_artifact_stem(name: str) -> str:
@@ -84,7 +90,12 @@ def _safe_artifact_stem(name: str) -> str:
         for ch in name.strip()
         if ch not in _WINDOWS_FORBIDDEN_FILENAME_CHARS and ord(ch) >= 32
     ).strip(" .")
-    return stem or "document"
+    # Bound UTF-8 bytes too, leaving room for the temporary-file suffix on Linux.
+    stem = stem[:80].encode("utf-8")[:160].decode("utf-8", errors="ignore")
+    stem = stem.rstrip(" .") or "document"
+    if stem.split(".", maxsplit=1)[0].upper() in _WINDOWS_RESERVED_NAMES:
+        stem = f"document_{stem}"
+    return stem
 
 
 def _raw_upload_stem(input_filename: str) -> str:
@@ -92,32 +103,47 @@ def _raw_upload_stem(input_filename: str) -> str:
     return PurePosixPath(filename).stem
 
 
-def _artifact_folder_name(raw_stem: str, display_stem: str) -> str:
-    if raw_stem == display_stem:
-        return display_stem
-    digest = hashlib.sha256(raw_stem.encode("utf-8")).hexdigest()
-    return f"{display_stem}-{digest}"
-
-
-def _artifact_dir(input_filename: str) -> tuple[Path, str]:
-    """Return the output directory for a document plus the stem to name files with.
-
-    The directory is created but never wiped: two concurrent uploads sharing a
-    filename would otherwise delete each other's results mid-write. Both artifacts
-    are overwritten in place instead, which is idempotent and safe to interleave.
-    """
+def _artifact_dir(input_filename: str, *, request_id: str) -> tuple[Path, str]:
+    """Create one request's directory and retain a safe source name for its files."""
+    if (
+        not _REQUEST_ID_RE.fullmatch(request_id)
+        or request_id.upper() in _WINDOWS_RESERVED_NAMES
+    ):
+        raise ValueError("request_id must be a safe, non-reserved directory name")
     raw_stem = _raw_upload_stem(input_filename)
     display_stem = _safe_artifact_stem(raw_stem)
-    artifact_dir = Path(settings.parse_output_dir) / _artifact_folder_name(raw_stem, display_stem)
+    artifact_dir = Path(settings.parse_output_dir) / request_id
     artifact_dir.mkdir(parents=True, exist_ok=True)
     return artifact_dir, display_stem
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Replace a complete UTF-8 artifact without exposing a partially written file."""
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            temporary_file.write(content)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def save_parse_artifacts(
     response: ParseResponse,
     input_filename: str,
 ) -> list[str]:
-    """Write the parsed Markdown next to the source document's name. Returns saved paths."""
+    """Write Markdown in the request's directory. Returns saved paths."""
     if not response.markdown:
         # Surface a signal so an empty saved_files is not mistaken for a successful export.
         logger.warning(
@@ -126,18 +152,20 @@ def save_parse_artifacts(
         )
         return []
 
-    artifact_dir, display_stem = _artifact_dir(input_filename)
+    artifact_dir, display_stem = _artifact_dir(input_filename, request_id=response.request_id)
     md_path = artifact_dir / f"{display_stem}.md"
-    md_path.write_text(response.markdown, encoding="utf-8")
+    _atomic_write_text(md_path, response.markdown)
     return [str(md_path.resolve())]
 
 
 def save_extraction_artifacts(
     data: dict[str, object],
     input_filename: str,
+    *,
+    request_id: str,
 ) -> list[str]:
-    """Write the structured extraction result as JSON. Returns saved paths."""
-    artifact_dir, display_stem = _artifact_dir(input_filename)
+    """Write JSON alongside the same request's Markdown. Returns saved paths."""
+    artifact_dir, display_stem = _artifact_dir(input_filename, request_id=request_id)
     json_path = artifact_dir / f"{display_stem}.json"
-    json_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    _atomic_write_text(json_path, json.dumps(data, indent=2, ensure_ascii=False))
     return [str(json_path.resolve())]

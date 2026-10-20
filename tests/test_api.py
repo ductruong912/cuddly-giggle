@@ -22,6 +22,7 @@ from api.dependencies import (
 )
 from core.domain.schemas import ParseDecision, ParseResponse
 from services.document_extraction import DocumentExtractionService
+from services.persistence import DatabaseUnavailable
 from api.frontend import register_frontend
 from api.routes import SUPPORTED_INPUT_SUFFIXES
 from config.config import settings
@@ -104,6 +105,17 @@ def test_an_unaccepted_content_type_is_refused(api: Any) -> None:
     assert api(body).status_code == 415
 
 
+def test_a_jsonp_content_type_is_not_treated_as_json(api: Any) -> None:
+    async def body(client):
+        return await client.post(
+            "/v1/extract/local",
+            content=b'{"markdown":"# synthetic"}',
+            headers={"content-type": "application/jsonp"},
+        )
+
+    assert api(body).status_code == 415
+
+
 def test_an_unsupported_file_type_is_refused(api: Any) -> None:
     async def body(client):
         return await client.post(
@@ -121,6 +133,133 @@ def test_json_without_a_markdown_key_is_refused(api: Any) -> None:
     assert api(body).status_code == 400
 
 
+@pytest.mark.parametrize("markdown", [None, 42, [], {}])
+def test_json_markdown_must_be_a_string(api: Any, markdown: Any) -> None:
+    async def body(client):
+        return await client.post("/v1/extract/local", json={"markdown": markdown})
+
+    assert api(body).status_code == 400
+
+
+def _run_request_body_limit(
+    content_type: str,
+    body_chunks: list[bytes],
+    *,
+    content_length: bytes | None = None,
+    max_upload_bytes: int = 4,
+) -> tuple[int, bytes, int]:
+    from api.uploads import RequestBodyLimitMiddleware
+
+    messages = iter(
+        {
+            "type": "http.request",
+            "body": chunk,
+            "more_body": index < len(body_chunks) - 1,
+        }
+        for index, chunk in enumerate(body_chunks)
+    )
+    endpoint_body = bytearray()
+    sent: list[dict[str, Any]] = []
+    receive_calls = 0
+
+    async def endpoint(scope, receive, send):
+        while True:
+            message = await receive()
+            endpoint_body.extend(message.get("body", b""))
+            if not message.get("more_body"):
+                break
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def receive():
+        nonlocal receive_calls
+        receive_calls += 1
+        return next(messages)
+
+    async def send(message):
+        sent.append(message)
+
+    headers = [(b"content-type", content_type.encode("latin-1"))]
+    if content_length is not None:
+        headers.append((b"content-length", content_length))
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/extract/local",
+        "headers": headers,
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("test", 80),
+        "client": ("test", 1),
+        "root_path": "",
+    }
+
+    asyncio.run(
+        RequestBodyLimitMiddleware(endpoint, max_upload_bytes=max_upload_bytes)(
+            scope, receive, send
+        )
+    )
+
+    response_start = next(message for message in sent if message["type"] == "http.response.start")
+    return response_start["status"], bytes(endpoint_body), receive_calls
+
+
+@pytest.mark.parametrize("content_length", [None, b"1"])
+@pytest.mark.parametrize("content_type", ["text/markdown", "application/json"])
+def test_streamed_request_limit_rejects_oversized_body(
+    content_length: bytes | None, content_type: str
+) -> None:
+    status, endpoint_body, _ = _run_request_body_limit(
+        content_type,
+        [b"123", b"456"],
+        content_length=content_length,
+    )
+
+    assert status == 413
+    assert endpoint_body == b"123"
+
+
+def test_content_length_over_the_limit_is_rejected_before_reading() -> None:
+    status, endpoint_body, receive_calls = _run_request_body_limit(
+        "text/plain", [b"12345"], content_length=b"5"
+    )
+
+    assert status == 413
+    assert endpoint_body == b""
+    assert receive_calls == 0
+
+
+def test_request_body_at_the_limit_is_accepted() -> None:
+    status, endpoint_body, _ = _run_request_body_limit("text/markdown", [b"1234"])
+
+    assert status == 200
+    assert endpoint_body == b"1234"
+
+
+def test_multipart_request_limit_counts_all_parts_and_overhead() -> None:
+    limit = 1024 * 1024 + 4
+    first_part = b'--test\r\nContent-Disposition: form-data; name="first"\r\n\r\n'
+    second_part = b'\r\n--test\r\nContent-Disposition: form-data; name="second"\r\n\r\n'
+    closing = b"\r\n--test--\r\n"
+    payload = (
+        first_part
+        + b"x" * (limit + 1 - len(first_part) - len(second_part) - len(closing) - 1)
+        + second_part
+        + b"y"
+        + closing
+    )
+    status, endpoint_body, _ = _run_request_body_limit(
+        "multipart/form-data; boundary=test",
+        [payload[:limit], payload[limit:]],
+    )
+
+    assert len(payload) == limit + 1
+    assert status == 413
+    assert len(endpoint_body) == limit
+
+
 def test_an_oversized_upload_is_refused(api: Any) -> None:
     """Rejected while streaming, so an over-cap file is never written whole."""
 
@@ -132,6 +271,16 @@ def test_an_oversized_upload_is_refused(api: Any) -> None:
         staging = Path(os.environ["DOC_TEMP_DIR"])
         assert not list(staging.glob("*"))
         return response
+
+    assert api(body).status_code == 413
+
+
+def test_an_oversized_markdown_file_is_refused(api: Any) -> None:
+    async def body(client):
+        return await client.post(
+            "/v1/extract/local",
+            files={"file": ("large.md", b"#" * 9000, "text/markdown")},
+        )
 
     assert api(body).status_code == 413
 
@@ -188,6 +337,84 @@ def install_pipeline(parser: BlockingParser, order: dict) -> None:
     app.dependency_overrides[get_local_extraction_service] = lambda: DocumentExtractionService(
         parser, StubExtractor(order), get_pipeline_limiters(), route_label="test"
     )
+
+
+async def submit_markdown(client: Any, input_kind: str):
+    markdown = "# Synthetic purchase order"
+    if input_kind in {"upload", "upload_markdown"}:
+        filename = "order.md" if input_kind == "upload" else "order.markdown"
+        return await client.post(
+            "/v1/extract/local",
+            files={"file": (filename, markdown.encode(), "text/markdown")},
+        )
+    if input_kind == "json":
+        return await client.post("/v1/extract/local", json={"markdown": markdown})
+    return await client.post(
+        "/v1/extract/local", content=markdown, headers={"content-type": input_kind}
+    )
+
+
+@pytest.mark.parametrize("input_kind", ["upload", "upload_markdown", "json", "text/markdown", "text/plain"])
+@pytest.mark.parametrize("needs_review", [False, True])
+def test_every_markdown_input_is_saved_in_history(
+    api: Any, valid_order: dict, input_kind: str, needs_review: bool
+) -> None:
+    store = Mock()
+    parser = Mock()
+    if needs_review:
+        valid_order["items"][0]["extension"] = 500000
+
+    async def body(client):
+        service = DocumentExtractionService(
+            parser, StubExtractor(valid_order), get_pipeline_limiters(),
+            route_label="local", store=store,
+        )
+        app.dependency_overrides[get_local_extraction_service] = lambda: service
+        return await submit_markdown(client, input_kind)
+
+    response = api(body)
+
+    assert response.status_code == 200
+    store.save.assert_called_once()
+    record = store.save.call_args.args[0]
+    payload = response.json()
+    assert record.request_id == payload["request_id"]
+    expected_filename = {"upload": "order.md", "upload_markdown": "order.markdown"}.get(
+        input_kind, "markdown.md"
+    )
+    assert record.source_filename == expected_filename
+    assert record.markdown == "# Synthetic purchase order"
+    assert record.data == payload["data"]
+    assert record.validation_status == ("needs_review" if needs_review else "valid")
+    assert record.issues == payload["validation"]["issues"]
+    assert record.attempts == (3 if needs_review else 1)
+    assert record.route == "local"
+    assert record.engine is None and record.page_count == 0
+    assert record.duration_ms is not None and record.duration_ms >= 0
+    parser.parse.assert_not_called()
+
+
+@pytest.mark.parametrize("input_kind", ["upload", "upload_markdown", "json", "text/markdown", "text/plain"])
+@pytest.mark.parametrize("required", [False, True])
+def test_markdown_database_write_failure_respects_required_mode(
+    api: Any, valid_order: dict, input_kind: str, required: bool
+) -> None:
+    store = Mock()
+    store.save.side_effect = DatabaseUnavailable("test database unavailable")
+
+    async def body(client):
+        service = DocumentExtractionService(
+            Mock(), StubExtractor(valid_order), get_pipeline_limiters(),
+            route_label="local", store=store,
+            app_settings=replace(settings, database_persistence_required=required),
+        )
+        app.dependency_overrides[get_local_extraction_service] = lambda: service
+        return await submit_markdown(client, input_kind)
+
+    response = api(body)
+
+    store.save.assert_called_once()
+    assert response.status_code == (503 if required else 200)
 
 
 async def upload(client: Any, index: int):

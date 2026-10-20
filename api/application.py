@@ -19,7 +19,7 @@ from api.errors import register_exception_handlers
 from api.frontend import register_frontend
 from api.rate_limit import limiter
 from api.routes import doc_router, health_router, history_router, ocr_router, ui_router
-from api.uploads import cleanup_temp_dir
+from api.uploads import RequestBodyLimitMiddleware, cleanup_temp_dir
 from config.config import configure_app_logging, configure_third_party_logging, settings
 from services.concurrency import apply_thread_pool_size
 from services.local_ocr_selector import log_gpu_availability
@@ -80,6 +80,9 @@ def create_app() -> FastAPI:
     application.state.limiter = limiter
     application.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     application.add_middleware(SlowAPIMiddleware)
+    application.add_middleware(
+        RequestBodyLimitMiddleware, max_upload_bytes=settings.max_upload_bytes
+    )
     register_exception_handlers(application)
     application.include_router(health_router)
     application.include_router(doc_router)

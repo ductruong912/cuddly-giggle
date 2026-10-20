@@ -1,8 +1,13 @@
 """Purchase-order schema, business rules and bounded correction retries."""
 from __future__ import annotations
 
+import asyncio
+from dataclasses import replace
 from datetime import date
+import json
+from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 # pyrefly: ignore [missing-import]
@@ -23,6 +28,8 @@ from services.validation import (
     SelfHealingExtractor,
     build_correction_prompt,
 )
+from services.concurrency import PipelineLimiters
+from services.document_extraction import DocumentExtractionService
 
 
 def test_a_reconciling_order_validates(valid_order: dict) -> None:
@@ -358,3 +365,64 @@ def test_the_correction_prompt_quotes_the_previous_answer(valid_order: dict) -> 
 
     assert "215497" in prompt, "the prior answer must be quoted back"
     assert "1. field `po_date`: wrong format" in prompt
+
+
+def test_markdown_extraction_without_database_keeps_working(valid_order: dict) -> None:
+    async def run():
+        service = DocumentExtractionService(
+            Mock(), ScriptedExtractor([valid_order]), PipelineLimiters(), route_label="local",
+        )
+        return await service.extract_markdown("# Purchase order", reason="Markdown body")
+
+    result = asyncio.run(run())
+
+    assert result.data == valid_order
+    assert result.validation.status == "valid"
+
+
+def test_same_filename_document_extractions_keep_matched_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, valid_order: dict
+) -> None:
+    from services import output
+
+    output_root = tmp_path / "outputs"
+    monkeypatch.setattr(output, "settings", replace(settings, parse_output_dir=str(output_root)))
+    sources = [tmp_path / "first.pdf", tmp_path / "second.pdf"]
+    for index, source in enumerate(sources):
+        source.write_text(f"PO-{index}", encoding="utf-8")
+
+    parser = Mock()
+
+    def parse(input_path, *, request_id):
+        return ParseResponse(
+            request_id=request_id, decision={"reason": "native test"},
+            pages=[], blocks=[], tables=[], reading_order=[],
+            markdown=Path(input_path).read_text(encoding="utf-8"),
+        )
+
+    parser.parse.side_effect = parse
+    extractor = Mock()
+    extractor.extract.side_effect = lambda response, **_: {
+        **valid_order, "po_number": response.markdown,
+    }
+
+    async def run():
+        service = DocumentExtractionService(
+            parser, extractor, PipelineLimiters(), route_label="local",
+        )
+        return await asyncio.gather(*(
+            service.extract_document(source, filename="order.pdf") for source in sources
+        ))
+
+    results = asyncio.run(run())
+
+    assert len({result.request_id for result in results}) == 2
+    assert {directory.name for directory in output_root.iterdir()} == {
+        result.request_id for result in results
+    }
+    for result in results:
+        directory = output_root / result.request_id
+        markdown = (directory / "order.md").read_text(encoding="utf-8")
+        data = json.loads((directory / "order.json").read_text(encoding="utf-8"))
+        assert markdown == data["po_number"] == result.data["po_number"]
+    assert all(source.is_file() for source in sources), "direct source paths must remain intact"

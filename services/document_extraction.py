@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 import time
-from typing import Protocol
+from typing import Callable, Protocol
 import uuid
 
 from config.config import Settings, settings
@@ -66,18 +66,32 @@ class DocumentExtractionService:
         self.store = store
         self.validator = SelfHealingExtractor(extractor, app_settings=app_settings)
 
-    async def extract_document(self, source_path: Path, *, filename: str) -> LLMExtractionResponse:
-        """Parse a staged document, extract structured data, and save both artifacts."""
+    async def extract_document(
+        self,
+        source_path: Path,
+        *,
+        filename: str,
+        on_parse_complete: Callable[[], None] | None = None,
+    ) -> LLMExtractionResponse:
+        """Parse a document, extract structured data, and save both artifacts.
+
+        ``on_parse_complete`` transfers staged-input cleanup to the parse worker;
+        direct source paths remain owned by the caller when the hook is omitted.
+        """
         request_id = f"req_{uuid.uuid4().hex[:12]}"
         total_start = time.perf_counter()
         try:
             ocr_start = time.perf_counter()
             with source_document_context(filename):
-                parse_response = await self.limiters.ocr.run(
-                    self.parser.parse,
-                    str(source_path),
-                    request_id=request_id,
-                )
+                if on_parse_complete is None:
+                    parse_response = await self.limiters.ocr.run(
+                        self.parser.parse, str(source_path), request_id=request_id,
+                    )
+                else:
+                    parse_response = await self.limiters.ocr.run_with_cleanup(
+                        self.parser.parse, str(source_path), request_id=request_id,
+                        cleanup=on_parse_complete,
+                    )
             ocr_elapsed = time.perf_counter() - ocr_start
 
             llm_start = time.perf_counter()
@@ -133,6 +147,7 @@ class DocumentExtractionService:
         artifact_name: str | None = None,
     ) -> LLMExtractionResponse:
         """Extract structured data from Markdown that was supplied directly."""
+        total_start = time.perf_counter()
         parse_response = ParseResponse(
             request_id=f"llm_{uuid.uuid4().hex[:12]}",
             decision=ParseDecision(reason=reason),
@@ -144,7 +159,14 @@ class DocumentExtractionService:
         )
         outcome = await self._extract(parse_response)
         if artifact_name:
-            await self.limiters.io.run(save_extraction_artifacts, outcome.data, artifact_name)
+            await self.limiters.io.run(
+                save_extraction_artifacts, outcome.data, artifact_name,
+                request_id=parse_response.request_id,
+            )
+        await self._persist(
+            parse_response, outcome, artifact_name or "markdown.md",
+            duration_ms=int((time.perf_counter() - total_start) * 1000),
+        )
         return self._build_response(parse_response, outcome)
 
     async def _persist(
@@ -206,7 +228,7 @@ class DocumentExtractionService:
         filename: str,
     ) -> list[str]:
         return save_parse_artifacts(parse_response, filename) + save_extraction_artifacts(
-            data, filename
+            data, filename, request_id=parse_response.request_id
         )
 
     @staticmethod

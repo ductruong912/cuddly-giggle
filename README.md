@@ -6,10 +6,14 @@ FastAPI service for extracting Vietnamese documents into Markdown or structured 
 
 - Uses native text extraction for digital PDF, DOCX, XLSX, and XLSM files.
 - `POST /v1/extract/local` chooses PaddleOCR-VL + GGUF/llama.cpp on NVIDIA GPU, or PaddleOCR v6 on CPU.
-- Saves generated Markdown and extraction artifacts in `outputs/`.
+- Saves generated Markdown and extraction artifacts in `outputs/<request_id>/`.
 
 OCR runs on the local machine. Structured Purchase Order extraction still sends
 the OCR Markdown to OpenAI.
+
+Artifact của từng request nằm trong thư mục riêng, kể cả khi upload trùng tên.
+Markdown và JSON được ghi qua file tạm rồi thay thế khi đã ghi xong. Các artifact
+cũ được giữ tại vị trí hiện có và tiếp tục áp dụng chính sách retention.
 
 ## OCR Playground
 
@@ -425,8 +429,14 @@ at import, making a malformed schema a startup error instead of a per-request
 ## Extraction history (PostgreSQL)
 
 Optional. With `DATABASE_URL` unset the service behaves exactly as before and
-writes results to `outputs/` only. Set it and every extraction is also recorded
-and queryable:
+writes artifacts for document and Markdown uploads to `outputs/`. Set it and
+every extraction is also recorded and queryable.
+
+Lịch sử bao gồm tài liệu và Markdown gửi qua `.md`/`.markdown`, body văn bản hoặc
+JSON, kể cả kết quả `needs_review`. Markdown body dùng tên nguồn `markdown.md`;
+Markdown upload giữ tên file nguồn. Khi không có `DATABASE_URL`, lịch sử vẫn tắt.
+
+Ví dụ khởi động PostgreSQL và cấu hình kết nối:
 
 ```bash
 docker compose up -d postgres

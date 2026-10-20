@@ -4,6 +4,7 @@ Note: no ``from __future__ import annotations`` here. FastAPI resolves handler
 signatures at import time and cannot build a field from a stringified
 ``UploadFile | None``.
 """
+from functools import partial
 import logging
 
 # pyrefly: ignore [missing-import]
@@ -26,6 +27,7 @@ from api.uploads import (
     MULTIPART_CONTENT_TYPE,
     StagedUpload,
     UploadStager,
+    normalize_media_type,
     read_markdown_payload,
     read_markdown_upload,
     resolve_upload,
@@ -201,9 +203,9 @@ async def extract_local_document(
     _: None = Depends(ensure_gpu_gguf_runtime),
 ) -> LLMExtractionResponse:
     """Run local OCR plus structured extraction on an upload, or on supplied Markdown."""
-    content_type = request.headers.get("content-type", "")
+    content_type = normalize_media_type(request.headers.get("content-type", ""))
 
-    if MULTIPART_CONTENT_TYPE in content_type:
+    if content_type == MULTIPART_CONTENT_TYPE:
         upload = await resolve_upload(request, file)
         if upload_suffix(upload) in MARKDOWN_SUFFIXES:
             markdown = await read_markdown_upload(upload)
@@ -220,7 +222,7 @@ async def extract_local_document(
             unsupported_message=_LOCAL_UNSUPPORTED_MESSAGE,
         )
 
-    if any(accepted in content_type for accepted in _MARKDOWN_BODY_CONTENT_TYPES):
+    if content_type in _MARKDOWN_BODY_CONTENT_TYPES:
         markdown = await read_markdown_payload(request)
         return await service.extract_markdown(
             markdown, reason="Provided Markdown request body."
@@ -277,18 +279,20 @@ async def _parse_ocr_upload(
         allowed_suffixes=SUPPORTED_INPUT_SUFFIXES,
         unsupported_message=_LOCAL_UNSUPPORTED_MESSAGE,
     )
-    try:
-        with source_document_context(staged.filename):
-            if include_preview:
-                response = await limiters.ocr.run(_parse_with_preview, orchestrator, str(staged.path))
-            else:
-                response = await limiters.ocr.run(orchestrator.parse, str(staged.path))
-        await limiters.io.run(save_parse_artifacts, response, staged.filename)
-        if not response.markdown:
-            raise HTTPException(status_code=422, detail="No markdown output produced.")
-        return response
-    finally:
-        stager.discard(staged)
+    with source_document_context(staged.filename):
+        cleanup = partial(stager.discard, staged)
+        if include_preview:
+            response = await limiters.ocr.run_with_cleanup(
+                _parse_with_preview, orchestrator, str(staged.path), cleanup=cleanup
+            )
+        else:
+            response = await limiters.ocr.run_with_cleanup(
+                orchestrator.parse, str(staged.path), cleanup=cleanup
+            )
+    await limiters.io.run(save_parse_artifacts, response, staged.filename)
+    if not response.markdown:
+        raise HTTPException(status_code=422, detail="No markdown output produced.")
+    return response
 
 
 def _parse_with_preview(orchestrator: ParseOrchestrator, input_path: str) -> ParseResponse:
@@ -309,17 +313,18 @@ async def _extract_upload(
     allowed_suffixes: frozenset[str],
     unsupported_message: str,
 ) -> LLMExtractionResponse:
-    """Stage an upload, run the pipeline against it, and always clean the temp file."""
+    """Transfer the staged file to the parse stage, which cleans it when done."""
     staged = await stager.stage(
         upload,
         allowed_suffixes=allowed_suffixes,
         unsupported_message=unsupported_message,
     )
     _log_received(staged)
-    try:
-        return await service.extract_document(staged.path, filename=staged.filename)
-    finally:
-        stager.discard(staged)
+    return await service.extract_document(
+        staged.path,
+        filename=staged.filename,
+        on_parse_complete=partial(stager.discard, staged),
+    )
 
 
 def _log_received(staged: StagedUpload) -> None:
