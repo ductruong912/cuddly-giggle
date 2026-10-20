@@ -1,0 +1,13 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.10.0
+torchvision==0.25.0
+spaces
+gradio==6.20.0
+paddleocr[doc-parser]==3.7.0
+paddlex[ocr]==3.7.0
+transformers==5.17.0
+# Hugging Face installs gradio[mcp], which caps Pydantic at this version.
+pydantic==2.12.5
+python-dotenv==1.1.0
+PyMuPDF==1.27.2.3
+opencv-contrib-python==4.10.0.84

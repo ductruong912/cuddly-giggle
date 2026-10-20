@@ -2,6 +2,48 @@ import { getMessages } from './i18n'
 import type { Language } from './i18n'
 import type { OCRResult } from './ocr'
 
+const gradioTarget = import.meta.env.VITE_GRADIO_SPACE?.trim()
+const gradioSpace = gradioTarget === 'self' ? window.location.origin : gradioTarget
+let demoClient: Promise<import('@gradio/client').Client> | undefined
+
+async function demoRequest(endpoint: string, signal: AbortSignal, file?: File): Promise<unknown> {
+  signal.throwIfAborted()
+  const { Client, handle_file } = await import('@gradio/client')
+  demoClient ??= Client.connect(gradioSpace!, {
+    record_history: false,
+    events: ['data', 'status'],
+  }).catch((error) => {
+    demoClient = undefined
+    throw error
+  })
+  const client = await demoClient
+  signal.throwIfAborted()
+  const job = client.submit(endpoint, file ? [handle_file(file)] : [])
+  const cancel = () => { void job.cancel().catch(() => {}) }
+  signal.addEventListener('abort', cancel, { once: true })
+  try {
+    for await (const event of job) {
+      signal.throwIfAborted()
+      if (event.type === 'status' && event.stage === 'error') {
+        const message = typeof event.message === 'string' ? event.message : ''
+        if (/quota|exceeded.*GPU/i.test(message)) {
+          const amounts = message.match(/(\d+(?:\.\d+)?)s requested vs\.\s*(\d+(?:\.\d+)?)s left/i)
+          const resetIn = message.match(/Try again in (\d{1,3}:\d{2}:\d{2})/i)?.[1]
+          throw new UIError('gpuQuota', undefined, undefined, amounts ? {
+            requested: Number(amounts[1]), remaining: Number(amounts[2]), resetIn,
+          } : undefined)
+        }
+        throw new UIError('http503')
+      }
+      if (event.type === 'data') return event.data[0]
+    }
+    signal.throwIfAborted()
+    throw new UIError('invalidOCR')
+  } finally {
+    signal.removeEventListener('abort', cancel)
+  }
+}
+
 export interface UIConfig {
   supported_suffixes: string[]
   max_upload_bytes: number
@@ -24,6 +66,7 @@ export class UIError extends Error {
     readonly code: ErrorCode,
     readonly limitBytes?: number,
     readonly retryAfter?: string,
+    readonly gpuQuota?: { requested: number; remaining: number; resetIn?: string },
   ) {
     super(getMessages('vi').errors[code])
     this.message = this.localizedMessage('vi')
@@ -31,6 +74,9 @@ export class UIError extends Error {
 
   localizedMessage(language: Language): string {
     const t = getMessages(language)
+    if (this.code === 'gpuQuota' && this.gpuQuota) {
+      return t.gpuQuotaDetails(this.gpuQuota.requested, this.gpuQuota.remaining, this.gpuQuota.resetIn)
+    }
     return (
       t.errors[this.code] +
       (this.limitBytes === undefined ? '' : ` ${formatBytes(this.limitBytes, language)}.`) +
@@ -50,10 +96,16 @@ async function assertResponse(response: Response): Promise<void> {
 }
 
 export async function fetchConfig(signal: AbortSignal): Promise<UIConfig> {
-  const response = await fetch('/v1/ui/config', { signal, cache: 'no-store' })
-  await assertResponse(response)
-  const config: UIConfig = await response.json()
+  let config: UIConfig
+  if (gradioSpace) {
+    config = await demoRequest('/ui_config', signal) as UIConfig
+  } else {
+    const response = await fetch('/v1/ui/config', { signal, cache: 'no-store' })
+    await assertResponse(response)
+    config = await response.json()
+  }
   if (
+    !config ||
     !Array.isArray(config.supported_suffixes) ||
     !config.supported_suffixes.length ||
     !config.supported_suffixes.every(
@@ -70,27 +122,33 @@ export async function fetchConfig(signal: AbortSignal): Promise<UIConfig> {
 }
 
 export async function checkHealth(signal: AbortSignal): Promise<boolean> {
+  if (gradioSpace) {
+    await fetchConfig(signal)
+    return true
+  }
   const response = await fetch('/healthz', { signal, cache: 'no-store' })
   return response.ok && (await response.json()).status === 'ok'
 }
 
 export async function runOCR(file: File, signal: AbortSignal): Promise<OCRResult> {
-  const body = new FormData()
-  body.append('file', file)
-  const response = await fetch('/v1/doc/ocr/result?include_preview=true', {
-    method: 'POST',
-    body,
-    signal,
-  })
-  await assertResponse(response)
-  if (!response.headers.get('Content-Type')?.toLowerCase().startsWith('application/json')) {
-    throw new UIError('invalidOCR')
-  }
   let result: OCRResult
-  try {
-    result = await response.json()
-  } catch {
-    throw new UIError('invalidOCR')
+  if (gradioSpace) {
+    result = await demoRequest('/ocr', signal, file) as OCRResult
+  } else {
+    const body = new FormData()
+    body.append('file', file)
+    const response = await fetch('/v1/doc/ocr/result?include_preview=true', {
+      method: 'POST', body, signal,
+    })
+    await assertResponse(response)
+    if (!response.headers.get('Content-Type')?.toLowerCase().startsWith('application/json')) {
+      throw new UIError('invalidOCR')
+    }
+    try {
+      result = await response.json()
+    } catch {
+      throw new UIError('invalidOCR')
+    }
   }
   if (
     !result ||

@@ -91,12 +91,16 @@ export const messages = {
     imageFailed: 'Không xem trước được ảnh này. Bạn vẫn có thể chạy OCR.',
     unsupportedPreview: 'Chưa hỗ trợ xem trước định dạng này.',
     retryAfter: (seconds: string) => ` Chờ ít nhất ${seconds} giây trước khi thử lại.`,
+    gpuQuotaDetails: (requested: number, remaining: number, resetIn?: string) =>
+      `Lượt này cần ${requested} giây quota GPU, nhưng hạn mức còn ${remaining} giây.` +
+      (resetIn ? ` Hạn mức khôi phục sau ${resetIn} (giờ:phút:giây).` : ''),
     errors: {
       http400: 'Tài liệu hoặc yêu cầu không hợp lệ. Hãy kiểm tra file rồi thử lại.',
       http413: 'Tài liệu vượt giới hạn dung lượng hoặc số trang OCR của máy chủ.',
       http415: 'Định dạng gửi lên không được hỗ trợ.',
       http422: 'Không đọc được nội dung Markdown. Hãy kiểm tra tài liệu rồi thử lại.',
       http429: 'Bạn gửi yêu cầu quá nhanh. Hãy chờ một chút rồi thử lại.',
+      gpuQuota: 'Không đủ hạn mức GPU miễn phí cho lượt xử lý này. Thử tài liệu ngắn hơn hoặc chờ hạn mức được khôi phục.',
       http503: 'Dịch vụ OCR đang bận hoặc chưa sẵn sàng. Hãy thử lại sau.',
       http504: 'OCR đã hết thời gian chờ. Máy chủ có thể vẫn đang xử lý tài liệu.',
       serverError: 'Máy chủ gặp lỗi khi xử lý yêu cầu.',
@@ -203,12 +207,16 @@ export const messages = {
     imageFailed: 'Could not preview this image. You can still run OCR.',
     unsupportedPreview: 'Preview is not available for this format.',
     retryAfter: (seconds: string) => ` Wait at least ${seconds} seconds before retrying.`,
+    gpuQuotaDetails: (requested: number, remaining: number, resetIn?: string) =>
+      `This request needs ${requested} seconds of GPU quota; ${remaining} seconds remain.` +
+      (resetIn ? ` Quota resets in ${resetIn} (hours:minutes:seconds).` : ''),
     errors: {
       http400: 'Invalid document or request. Check the file and try again.',
       http413: 'The document exceeds the server’s file size or OCR page limit.',
       http415: 'This upload format is not supported.',
       http422: 'Could not read the Markdown content. Check the document and try again.',
       http429: 'Too many requests. Wait a moment and try again.',
+      gpuQuota: 'Insufficient free GPU quota for this request. Try a shorter document or wait for your quota to reset.',
       http503: 'OCR is busy or unavailable. Try again later.',
       http504: 'OCR timed out. The server may still be processing your document.',
       serverError: 'The server could not process the request.',
