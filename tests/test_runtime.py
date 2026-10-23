@@ -1,20 +1,22 @@
-"""Stage limits, llama lifecycle, artifact retention and dependency consistency."""
+"""Stage limits, llama bootstrap and lifecycle, artifact retention and dependency consistency."""
 from __future__ import annotations
 
 import asyncio
 import dataclasses
 import os
 from pathlib import Path
+import shutil
 import threading
 import time
 from unittest.mock import Mock
+import zipfile
 
 import httpx
 import pytest
 
 from config.config import Settings, settings
 from services.concurrency import StageLimiter, StageSaturated, StageTimedOut
-from services.llama import server
+from services.llama import bootstrap, server
 from services.retention import SECONDS_PER_DAY, ArtifactRetentionSweeper
 from services.vl_runtime import VLRuntimeManager
 
@@ -208,6 +210,147 @@ def test_startup_timeout_stops_only_an_owned_process(
     assert startup_clock[0] == 0.4
     assert process.terminate.call_count == (0 if already_listening else 1)
     assert popen.call_count == (0 if already_listening else 1)
+
+
+FLAVOR = "win-cuda-12.4-x64"
+RELEASES_URL = f"{bootstrap.LLAMA_CPP_RELEASES_API}?per_page={bootstrap.LLAMA_CPP_RELEASE_SEARCH_LIMIT}"
+
+
+def release(tag: str, *assets: str, draft: bool = False) -> dict:
+    """A GitHub release entry; the numbered builds are published as prereleases."""
+    base = f"https://github.com/ggml-org/llama.cpp/releases/download/{tag}"
+    return {
+        "tag_name": tag,
+        "draft": draft,
+        "prerelease": tag.startswith("b"),
+        "assets": [{"name": name, "browser_download_url": f"{base}/{name}"} for name in assets],
+    }
+
+
+def full_build(tag: str, *, draft: bool = False) -> dict:
+    return release(tag, f"llama-{tag}-bin-{FLAVOR}.zip", f"cudart-llama-bin-{FLAVOR}.zip", draft=draft)
+
+
+class FakeReleasesApi(bootstrap.HttpDownloader):
+    def __init__(self, payload: object) -> None:
+        super().__init__()
+        self.payload = payload
+        self.requested: list[str] = []
+
+    def get_json(self, url: str) -> object:
+        self.requested.append(url)
+        return self.payload
+
+
+def test_the_newest_release_with_the_flavors_assets_is_chosen() -> None:
+    """/releases/latest now names a tag whose only asset is nightly-tag.txt."""
+    api = FakeReleasesApi([
+        full_build("b11838", draft=True),
+        release("v0.7.0", "nightly-tag.txt"),
+        release("b11837", f"llama-b11837-bin-{FLAVOR}.zip"),  # CUDA runtime not uploaded yet
+        full_build("b11836"),
+        full_build("b11835"),
+    ])
+
+    urls = bootstrap.resolve_latest_llama_cpp_release_urls(flavor=FLAVOR, downloader=api)
+
+    base = "https://github.com/ggml-org/llama.cpp/releases/download/b11836"
+    assert urls == [f"{base}/llama-b11836-bin-{FLAVOR}.zip", f"{base}/cudart-llama-bin-{FLAVOR}.zip"]
+    assert api.requested == [RELEASES_URL]
+
+
+def test_no_release_with_the_flavor_points_at_the_override() -> None:
+    api = FakeReleasesApi([release("v0.7.0", "nightly-tag.txt"), release("b11836", "llama-b11836-bin-ubuntu-x64.zip")])
+
+    with pytest.raises(RuntimeError, match=f"{FLAVOR}.*LLAMA_CPP_RELEASE_URL"):
+        bootstrap.resolve_latest_llama_cpp_release_urls(flavor=FLAVOR, downloader=api)
+
+
+@pytest.mark.parametrize("override", ["", "https://example.test/llama.zip"])
+def test_the_release_url_setting_overrides_the_lookup(tmp_path: Path, override: str) -> None:
+    from scripts import setup_llama_cpp
+
+    app_settings = dataclasses.replace(
+        settings,
+        llama_cpp_dir=str(tmp_path / "llama"),
+        llama_cpp_models_dir=str(tmp_path / "models"),
+        llama_cpp_release_url=override,
+    )
+    resolve = Mock(return_value=["https://example.test/resolved.zip"])
+    install = Mock()
+
+    setup_llama_cpp.main(app_settings=app_settings, bootstrap=install, resolve_release_urls=resolve)
+
+    config = install.call_args.kwargs["config"]
+    assert resolve.called is not bool(override)
+    assert config.llama_release_url == override
+    assert config.llama_release_urls == (() if override else ("https://example.test/resolved.zip",))
+
+
+def write_zip(path: Path, names: list[str]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as archive:
+        for name in names:
+            archive.writestr(name, b"binary")
+    return path
+
+
+class LocalDownloader(bootstrap.HttpDownloader):
+    """Serves URLs from local files, so the real extract-and-install path runs."""
+
+    def __init__(self, files: dict[str, Path]) -> None:
+        super().__init__(attempts=1)
+        self.files = files
+        self.requested: list[str] = []
+
+    def download_file(self, url: str, destination: Path) -> None:
+        self.requested.append(url)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(self.files[url], destination)
+
+
+def bootstrap_from(tmp_path: Path, binaries: list[str]) -> tuple[LocalDownloader, bootstrap.LlamaBootstrapConfig]:
+    """A binary zip holding ``binaries`` plus a CUDA runtime zip that holds only cudart DLLs."""
+    served = tmp_path / "served"
+    binary_url = f"https://example.test/llama-b11836-bin-{FLAVOR}.zip"
+    runtime_url = f"https://example.test/cudart-llama-bin-{FLAVOR}.zip"
+    model = served / "model.gguf"
+    files = {
+        binary_url: write_zip(served / "llama.zip", binaries),
+        runtime_url: write_zip(served / "cudart.zip", ["cudart64_12.dll", "cublas64_12.dll"]),
+    }
+    config = bootstrap.LlamaBootstrapConfig(
+        llama_dir=tmp_path / "llama",
+        models_dir=tmp_path / "models",
+        llama_release_urls=(binary_url, runtime_url),
+        min_model_bytes=1,
+    )
+    for artifact in bootstrap.default_model_artifacts(config.models_dir):
+        files[artifact.url] = model
+    model.write_bytes(b"gguf")
+    return LocalDownloader(files), config
+
+
+def test_the_cuda_runtime_zip_installs_alongside_the_binaries(tmp_path: Path) -> None:
+    """The cudart zip never carries llama-server.exe; only the combined install is checked."""
+    downloader, config = bootstrap_from(tmp_path, list(bootstrap.REQUIRED_LLAMA_FILES))
+
+    result = bootstrap.bootstrap_llama_cpp(config=config, downloader=downloader)
+
+    assert result.downloaded_llama_cpp is True
+    assert bootstrap.is_llama_cpp_ready(config.llama_dir)
+    assert (config.llama_dir / "cudart64_12.dll").is_file()
+    assert result.downloaded_models == ["PaddleOCR-VL-1.6-GGUF.gguf", "PaddleOCR-VL-1.6-GGUF-mmproj.gguf"]
+
+
+def test_files_missing_from_every_archive_stop_before_the_models(tmp_path: Path) -> None:
+    binaries = [name for name in bootstrap.REQUIRED_LLAMA_FILES if name != "ggml.dll"]
+    downloader, config = bootstrap_from(tmp_path, binaries)
+
+    with pytest.raises(RuntimeError, match=r"did not provide required files: ggml\.dll$"):
+        bootstrap.bootstrap_llama_cpp(config=config, downloader=downloader)
+
+    assert downloader.requested == list(config.llama_release_urls)
 
 
 class FakeProcess:
