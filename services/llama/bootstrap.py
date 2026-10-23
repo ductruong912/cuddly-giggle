@@ -16,7 +16,10 @@ logger = logging.getLogger(__name__)
 
 
 HF_GGUF_REPO = "https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6-GGUF/resolve/main"
-LLAMA_CPP_LATEST_RELEASE_API = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
+LLAMA_CPP_RELEASES_API = "https://api.github.com/repos/ggml-org/llama.cpp/releases"
+# /releases/latest skips prereleases, and the numbered builds (bNNNNN) that carry the
+# Windows zips are published as prereleases, so search the newest page instead.
+LLAMA_CPP_RELEASE_SEARCH_LIMIT = 20
 DEFAULT_LLAMA_CPP_FLAVOR = "win-cuda-12.4-x64"
 DEFAULT_MODEL_BYTES = 800 * 1024 * 1024
 DEFAULT_HTTP_TIMEOUT_SECONDS = 60.0
@@ -111,14 +114,11 @@ class HttpDownloader:
                 archive.extractall(extract_dir)
             _install_extracted_files(extract_dir, destination_dir, tmp_dir)
 
-    def get_json(self, url: str) -> dict[str, object]:
-        """GET ``url`` and return the decoded JSON object."""
+    def get_json(self, url: str) -> object:
+        """GET ``url`` and return the decoded JSON payload."""
         response = httpx.get(url, follow_redirects=True, timeout=self.timeout_seconds)
         response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise RuntimeError(f"Expected JSON object from {url}")
-        return payload
+        return response.json()
 
 
 def default_model_artifacts(models_dir: Path, min_bytes: int = DEFAULT_MODEL_BYTES) -> list[DownloadArtifact]:
@@ -193,10 +193,24 @@ def resolve_latest_llama_cpp_release_urls(
     flavor: str = DEFAULT_LLAMA_CPP_FLAVOR,
     downloader: HttpDownloader | None = None,
 ) -> list[str]:
-    """Look up the newest llama.cpp release and return its asset URLs for ``flavor``."""
+    """Return the asset URLs for ``flavor`` from the newest llama.cpp release that ships them."""
     downloader = downloader or HttpDownloader()
-    payload = downloader.get_json(LLAMA_CPP_LATEST_RELEASE_API)
-    return select_llama_cpp_release_urls(payload, flavor=flavor)
+    payload = downloader.get_json(f"{LLAMA_CPP_RELEASES_API}?per_page={LLAMA_CPP_RELEASE_SEARCH_LIMIT}")
+    if not isinstance(payload, list):
+        raise RuntimeError("GitHub releases payload is not a list.")
+    for release in payload:
+        if not isinstance(release, dict) or release.get("draft"):
+            continue
+        try:
+            urls = select_llama_cpp_release_urls(release, flavor=flavor)
+        except RuntimeError:
+            continue
+        logger.info("Using llama.cpp release %s", release.get("tag_name"))
+        return urls
+    raise RuntimeError(
+        f"None of the {len(payload)} newest llama.cpp releases provide assets for flavor {flavor!r}. "
+        "Set LLAMA_CPP_RELEASE_URL to the release zip(s) to install."
+    )
 
 
 def bootstrap_llama_cpp(
@@ -220,8 +234,9 @@ def bootstrap_llama_cpp(
             logger.info("Downloading llama.cpp from %s", release_url)
             downloader.download_and_extract_zip(release_url, config.llama_dir)
         downloaded_llama_cpp = True
+        # Checked once across every archive: the CUDA runtime zip carries only cudart DLLs.
         if not is_llama_cpp_ready(config.llama_dir):
-            missing = [name for name in REQUIRED_LLAMA_FILES if not (config.llama_dir / name).is_file()]
+            missing = [name for name in REQUIRED_LLAMA_FILES if not is_artifact_ready(config.llama_dir / name)]
             raise RuntimeError(f"llama.cpp archive did not provide required files: {', '.join(missing)}")
 
     downloaded_models: list[str] = []
@@ -243,9 +258,6 @@ def bootstrap_llama_cpp(
 
 
 def _install_extracted_files(source_dir: Path, destination_dir: Path, staging_root: Path) -> None:
-    missing = [name for name in REQUIRED_LLAMA_FILES if not any(path.name == name for path in source_dir.rglob(name))]
-    if missing:
-        raise RuntimeError(f"llama.cpp archive did not provide required files: {', '.join(missing)}")
     staged_dir = staging_root / "installed"
     if destination_dir.exists():
         shutil.copytree(destination_dir, staged_dir)
